@@ -23,21 +23,20 @@ Example usage:
     ...     batch_id="20251014-001"
     ... )
 
-Author: Your Name or Team
 """
 
-import logging
-from typing import Dict, Set
-import pandas as pd
+import logging as _logging
+from typing import Dict as _Dict, Set as _Set
+import pandas as _pd
 
-logger = logging.getLogger(__name__)
+logger = _logging.getLogger(__name__)
 
 def process_dim_dataframe(
-    df: pd.DataFrame,
-    expected_columns: Set[str],
-    renames: Dict[str, str],
+    df: _pd.DataFrame,
+    expected_columns: _Set[str],
+    renames: _Dict[str, str],
     batch_id: str
-) -> pd.DataFrame:
+) -> _pd.DataFrame:
     """
     Process and enrich a dimensional DataFrame for ETL pipelines.
 
@@ -84,7 +83,7 @@ def process_dim_dataframe(
     logger.debug("Renaming columns:%s", renames)
     df = df.rename(columns=renames)
 
-    now = pd.Timestamp.now()
+    now = _pd.Timestamp.now()
     df["Batch_Id"] = batch_id
     df["Insert_Date"] = now
     df["Update_Date"] = now
