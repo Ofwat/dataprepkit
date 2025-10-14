@@ -1,8 +1,26 @@
-import pyodbc as _pyodbc
-import struct as _struct
-import sqlalchemy as _sa
+"""
+Fabric Warehouse SQLAlchemy Engine Utilities
+
+This module provides utility functions to create and validate SQLAlchemy engine
+connections to Azure Fabric data warehouses using Azure Active Directory (AAD) tokens
+for authentication. It handles automatic detection of the latest suitable ODBC driver
+and integrates with Fabric's `notebookutils.credentials` (or mock credentials for local testing).
+
+Functions:
+    - get_fabric_warehouse_engine: Create a SQLAlchemy engine for a given Fabric SQL endpoint.
+    - validate_fabric_warehouse_engine: Run a test query to verify the engine connection.
+
+Dependencies:
+    - pyodbc
+    - sqlalchemy
+    - notebookutils (optional, Fabric environment)
+"""
+
 import logging as _logging
 import re as _re
+import struct as _struct
+import pyodbc as _pyodbc
+import sqlalchemy as _sa
 
 _logger = _logging.getLogger(__name__)
 
@@ -16,17 +34,20 @@ __all__ = [
 # Handle Fabric-only dependency
 # -----------------------------
 try:
-    from notebookutils import credentials as _default_credentials
+    from notebookutils import credentials as _default_credentials # type: ignore
 except ImportError:
+    # pylint: disable=R0903
     class _MockCredentials:
+        # pylint: disable=C0103
         def getToken(self, resource: str) -> str:
-            _logger.warning(f"Using mock credentials for resource: {resource}")
+            """Mocking getToken from mssparkutls"""
+            _logger.warning("Using mock credentials for resource: %s", resource)
             return "FAKE_TOKEN_FOR_LOCAL_TESTING"
     _default_credentials = _MockCredentials()
 
 
 def _get_latest_sql_driver() -> str:
-    drivers = _pyodbc.drivers()
+    drivers = _pyodbc.drivers() # pylint: disable=I1101
     sql_drivers = [d for d in drivers if "SQL Server" in d or "ODBC Driver" in d]
     if not sql_drivers:
         raise RuntimeError("No suitable ODBC driver for SQL Server found.")
@@ -36,11 +57,16 @@ def _get_latest_sql_driver() -> str:
         return int(match.group(1)) if match else 0
 
     latest_driver = max(sql_drivers, key=extract_version)
-    _logger.info(f"Using ODBC driver: {latest_driver}")
+    _logger.info("Using ODBC driver: %s", latest_driver)
     return latest_driver
 
 
-def get_fabric_warehouse_engine(sql_endpoint: str, port: int = 1433, credentials=_default_credentials) -> _sa.engine.Engine:
+def get_fabric_warehouse_engine(
+        sql_endpoint: str,
+        port: int = 1433,
+        credentials=_default_credentials
+    ) -> _sa.engine.Engine:
+    # pylint: disable=C0301
     """
     Create and return a SQLAlchemy engine connected to an Azure Fabric data warehouse.
 
@@ -83,8 +109,8 @@ def get_fabric_warehouse_engine(sql_endpoint: str, port: int = 1433, credentials
         _logger.info("Successfully created Fabric SQL engine.")
         return engine
 
-    except Exception as e:
-        _logger.error(f"Failed to create Fabric engine: {e}", exc_info=True)
+    except Exception as ex:
+        _logger.error("Failed to create Fabric engine: %s", ex, exc_info=True)
         raise
 
 
@@ -108,8 +134,7 @@ def validate_fabric_warehouse_engine(engine: _sa.engine.Engine) -> bool:
             if value == 1:
                 _logger.info("Fabric warehouse engine test passed.")
                 return True
-            else:
-                raise RuntimeError("Unexpected result from test query.")
-    except Exception as e:
-        _logger.error(f"Test query failed: {e}", exc_info=True)
+            raise RuntimeError("Unexpected result from test query.")
+    except Exception as ex:
+        _logger.error("Test query failed: %s", ex, exc_info=True)
         raise

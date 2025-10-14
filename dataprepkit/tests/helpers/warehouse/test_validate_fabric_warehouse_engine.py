@@ -10,7 +10,7 @@ from dataprepkit.helpers.connectors.warehouse import (
 
 @patch("pyodbc.drivers", return_value=["ODBC Driver 18 for SQL Server"])
 @patch("sqlalchemy.create_engine")
-def test_connection_test_passes(mock_create_engine, mock_drivers):
+def test_connection_test_passes(mock_create_engine, _mock_drivers):
     mock_conn = MagicMock()
     mock_conn.execute.return_value.scalar.return_value = 1
 
@@ -27,7 +27,7 @@ def test_connection_test_passes(mock_create_engine, mock_drivers):
 
 @patch("pyodbc.drivers", return_value=["ODBC Driver 18 for SQL Server"])
 @patch("sqlalchemy.create_engine")
-def test_connection_test_fails_unexpected_result(mock_create_engine, mock_drivers):
+def test_connection_test_fails_unexpected_result(mock_create_engine, _mock_drivers):
     mock_conn = MagicMock()
     mock_conn.execute.return_value.scalar.return_value = 999
 
