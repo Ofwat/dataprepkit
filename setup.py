@@ -8,7 +8,7 @@ with open(path.join(this_directory, 'README.md'), encoding='utf-8') as f:
 
 setup(
     name="ofwat-dataprepkit",
-    version="0.4",
+    version="0.5",
     author="Ofwat",
     description='ETL Tools for Fabric',
     long_description=long_description,
