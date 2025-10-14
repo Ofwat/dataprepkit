@@ -1,0 +1,38 @@
+name: Zizmor Check
+
+on:
+  push:
+    branches:
+      - '*'  # Trigger on all branches
+    paths:
+      - '.github/workflows/*.yml'  # Only trigger on changes to GitHub Action workflows
+
+permissions: {}
+
+jobs:
+  zizmor-check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+
+    - name: Set up Python
+      uses: actions/setup-python@v3
+      with:
+        python-version: "3.x"
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install setuptools wheel twine
+
+    - name: Install Zizmor
+      run: |
+        pip install zizmor  # Install Zizmor
+
+    - name: Run Zizmor audit
+      run: |
+        zizmor .github/workflows/  # Run Zizmor on the workflow directory
