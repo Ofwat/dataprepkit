@@ -24,27 +24,38 @@ Usage:
 Requirements:
 - pyodbc
 - sqlalchemy
-- notebookutils (for token credentials)
+- notebookutils (for token credentials, in Microsoft Fabric only)
 - Proper ODBC driver(s) installed for SQL Server (e.g., ODBC Driver 18 for SQL Server)
 """
 
 import pyodbc
 import struct
-from notebookutils import credentials
 import sqlalchemy as sa
 import logging
 import re
 
 logger = logging.getLogger(__name__)
 
+# -----------------------------
+# Handle Fabric-only dependency
+# -----------------------------
+try:
+    from notebookutils import credentials
+except ImportError:
+    # Mock credentials class for local testing outside Microsoft Fabric
+    class _MockCredentials:
+        def getToken(self, resource: str) -> str:
+            logger.warning(f"Using mock credentials for resource: {resource}")
+            # Return a bytes object encoded as UTF-16-LE to match Fabric's behavior
+            return "FAKE_TOKEN_FOR_LOCAL_TESTING"
+
+    credentials = _MockCredentials()
+
+
 def get_latest_sql_driver() -> str:
     """
     Finds and returns the latest installed ODBC driver suitable for connecting
     to Microsoft SQL Server databases.
-
-    The function filters installed ODBC drivers to those containing
-    "SQL Server" or "ODBC Driver" in their names, then selects the one with
-    the highest version number.
 
     Returns:
         str: The name of the latest SQL Server ODBC driver.
@@ -65,25 +76,22 @@ def get_latest_sql_driver() -> str:
     logger.info(f"Using ODBC driver: {latest_driver}")
     return latest_driver
 
+
 def get_fabric_engine(sql_endpoint: str, port: int = 1433) -> sa.engine.Engine:
     """
     Creates and returns a SQLAlchemy engine connected to an Azure Fabric warehouse.
 
-    This function obtains an Azure AD access token, selects the appropriate
-    ODBC driver, and configures a SQLAlchemy engine with token-based authentication.
-    Connection pooling and recycling are configured to mitigate token expiration issues.
-
     Parameters:
-        sql_endpoint (str): The Fabric SQL endpoint to connect to. Mandatory.
+        sql_endpoint (str): The Fabric SQL endpoint to connect to.
         port (int, optional): The TCP port for the SQL server. Defaults to 1433.
 
     Returns:
-        sa.engine.Engine: A SQLAlchemy Engine instance connected to the specified Fabric warehouse.
+        sa.engine.Engine: A SQLAlchemy Engine instance connected to the Fabric warehouse.
 
     Raises:
-        ValueError: If `sql_endpoint` is empty or None.
+        ValueError: If sql_endpoint is not provided.
         RuntimeError: If no suitable ODBC driver is found.
-        Exception: Propagates exceptions raised during token retrieval or engine creation.
+        Exception: If token retrieval or engine creation fails.
     """
     if not sql_endpoint:
         raise ValueError("sql_endpoint is required and cannot be empty.")
@@ -92,10 +100,10 @@ def get_fabric_engine(sql_endpoint: str, port: int = 1433) -> sa.engine.Engine:
         driver = get_latest_sql_driver()
         server = f"{sql_endpoint},{port}"
 
-        token = credentials.getToken('https://database.windows.net/').encode("UTF-16-LE")
+        token = credentials.getToken("https://database.windows.net/").encode("UTF-16-LE")
         token_struct = struct.pack(f"<I{len(token)}s", len(token), token)
 
-        connection_string = f"DRIVER={{{driver}}};server={server}"
+        connection_string = f"DRIVER={{{driver}}};SERVER={server}"
         connection_url = sa.engine.URL.create(
             "mssql+pyodbc",
             query={"odbc_connect": connection_string}
@@ -105,8 +113,9 @@ def get_fabric_engine(sql_endpoint: str, port: int = 1433) -> sa.engine.Engine:
             connection_url,
             connect_args={"attrs_before": {1256: token_struct}},
             pool_pre_ping=True,
-            pool_recycle=3600  # recycle connections every hour to prevent token expiry issues
+            pool_recycle=3600  # Recycle every hour to avoid token expiration issues
         )
+
         logger.info("Successfully created Fabric SQL engine.")
         return engine
 
