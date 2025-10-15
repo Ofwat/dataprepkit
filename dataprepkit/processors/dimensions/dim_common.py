@@ -29,7 +29,7 @@ import logging as _logging
 from typing import Dict as _Dict, Set as _Set
 import pandas as _pd
 
-logger = _logging.getLogger(__name__)
+_logger = _logging.getLogger(__name__)
 
 def process_dim_dataframe(
     df: _pd.DataFrame,
@@ -80,7 +80,7 @@ def process_dim_dataframe(
     if extra_cols:
         raise ValueError(f"Unexpected extra columns: {extra_cols}")
 
-    logger.debug("Renaming columns:%s", renames)
+    _logger.debug("Renaming columns:%s", renames)
     df = df.rename(columns=renames)
 
     now = _pd.Timestamp.now()
@@ -88,6 +88,6 @@ def process_dim_dataframe(
     df["Insert_Date"] = now
     df["Update_Date"] = now
 
-    logger.info("Processed DataFrame with %d rows for batch_id %s", len(df), batch_id)
+    _logger.info("Processed DataFrame with %d rows for batch_id %s", len(df), batch_id)
 
     return df
