@@ -4,6 +4,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 logger = logging.getLogger(__name__)
 
+
 class LoadResult:
     def __init__(self, rows_updated=0, rows_inserted=0):
         self.rows_updated = rows_updated
@@ -19,14 +20,13 @@ def _get_max_surrogate_key(conn, target_table, surrogate_key_col):
 
 def _drop_table_if_exists(conn, schema, table_name):
     qualified_name = _qualify_table_name(schema, table_name)
-    drop_sql = text(f"DROP TABLE IF EXISTS {qualified_name}")
-    conn.execute(drop_sql)
+    conn.execute(text(f"DROP TABLE IF EXISTS {qualified_name}"))
 
 
 def _validate_identifiers(*identifiers):
     for identifier in identifiers:
         if identifier is None:
-            continue  # Allow None (no schema)
+            continue
         if "-" in identifier or " " in identifier:
             raise ValueError(f"Invalid identifier: {identifier}")
 
@@ -39,8 +39,14 @@ def _verify_columns(table, required_cols):
 
 def _build_match_conditions(target_table, source_table, match_keys):
     conditions = []
-    for k in match_keys:
-        conditions.append(target_table.c[k] == source_table.c[k])
+    for key in match_keys:
+        col_target = target_table.c[key]
+        col_source = source_table.c[key]
+        # NULL-safe match: (col1 = col2 OR (col1 IS NULL AND col2 IS NULL))
+        conditions.append(
+            (col_target == col_source) |
+            ((col_target.is_(None)) & (col_source.is_(None)))
+        )
     return conditions
 
 
@@ -55,10 +61,14 @@ def build_update_statement(target_table, source_table, update_columns, match_con
 
 
 def _qualify_table_name(schema, table_name):
-    if schema:
-        return f"{schema}.{table_name}"
-    else:
-        return table_name
+    return f"{schema}.{table_name}" if schema else table_name
+
+
+def _build_null_safe_conditions(match_keys, src_alias="src", tgt_alias="tgt"):
+    return " AND ".join(
+        f"({src_alias}.{k} = {tgt_alias}.{k} OR ({src_alias}.{k} IS NULL AND {tgt_alias}.{k} IS NULL))"
+        for k in match_keys
+    )
 
 
 def _build_insert_sql(
@@ -71,12 +81,9 @@ def _build_insert_sql(
     target_qualified = _qualify_table_name(target_schema, target_table_name)
     source_qualified = _qualify_table_name(source_schema, source_table_name)
 
-    join_conditions = " AND ".join(
-        [f"src.{k} = tgt.{k}" for k in match_keys]
-    )
-    missing_match_conditions = " AND ".join(
-        [f"tgt.{k} IS NULL" for k in match_keys]
-    )
+    join_conditions = _build_null_safe_conditions(match_keys)
+
+    where_missing_in_target = " AND ".join([f"tgt.{k} IS NULL" for k in match_keys])
 
     insert_sql = f"""
         WITH numbered_rows AS (
@@ -86,7 +93,7 @@ def _build_insert_sql(
             FROM {source_qualified} src
             LEFT JOIN {target_qualified} tgt
             ON {join_conditions}
-            WHERE {missing_match_conditions}
+            WHERE {where_missing_in_target}
         )
         INSERT INTO {target_qualified} ({insert_cols_str})
         SELECT
@@ -105,12 +112,9 @@ def _build_select_new_rows_sql(
     target_qualified = _qualify_table_name(target_schema, target_table_name)
     source_qualified = _qualify_table_name(source_schema, source_table_name)
 
-    join_conditions = " AND ".join(
-        [f"src.{k} = tgt.{k}" for k in match_keys]
-    )
-    missing_match_conditions = " AND ".join(
-        [f"tgt.{k} IS NULL" for k in match_keys]
-    )
+    join_conditions = _build_null_safe_conditions(match_keys)
+
+    where_missing_in_target = " AND ".join([f"tgt.{k} IS NULL" for k in match_keys])
 
     select_sql = f"""
         SELECT
@@ -119,7 +123,7 @@ def _build_select_new_rows_sql(
         FROM {source_qualified} src
         LEFT JOIN {target_qualified} tgt
         ON {join_conditions}
-        WHERE {missing_match_conditions}
+        WHERE {where_missing_in_target}
     """
     return select_sql.strip()
 
@@ -146,19 +150,20 @@ def populate_table_from_source(
     target_table = Table(target_table_name, metadata, autoload_with=engine, schema=target_schema)
     source_table = Table(source_table_name, metadata, autoload_with=engine, schema=source_schema)
 
-    # Check required columns exist
     _verify_columns(target_table, match_keys + update_columns + [surrogate_key_col])
     _verify_columns(source_table, match_keys + update_columns + insert_columns)
 
     try:
-        with engine.connect() as conn:
+        with engine.connect().execution_options(isolation_level="SERIALIZABLE") as conn:
             trans = conn.begin()
             try:
                 logger.info("Starting load: %s.%s → %s.%s", source_schema, source_table_name, target_schema, target_table_name)
 
                 match_conditions = _build_match_conditions(target_table, source_table, match_keys)
 
-                update_stmt = build_update_statement(target_table, source_table, update_columns, match_conditions, surrogate_key_col)
+                update_stmt = build_update_statement(
+                    target_table, source_table, update_columns, match_conditions, surrogate_key_col
+                )
                 update_result = conn.execute(update_stmt)
                 rows_updated = update_result.rowcount or 0
                 logger.info("Updated %s record(s).", rows_updated)
@@ -178,32 +183,22 @@ def populate_table_from_source(
                     match_keys
                 )
 
-                # Preview rows to be inserted
-                result = conn.execute(text(select_sql)).fetchall()
-                logger.info("Rows that would be inserted: %s", len(result))
+                preview_rows = conn.execute(text(select_sql)).fetchall()
+                logger.info("Rows that would be inserted: %s", len(preview_rows))
 
                 insert_result = conn.execute(text(insert_sql))
 
                 if insert_result.rowcount in (-1, 0, None):
                     try:
-                        # Use qualified names in fallback count SQL as well
-                        target_qualified = _qualify_table_name(target_schema, target_table_name)
-                        source_qualified = _qualify_table_name(source_schema, source_table_name)
-                        join_conditions = " AND ".join(
-                            [f"src.{k} = tgt.{k}" for k in match_keys]
-                        )
-                        missing_match_conditions = " AND ".join(
-                            [f"tgt.{k} IS NULL" for k in match_keys]
-                        )
                         count_sql = f"""
                             WITH numbered_rows AS (
                                 SELECT
                                     src.*,
                                     ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS rn
-                                FROM {source_qualified} src
-                                LEFT JOIN {target_qualified} tgt
-                                ON {join_conditions}
-                                WHERE {missing_match_conditions}
+                                FROM {_qualify_table_name(source_schema, source_table_name)} src
+                                LEFT JOIN {_qualify_table_name(target_schema, target_table_name)} tgt
+                                ON {_build_null_safe_conditions(match_keys)}
+                                WHERE {" AND ".join([f"tgt.{k} IS NULL" for k in match_keys])}
                             )
                             SELECT COUNT(*) FROM numbered_rows
                         """
