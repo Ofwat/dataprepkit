@@ -1,6 +1,6 @@
 import pytest
 from sqlalchemy import create_engine, MetaData, Table, Column, Integer, String
-from dataprepkit.helpers.transforms.insert_update import validate_table_no_nulls  # adjust import path as needed
+from dataprepkit.helpers.transforms.insert_update import validate_table_no_nulls
 
 @pytest.fixture
 def engine():

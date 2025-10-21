@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy import create_engine, MetaData, Table, Column, Integer, String
 from sqlalchemy.exc import OperationalError
-from dataprepkit.helpers.transforms.insert_update import validate_table_uniqueness  # adjust import path as needed
+from dataprepkit.helpers.transforms.insert_update import validate_table_uniqueness
 
 @pytest.fixture
 def engine():
