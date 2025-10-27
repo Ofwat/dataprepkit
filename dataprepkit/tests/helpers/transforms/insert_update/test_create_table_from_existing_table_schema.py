@@ -128,3 +128,91 @@ def test_create_table_raises_exception_and_logs_error(engine):
                 target_table="target_table",
                 surrogate_key="Assurance_Id"
             )
+
+def test_add_business_key_to_existing_empty_target_table(engine, source_table):
+    # Create a target table that is empty and missing the business key
+    metadata = MetaData()
+    target_table = Table(
+        "empty_target_bk", metadata,
+        Column("id", Integer),
+        Column("name", String)
+    )
+    metadata.create_all(engine)
+
+    # Ensure target table is empty and missing business key
+    result = create_table_from_existing_table_schema(
+        engine=engine,
+        source_table="source_table",
+        target_table="empty_target_bk",
+        surrogate_key="",        # No surrogate key for this test
+        business_key="Business_Id"
+    )
+
+    assert result["created_table"] is False
+    assert result.get("added_business_key", False) is True
+
+    # Verify the business key column was added
+    inspector = inspect(engine)
+    columns = [col["name"] for col in inspector.get_columns("empty_target_bk")]
+    assert "Business_Id" in columns
+
+def test_business_key_already_in_source(engine):
+    # Source table includes the business key
+    metadata = MetaData()
+    source_table = Table(
+        "source_with_bk", metadata,
+        Column("id", Integer),
+        Column("name", String),
+        Column("Business_Id", Integer),  # Already exists
+    )
+    metadata.create_all(engine)
+
+    # Target table does not exist yet
+    target_table_name = "target_with_bk"
+
+    result = create_table_from_existing_table_schema(
+        engine=engine,
+        source_table="source_with_bk",
+        target_table=target_table_name,
+        surrogate_key="",  # no surrogate key for this test
+        business_key="Business_Id"
+    )
+
+    assert result["created_table"] is True
+    assert result["added_business_key"] is False  # Corrected
+
+    # Verify column exists in target
+    inspector = inspect(engine)
+    columns = [col["name"] for col in inspector.get_columns(target_table_name)]
+    assert "Business_Id" in columns
+
+def test_add_missing_business_key_through_public_function(engine):
+    # Source table WITHOUT the business key
+    metadata = MetaData()
+    source_table = Table(
+        "source_no_bk", metadata,
+        Column("id", Integer),
+        Column("name", String),
+    )
+    metadata.create_all(engine)
+
+    target_table_name = "target_missing_bk"
+
+    result = create_table_from_existing_table_schema(
+        engine=engine,
+        source_table="source_no_bk",
+        target_table=target_table_name,
+        surrogate_key="",  # no surrogate key for this test
+        business_key="Business_Id"  # key missing in source
+    )
+
+    assert result["created_table"] is True
+    assert result["added_business_key"] is True
+
+    # Verify the business key column was added to the target table
+    inspector = inspect(engine)
+    columns = [col["name"] for col in inspector.get_columns(target_table_name)]
+    assert "Business_Id" in columns
+
+    # Check that it was inserted at the first position (position 0)
+    assert columns[0] == "Business_Id"

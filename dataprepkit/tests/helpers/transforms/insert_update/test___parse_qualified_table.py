@@ -8,6 +8,6 @@ def test_parse_qualified_table_valid():
 
 def test_parse_qualified_table_invalid():
     with pytest.raises(ValueError, match="not in the format"):
-        _parse_qualified_table("myschema.mytable")  # missing brackets
+        _parse_qualified_table("[myschema.mytable")  # missing brackets
     with pytest.raises(ValueError, match="not in the format"):
         _parse_qualified_table("")  # empty string

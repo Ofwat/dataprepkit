@@ -119,48 +119,96 @@ def _generate_insert_sql(
 
 def _handle_existing_target_table(
     engine: Engine,
-    target_schema: Union[str,None],
+    target_schema: Union[str, None],
     target_tbl: str,
-    surrogate_key: str,
-    qualified_target: str
+    surrogate_key: str = "",
+    business_key: str = "",
+    qualified_target: str = ""
 ) -> Dict[str, bool]:
+    """
+    Handles an existing target table:
+    - Adds missing surrogate key or business key columns if table is empty.
+    
+    Parameters
+    ----------
+    engine : Engine
+        SQLAlchemy engine connected to the database.
+    target_schema : str or None
+        Schema of the target table.
+    target_tbl : str
+        Target table name.
+    surrogate_key : str, optional
+        Name of the surrogate key column to check/add.
+    business_key : str, optional
+        Name of the business key column to check/add.
+    qualified_target : str, optional
+        Fully qualified table name for SQL execution.
+
+    Returns
+    -------
+    Dict[str, bool]
+        Dictionary indicating which columns were added:
+        - "created_table": False (table already exists)
+        - "added_surrogate_key": True if surrogate key was added
+        - "added_business_key": True if business key was added
+    """
     logger.info("Target table '%s.%s' already exists.", target_schema, target_tbl)
     inspector = inspect(engine)
     target_columns = {col['name'] for col in inspector.get_columns(target_tbl, schema=target_schema)}
+
     surrogate_key_exists = surrogate_key in target_columns if surrogate_key else True
+    business_key_exists = business_key in target_columns if business_key else True
     target_is_empty = _is_table_empty(engine, qualified_target)
 
+    added_surrogate_key = False
+    added_business_key = False
+
+    # Add surrogate key if missing and table is empty
     if surrogate_key and not surrogate_key_exists and target_is_empty:
         logger.info(
             "Target table '%s.%s' is empty and missing surrogate key '%s'. Adding surrogate key column as INTEGER.",
             target_schema, target_tbl, surrogate_key
         )
         _add_surrogate_key_column(engine, qualified_target, surrogate_key)
+        added_surrogate_key = True
     else:
         logger.info("Surrogate key exists: %s, target empty: %s", surrogate_key_exists, target_is_empty)
 
+    # Add business key if missing and table is empty
+    if business_key and not business_key_exists and target_is_empty:
+        logger.info(
+            "Target table '%s.%s' is empty and missing business key '%s'. Adding business key column as INTEGER.",
+            target_schema, target_tbl, business_key
+        )
+        _add_surrogate_key_column(engine, qualified_target, business_key)  # reuse function since it's just INT
+        added_business_key = True
+    else:
+        logger.info("Business key exists: %s, target empty: %s", business_key_exists, target_is_empty)
+
     return {
         "created_table": False,
-        "added_surrogate_key": bool(surrogate_key and not surrogate_key_exists and target_is_empty)
+        "added_surrogate_key": added_surrogate_key,
+        "added_business_key": added_business_key
     }
 
 def create_table_from_existing_table_schema(
     engine: Engine,
     source_table: str,
     target_table: str,
-    surrogate_key: str = ""
+    surrogate_key: str = "",
+    business_key: str = ""
 ) -> Dict[str, bool]:
     """
-    Creates a target table based on the schema of an existing source table, optionally adding a surrogate key.
+    Creates a target table based on the schema of an existing source table, optionally adding a surrogate key and/or a business key.
 
     If the target table already exists:
-    - Checks if the surrogate key column exists.
-    - If the surrogate key is missing and the target table is empty, adds the surrogate key column as an INTEGER.
+    - Checks if the surrogate key and business key columns exist.
+    - If either is missing and the table is empty, adds the missing columns as INTEGER.
     - Otherwise, leaves the target table unchanged.
 
     If the target table does not exist:
     - Creates it by copying the schema of the source table.
-    - Adds the surrogate key column if specified and missing.
+    - Adds the surrogate key and/or business key column if specified and missing.
 
     Parameters
     ----------
@@ -172,6 +220,8 @@ def create_table_from_existing_table_schema(
         Fully qualified name of the target table to create or modify.
     surrogate_key : str, optional
         Name of the surrogate key column to add if missing (default is empty string, meaning no surrogate key added).
+    business_key : str, optional
+        Name of the business key column to add if missing (default is empty string, meaning no business key added).
 
     Returns
     -------
@@ -179,6 +229,7 @@ def create_table_from_existing_table_schema(
         Dictionary indicating the results of the operation:
         - "created_table": True if the table was created, False if it already existed.
         - "added_surrogate_key": True if a surrogate key column was added, False otherwise.
+        - "added_business_key": True if a business key column was added, False otherwise.
 
     Raises
     ------
@@ -193,10 +244,11 @@ def create_table_from_existing_table_schema(
     ...     engine,
     ...     source_table='[dbo].[source_table]',
     ...     target_table='[dbo].[target_table]',
-    ...     surrogate_key='Assurance_Id'
+    ...     surrogate_key='Assurance_Id',
+    ...     business_key='Business_Id'
     ... )
     >>> print(result)
-    {'created_table': True, 'added_surrogate_key': True}
+    {'created_table': True, 'added_surrogate_key': True, 'added_business_key': True}
     """
     source_schema, source_tbl = _parse_qualified_table(source_table)
     target_schema, target_tbl = _parse_qualified_table(target_table)
@@ -206,13 +258,18 @@ def create_table_from_existing_table_schema(
 
     try:
         if _table_exists(engine, target_tbl, target_schema):
-            return _handle_existing_target_table(engine, target_schema, target_tbl, surrogate_key, qualified_target)
+            return _handle_existing_target_table(
+                engine, target_schema, target_tbl, surrogate_key, business_key, qualified_target
+            )
 
-        return _create_table_from_source_schema(engine, source_schema, source_tbl, target_schema, target_tbl, surrogate_key)
+        return _create_table_from_source_schema(
+            engine, source_schema, source_tbl, target_schema, target_tbl, surrogate_key, business_key
+        )
 
     except Exception as e:
-        logger.error("Error in creating table or adding surrogate key: %s", e)
+        logger.error("Error in creating table or adding keys: %s", e)
         raise
+
 
 def _create_table_from_source_schema(
     engine: Engine,
@@ -220,7 +277,8 @@ def _create_table_from_source_schema(
     source_tbl: str,
     target_schema: Union[str, None],
     target_tbl: str,
-    surrogate_key: str
+    surrogate_key: str,
+    business_key: str
 ) -> Dict[str, bool]:
     inspector = inspect(engine)
     columns_info = inspector.get_columns(source_tbl, schema=source_schema)
@@ -229,7 +287,9 @@ def _create_table_from_source_schema(
     columns = []
 
     surrogate_key_created = False
+    business_key_created = False
     add_surrogate_key = bool(surrogate_key and surrogate_key.strip())
+    add_business_key = bool(business_key and business_key.strip())
 
     for col in columns_info:
         col_name = col['name']
@@ -237,9 +297,16 @@ def _create_table_from_source_schema(
         columns.append(Column(col_name, col_type))
         if add_surrogate_key and col_name == surrogate_key:
             surrogate_key_created = True
+        if add_business_key and col_name == business_key:
+            business_key_created = True
 
     if add_surrogate_key and not surrogate_key_created:
         columns.insert(0, Column(surrogate_key, Integer))
+
+    if add_business_key and not business_key_created:
+        # Insert after surrogate key if it exists, otherwise at position 0
+        insert_pos = 1 if surrogate_key_created or add_surrogate_key else 0
+        columns.insert(insert_pos, Column(business_key, Integer))
 
     Table(target_tbl, metadata, *columns, schema=target_schema)
     metadata.create_all(engine)
@@ -248,11 +315,12 @@ def _create_table_from_source_schema(
         "Created target table '%s.%s' from source table '%s.%s' schema.",
         target_schema, target_tbl, source_schema, source_tbl
     )
+
     return {
         "created_table": True,
-        "added_surrogate_key": bool(surrogate_key and not surrogate_key_created)
+        "added_surrogate_key": bool(add_surrogate_key and not surrogate_key_created),
+        "added_business_key": bool(add_business_key and not business_key_created)
     }
-
 
 def validate_table_uniqueness(
         engine: Engine,
