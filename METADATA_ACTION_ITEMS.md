@@ -33,5 +33,5 @@ This checklist captures the concrete pieces we still need to implement so the me
    - [x] Include schema drift summaries, safe write set details, transform steps, and execution metadata in the logs.
 
 7. **Operational notes**
-   - [ ] Ensure the smoke test is documented and runnable in CI.
-   - [ ] Collect metrics for downstream owners (row counts, execution duration, write counts) if possible to aid monitoring.
+   - [x] Ensure the smoke test is documented and runnable in CI (see `examples/run_scd2_smoke.py` / README).
+   - [x] Collect metrics for downstream owners (row counts, execution duration, write counts) if possible to aid monitoring (ingestion and run logging already emit these values).
