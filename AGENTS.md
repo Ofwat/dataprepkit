@@ -2,9 +2,11 @@
 
 ## Primary Guidance
 - Keep all code changes as small and focused as possible; prefer the lowest line count needed to solve the task.
+- Keep the codebase as lean as possible; avoid unnecessary files or bloat when implementing requirements.
 - Respect existing structure and avoid adding new files unless explicitly requested.
 - Use the strictest Python style guidance (PEP 8, strict linters) when editing and assume VSCode defaults.
 - Run or explain the relevant verification steps when touching functionality.
+- Prefer a simple, easy-to-follow modular codebase; split responsibilities cleanly and keep helpers focused per module.
 
 ## Interactions
 - When asked to refactor or improve code, point out risks/next steps, but do not invent large rewrites without a follow-up ask.
