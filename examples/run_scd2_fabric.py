@@ -22,6 +22,7 @@ RAW_FILE_ENV = "FABRIC_RAW_FILEPATH"
 WORKSPACE_ENV = "FABRIC_WORKSPACE"
 LAKEHOUSE_ENV = "FABRIC_LAKEHOUSE"
 MOUNT_POINT_ENV = "FABRIC_MOUNT_POINT"
+BASE_PATH_ENV = "FABRIC_BASE_PATH"
 DEFAULT_RAW_FILE = Path(__file__).resolve().parents[2] / "examples" / "dummy_dimension.csv"
 
 
@@ -127,7 +128,18 @@ def main() -> None:
     workspace_name = os.environ.get(WORKSPACE_ENV)
     lakehouse_name = os.environ.get(LAKEHOUSE_ENV)
     mount_point = os.environ.get(MOUNT_POINT_ENV, "/home/trusted-service-user/mounts/Source_Data")
-    mount_path = mount_lakehouse(workspace_name, lakehouse_name, mount_point) if workspace_name and lakehouse_name else None
+    base_path = os.environ.get(BASE_PATH_ENV)
+    if base_path:
+        mount_path = mount_lakehouse(
+            workspace_name=None,
+            lakehouse_display_name=None,
+            mount_point=mount_point,
+            base_path=base_path,
+        )
+    elif workspace_name and lakehouse_name:
+        mount_path = mount_lakehouse(workspace_name, lakehouse_name, mount_point)
+    else:
+        mount_path = None
 
     raw_file = Path(
         os.environ.get(
