@@ -40,7 +40,7 @@ def register_metadata_from_map(
     root = Path(root_dir) if root_dir else None
     for name, payload in metadata_map.items():
         insert_update = payload.get("insert_update") or {}
-        data_columns = list(insert_update.get("data_columns", {}))
+        data_columns = insert_update.get("data_columns", {})
         filepath = payload.get("filepath")
         if root and filepath:
             filepath = str((root / filepath).resolve())

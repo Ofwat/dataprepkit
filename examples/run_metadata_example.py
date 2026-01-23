@@ -67,7 +67,10 @@ def main():
         metadata={
             "target_table": "dimension",
             "natural_key_cols": ["natural_key"],
-            "data_columns": ["data_column", "dep_value"],
+            "data_columns": {
+                "data_column": {"type": "TEXT", "nullable": False},
+                "dep_value": {"type": "TEXT"},
+            },
             "surrogate_key": "surrogate_key",
             "join_numeric_key": "join_numeric_key",
             "filepath": str(Path(__file__).resolve().parents[1] / "examples" / "dummy_dimension.csv"),

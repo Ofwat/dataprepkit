@@ -19,4 +19,6 @@ The metadata loader is driven by JSON-like entries. `examples/run_metadata_examp
 python examples/run_metadata_example.py
 ```
 
+Metadata entries now define `schema.data_columns` as a map `{column_name: column_spec}`, where `column_spec` includes `type`, `nullable`, `unique`, and `default`. The orchestrator uses those specs for schema evolution, safe write sets, and archival logging per `METADATA_PLAN.md`.
+
 Modify the metadata dictionary in the script to match your real tables/sources before running it in your environment.

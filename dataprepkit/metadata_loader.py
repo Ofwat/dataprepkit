@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, Mapping, Sequence, Literal
+from typing import Any, Callable, Dict, Mapping, Sequence, Literal
 
 import logging
 import pandas as pd
@@ -35,13 +35,20 @@ class RunPolicy(BaseModel):
     on_dependency_failure: Literal["skip_dependents", "abort"] = "skip_dependents"
 
 
+class ColumnSpec(BaseModel):
+    type: str
+    nullable: bool = True
+    unique: bool = False
+    default: str | None = None
+
+
 class DimensionMetadata(BaseModel):
     """Defines the metadata required to load a single dimension table."""
 
     name: str
     target_table: str
     natural_key_cols: Sequence[str]
-    data_columns: Sequence[str]
+    data_columns: Mapping[str, ColumnSpec]
     surrogate_key: str
     join_numeric_key: str
     filepath: str
@@ -52,10 +59,15 @@ class DimensionMetadata(BaseModel):
     run_policy: RunPolicy = Field(default_factory=RunPolicy)
     processing_class: Callable[[pd.DataFrame], pd.DataFrame] | None = None
     archive_path: str | None = None
-    processing_class: Callable[[pd.DataFrame], pd.DataFrame] | None = None
 
-    @field_validator("natural_key_cols", "data_columns")
-    def must_define_columns(cls, value: Sequence[str]) -> Sequence[str]:
+    @field_validator("natural_key_cols")
+    def must_define_key_columns(cls, value: Sequence[str]) -> Sequence[str]:
+        if not value:
+            raise ValueError("Must provide at least one column.")
+        return value
+
+    @field_validator("data_columns")
+    def must_define_data_columns(cls, value: Mapping[str, ColumnSpec]) -> Mapping[str, ColumnSpec]:
         if not value:
             raise ValueError("Must provide at least one column.")
         return value
@@ -65,8 +77,27 @@ ROOT = Path(__file__).resolve().parents[1]
 METADATA_REGISTRY: Dict[str, DimensionMetadata] = {}
 
 
+def _normalize_data_columns(
+    raw: Sequence[str] | Mapping[str, Any]
+) -> Mapping[str, ColumnSpec]:
+    if isinstance(raw, Mapping):
+        normalized = {}
+        for name, spec in raw.items():
+            if isinstance(spec, ColumnSpec):
+                normalized[name] = spec
+            else:
+                normalized[name] = ColumnSpec(**spec)
+        return normalized
+    return {name: ColumnSpec(type="TEXT") for name in raw}
+
+
 def register_metadata(name: str, metadata: Dict[str, object]) -> None:
     """Register metadata using a JSON-like dictionary for familiarity with old_code.py."""
+    if "data_columns" in metadata:
+        metadata = metadata.copy()
+        metadata["data_columns"] = _normalize_data_columns(
+            metadata["data_columns"]  # type: ignore[arg-type]
+        )
     METADATA_REGISTRY[name] = DimensionMetadata(name=name, **metadata)
 
 
@@ -77,7 +108,7 @@ def _register_default_metadata() -> None:
         {
             "target_table": "dimension",
             "natural_key_cols": ["natural_key"],
-            "data_columns": ["data_column"],
+            "data_columns": {"data_column": {"type": "TEXT"}},
             "surrogate_key": "surrogate_key",
             "join_numeric_key": "join_numeric_key",
             "filepath": str(sample_path),
@@ -266,13 +297,15 @@ def _handle_schema_drift(
     engine: Engine,
     metadata: DimensionMetadata,
     available_columns: set[str],
-    requested_columns: Sequence[str],
+    requested_columns: Mapping[str, ColumnSpec],
 ) -> tuple[list[str], list[str]]:
-    safe, missing = _resolve_safe_data_columns(requested_columns, available_columns)
+    requested_names = list(requested_columns.keys())
+    safe, missing = _resolve_safe_data_columns(requested_names, available_columns)
     if missing:
         plan = f"Missing columns: {missing}"
         if metadata.schema_handling.mode == "evolve":
-            _evolve_schema(engine, metadata.target_table, missing)
+            missing_specs = {name: requested_columns[name] for name in missing}
+            _evolve_schema(engine, metadata.target_table, missing_specs)
             safe = list(requested_columns)
             logger.info("Schema evolution applied for %s: added %s", metadata.target_table, missing)
         else:
@@ -291,12 +324,21 @@ def _column_type_for_engine(engine: Engine) -> str:
     return "TEXT"
 
 
-def _evolve_schema(engine: Engine, table_name: str, missing: Sequence[str]) -> None:
-    column_type = _column_type_for_engine(engine)
+def _evolve_schema(engine: Engine, table_name: str, missing: Mapping[str, ColumnSpec]) -> None:
     with engine.begin() as conn:
-        for column in missing:
+        for column, spec in missing.items():
+            column_type = spec.type or _column_type_for_engine(engine)
+            constraints = []
+            if not spec.nullable:
+                constraints.append("NOT NULL")
+            if spec.unique:
+                constraints.append("UNIQUE")
+            if spec.default is not None:
+                constraints.append(f"DEFAULT {spec.default}")
+            constraint_sql = " ".join(constraints)
+            definition = f"{column_type} {constraint_sql}".strip()
             conn.execute(
-                text(f"ALTER TABLE {table_name} ADD COLUMN {column} {column_type}")
+                text(f"ALTER TABLE {table_name} ADD COLUMN {column} {definition}")
             )
 
 
