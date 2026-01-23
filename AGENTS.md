@@ -11,3 +11,4 @@
 - Keep comments and documentation concise so they stay readable.
 - Always mention tests or checks you performed in your final response.
 - When the user mentions public API endpoints, add tests that exercise those behaviors and favor unions or shared fixtures to minimize duplicated test code.
+- Avoid focusing on testing private API branches; prioritize public surface behavior when recommending tests.
