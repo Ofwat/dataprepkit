@@ -85,7 +85,7 @@ def mount_lakehouse(
         raise ImportError("sempy.fabric is required to locate Fabric resources.")
 
     ws_df = fabric.list_workspaces()
-    workspace_id = _find_resource_id(ws_df.to_dict("records"), "Display Name", workspace_name)
+    workspace_id = _find_resource_id(ws_df.to_dict("records"), "Name", workspace_name)
     items = fabric.list_items(workspace=workspace_id)
     lakehouse_id = _find_resource_id(
         items.to_dict("records"), "Display Name", lakehouse_display_name
