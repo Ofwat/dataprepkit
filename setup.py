@@ -26,6 +26,7 @@ setup(
         "numpy",
         "sqlalchemy",
         "pyodbc",
+        "pydantic>=1.10.0",
     ],
     extras_require={
         "dev": [
