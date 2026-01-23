@@ -22,7 +22,6 @@ RAW_FILE_ENV = "FABRIC_RAW_FILEPATH"
 WORKSPACE_ENV = "FABRIC_WORKSPACE"
 LAKEHOUSE_ENV = "FABRIC_LAKEHOUSE"
 MOUNT_POINT_ENV = "FABRIC_MOUNT_POINT"
-BASE_PATH_ENV = "FABRIC_BASE_PATH"
 DEFAULT_RAW_FILE = Path(__file__).resolve().parents[2] / "examples" / "dummy_dimension.csv"
 
 
@@ -125,28 +124,11 @@ def main() -> None:
     target_table = os.environ[TARGET_TABLE_ENV]
     _ensure_table(engine, target_table)
 
-    workspace_name = os.environ.get(WORKSPACE_ENV)
-    lakehouse_name = os.environ.get(LAKEHOUSE_ENV)
+    workspace_name = os.environ[WORKSPACE_ENV]
+    lakehouse_name = os.environ[LAKEHOUSE_ENV]
     mount_point = os.environ.get(MOUNT_POINT_ENV, "/home/trusted-service-user/mounts/Source_Data")
-    base_path = os.environ.get(BASE_PATH_ENV)
-    if base_path:
-        mount_path = mount_lakehouse(
-            workspace_name=None,
-            lakehouse_display_name=None,
-            mount_point=mount_point,
-            base_path=base_path,
-        )
-    elif workspace_name and lakehouse_name:
-        mount_path = mount_lakehouse(workspace_name, lakehouse_name, mount_point)
-    else:
-        mount_path = None
-
-    raw_file = Path(
-        os.environ.get(
-            RAW_FILE_ENV,
-            str(mount_path / "dimension.csv") if mount_path else str(DEFAULT_RAW_FILE),
-        )
-    )
+    _, mount_path = mount_lakehouse(workspace_name, lakehouse_name, mount_point)
+    raw_file = Path(os.environ.get(RAW_FILE_ENV, str(mount_path / "dimension.csv")))
 
     metadata_name = _register_metadata_for_target(raw_file)
 

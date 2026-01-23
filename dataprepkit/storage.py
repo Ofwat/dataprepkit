@@ -59,15 +59,14 @@ def _find_resource_id(items: Iterable[dict], key: str, value: str) -> str:
 
 
 def mount_lakehouse(
-    workspace_name: str | None,
-    lakehouse_display_name: str | None,
+    workspace_name: str,
+    lakehouse_display_name: str,
     mount_point: str,
     *,
     retries: int = 20,
     delay_seconds: float = 1.0,
     force_unmount: bool = True,
-    base_path: str | None = None,
-) -> str:
+) -> tuple[str, str]:
     """
     Mount a Fabric lakehouse path either from a computed name/display combo or a supplied path.
 
@@ -82,26 +81,22 @@ def mount_lakehouse(
 
     Other parameters mimic :func:`ensure_mount`.
     """
-    if not base_path:
-        if fabric is None:
-            raise ImportError("sempy.fabric is required to locate Fabric resources.")
-        if not workspace_name or not lakehouse_display_name:
-            raise ValueError(
-                "workspace_name and lakehouse_display_name are required when base_path is not provided."
-            )
+    if fabric is None:
+        raise ImportError("sempy.fabric is required to locate Fabric resources.")
 
-        ws_df = fabric.list_workspaces()
-        workspace_id = _find_resource_id(ws_df.to_dict("records"), "Name", workspace_name)
-        items = fabric.list_items(workspace=workspace_id)
-        lakehouse_id = _find_resource_id(
-            items.to_dict("records"), "Display Name", lakehouse_display_name
-        )
-        base_path = f"abfss://{workspace_id}@onelake.dfs.fabric.microsoft.com/{lakehouse_id}"
+    ws_df = fabric.list_workspaces()
+    workspace_id = _find_resource_id(ws_df.to_dict("records"), "Name", workspace_name)
+    items = fabric.list_items(workspace=workspace_id)
+    lakehouse_id = _find_resource_id(
+        items.to_dict("records"), "Display Name", lakehouse_display_name
+    )
+    base_path = f"abfss://{workspace_id}@onelake.dfs.fabric.microsoft.com/{lakehouse_id}"
 
-    return ensure_mount(
+    mount_path = ensure_mount(
         base_path,
         mount_point,
         retries=retries,
         delay_seconds=delay_seconds,
         force_unmount=force_unmount,
     )
+    return base_path, mount_path
