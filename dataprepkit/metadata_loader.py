@@ -36,17 +36,24 @@ ROOT = Path(__file__).resolve().parents[1]
 METADATA_REGISTRY: Dict[str, DimensionMetadata] = {}
 
 
+def register_metadata(name: str, metadata: Dict[str, object]) -> None:
+    """Register metadata using a JSON-like dictionary for familiarity with old_code.py."""
+    METADATA_REGISTRY[name] = DimensionMetadata(name=name, **metadata)
+
+
 def _register_default_metadata() -> None:
     sample_path = ROOT / "examples" / "dummy_dimension.csv"
-    METADATA_REGISTRY["dummy_dimension"] = DimensionMetadata(
-        name="dummy_dimension",
-        target_table="dimension",
-        natural_key_cols=["natural_key"],
-        data_columns=["data_column"],
-        surrogate_key="surrogate_key",
-        join_numeric_key="join_numeric_key",
-        filepath=str(sample_path),
-        description="Placeholder dimension used in demos.",
+    register_metadata(
+        "dummy_dimension",
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": ["data_column"],
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": str(sample_path),
+            "description": "Placeholder dimension used in demos.",
+        },
     )
 
 

@@ -1,8 +1,8 @@
 # Metadata-driven dimension loading plan
 
 1. **Metadata definition**
-   - Store each dimension as a minimal record containing target table name, natural key columns, data column mappings, surrogate/join key names, raw file path, and any dependent tables.
-   - Keep the structure lean (plain dict/JSON) so adding a dimension only requires minor metadata edits.
+   - Store each dimension as a minimal dictionary containing target table name, natural key columns, data column mappings, surrogate/join key names, raw file path, and any dependent tables, mirroring the `old_code.py` “json-like object”.
+   - Register those dictionaries via `register_metadata()` so they are validated once and stored in a central registry before any load runs.
 
 2. **Orchestration layer**
    - Build a small module (e.g., `dataprepkit.metadata_loader`) that reads the chosen metadata entry, loads the CSV (or configured source) into pandas, applies any configured renames/transforms, and calls `dataprepkit.scd2.apply_changes`.
