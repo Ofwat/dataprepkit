@@ -6,8 +6,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, Mapping, Sequence, Literal
 
-from typing import Literal
-
 import logging
 import pandas as pd
 from pydantic import BaseModel, Field, field_validator
@@ -52,6 +50,8 @@ class DimensionMetadata(BaseModel):
     schema_handling: SchemaHandling = Field(default_factory=SchemaHandling)
     dependencies: Sequence[DependencyJoin] = Field(default_factory=list)
     run_policy: RunPolicy = Field(default_factory=RunPolicy)
+    processing_class: Callable[[pd.DataFrame], pd.DataFrame] | None = None
+    archive_path: str | None = None
     processing_class: Callable[[pd.DataFrame], pd.DataFrame] | None = None
 
     @field_validator("natural_key_cols", "data_columns")
@@ -202,6 +202,7 @@ def run_dimension(
             duration,
             rows_processed,
         )
+        _archive_snapshot(incoming, metadata, execution_time)
     logger.info("SCD2 classification counts: not available")
     _post_scd2_validation(engine, metadata.target_table, metadata.natural_key_cols)
     return incoming
@@ -339,3 +340,20 @@ def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence
         for sql_stmt, message in validation_checks:
             if conn.execute(sql_stmt).first():
                 raise RuntimeError(f"Post-SCD2 validation failed: {message}")
+
+
+def _archive_snapshot(incoming: pd.DataFrame, metadata: DimensionMetadata, execution_time: str) -> None:
+    if not metadata.archive_path:
+        return
+    base = Path(metadata.archive_path)
+    if base.suffix != ".parquet":
+        dest = base / f"{metadata.name}_{execution_time}.parquet"
+    else:
+        dest = base
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        incoming.to_parquet(dest, index=False)
+        logger.info("Archived snapshot to %s", dest)
+    except Exception as exc:
+        logger.warning("Failed to archive snapshot to %s: %s", dest, exc)

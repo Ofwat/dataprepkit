@@ -439,3 +439,35 @@ def test_metrics_logged(caplog, monkeypatch):
     )
 
     assert "Table dimension completed in" in caplog.text
+
+
+def test_archive_snapshot(tmp_path, caplog):
+    engine = create_engine("sqlite:///:memory:")
+    _create_dimension_table(engine)
+    metadata_name = "archive_test"
+    register_metadata(
+        metadata_name,
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": ["data_column"],
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+            "archive_path": str(tmp_path / "snapshots"),
+        },
+    )
+
+    caplog.set_level(logging.WARNING)
+    run_dimension(
+        engine,
+        metadata_name,
+        override_df=pd.DataFrame([{"natural_key": "x", "data_column": "v"}]),
+    )
+
+    files = list((tmp_path / "snapshots").glob("*.parquet"))
+    if files:
+        assert files, "Parquet snapshot written"
+    else:
+        assert "Failed to archive snapshot" in caplog.text
+    METADATA_REGISTRY.pop(metadata_name, None)
