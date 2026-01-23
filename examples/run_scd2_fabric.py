@@ -127,8 +127,8 @@ def main() -> None:
     workspace_name = os.environ[WORKSPACE_ENV]
     lakehouse_name = os.environ[LAKEHOUSE_ENV]
     mount_point = os.environ.get(MOUNT_POINT_ENV, "/home/trusted-service-user/mounts/Source_Data")
-    _, mount_path = mount_lakehouse(workspace_name, lakehouse_name, mount_point)
-    raw_file = Path(os.environ.get(RAW_FILE_ENV, str(mount_path / "dimension.csv")))
+    mount_info = mount_lakehouse(workspace_name, lakehouse_name, mount_point)
+    raw_file = Path(os.environ.get(RAW_FILE_ENV, str(Path(mount_info["source_data_path"]) / "dimension.csv")))
 
     metadata_name = _register_metadata_for_target(raw_file)
 
