@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from datetime import datetime
 from pathlib import Path
 
@@ -14,14 +13,13 @@ from dataprepkit.metadata_loader import register_metadata, run_dimension
 from dataprepkit.storage import LakehouseMount, mount_lakehouse
 
 
-ENDPOINT_ENV = "FABRIC_SQL_ENDPOINT"
-PORT_ENV = "FABRIC_SQL_PORT"
-TARGET_TABLE_ENV = "FABRIC_TARGET_TABLE"
-METADATA_NAME_ENV = "FABRIC_METADATA_NAME"
-RAW_FILE_ENV = "FABRIC_RAW_FILEPATH"
-WORKSPACE_ENV = "FABRIC_WORKSPACE"
-LAKEHOUSE_ENV = "FABRIC_LAKEHOUSE"
-MOUNT_POINT_ENV = "FABRIC_MOUNT_POINT"
+FABRIC_ENDPOINT = "myfabric.warehouse.microsoft.com"
+FABRIC_PORT = 1433
+FABRIC_TARGET_TABLE = "[dbo].[dimension]"
+FABRIC_METADATA_NAME = "fabric_dimension"
+FABRIC_WORKSPACE = "Ocean_Data_PROD"
+FABRIC_LAKEHOUSE = "Dimension_Source_Data"
+FABRIC_MOUNT_POINT = "/home/trusted-service-user/mounts/Source_Data"
 DEFAULT_RAW_FILE = Path(__file__).resolve().parents[2] / "examples" / "dummy_dimension.csv"
 
 
@@ -85,7 +83,7 @@ def _ensure_table(engine, table_name: str) -> None:
 
 def _summarize(engine, label: str) -> None:
     with engine.connect() as conn:
-        df = pd.read_sql_table(os.environ[TARGET_TABLE_ENV], conn)
+        df = pd.read_sql_table(FABRIC_TARGET_TABLE, conn)
     print(f"\n--- {label} ---")
     print(df.sort_values(["natural_key", "surrogate_key"]))
 
@@ -100,11 +98,10 @@ def _run_batch(engine, label: str, df: pd.DataFrame, metadata_name: str) -> None
 
 
 def _register_metadata_for_target(raw_file: Path) -> str:
-    name = os.environ.get(METADATA_NAME_ENV, "fabric_dimension")
     register_metadata(
-        name,
+        FABRIC_METADATA_NAME,
         {
-            "target_table": os.environ[TARGET_TABLE_ENV],
+            "target_table": FABRIC_TARGET_TABLE,
             "natural_key_cols": ["natural_key"],
             "data_columns": ["data_column"],
             "surrogate_key": "surrogate_key",
@@ -112,23 +109,20 @@ def _register_metadata_for_target(raw_file: Path) -> str:
             "filepath": str(raw_file),
         },
     )
-    return name
+    return FABRIC_METADATA_NAME
 
 
 def main() -> None:
     engine = get_fabric_warehouse_engine(
-        os.environ[ENDPOINT_ENV],
-        port=int(os.environ.get(PORT_ENV, "1433")),
+        FABRIC_ENDPOINT,
+        port=FABRIC_PORT,
     )
 
-    target_table = os.environ[TARGET_TABLE_ENV]
+    target_table = FABRIC_TARGET_TABLE
     _ensure_table(engine, target_table)
 
-    workspace_name = os.environ[WORKSPACE_ENV]
-    lakehouse_name = os.environ[LAKEHOUSE_ENV]
-    mount_point = os.environ.get(MOUNT_POINT_ENV, "/home/trusted-service-user/mounts/Source_Data")
-    mount_info = mount_lakehouse(workspace_name, lakehouse_name, mount_point)
-    raw_file = Path(os.environ.get(RAW_FILE_ENV, str(Path(mount_info.source_data_path) / "dimension.csv")))
+    mount_info = mount_lakehouse(FABRIC_WORKSPACE, FABRIC_LAKEHOUSE, FABRIC_MOUNT_POINT)
+    raw_file = Path(str(Path(mount_info.source_data_path) / "dimension.csv"))
 
     metadata_name = _register_metadata_for_target(raw_file)
 
