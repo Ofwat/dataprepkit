@@ -10,20 +10,32 @@ setup(
     name="ofwat-dataprepkit",
     version="0.10",
     author="Ofwat",
-    description='ETL Tools for Fabric',
+    description="ETL helpers focused on Fabric SQL workloads",
     long_description=long_description,
-    long_description_content_type='text/markdown',
-    keywords="fabric etl",
-    packages=find_packages(),
+    long_description_content_type="text/markdown",
+    keywords="fabric etl scd2",
+    packages=find_packages(include=["dataprepkit", "dataprepkit.*"]),
     url="https://github.com/Ofwat/dataprepkit",
     project_urls={
-        'Source': 'https://github.com/Ofwat/dataprepkit',
-        'Tracker': 'https://github.com/Ofwat/dataprepkit/issues',
+        "Source": "https://github.com/Ofwat/dataprepkit",
+        "Tracker": "https://github.com/Ofwat/dataprepkit/issues",
     },
+    python_requires=">=3.9",
     install_requires=[
         "pandas",
         "numpy",
         "sqlalchemy",
         "pyodbc",
+    ],
+    extras_require={
+        "dev": [
+            "pytest",
+            "duckdb",
+        ],
+    },
+    classifiers=[
+        "Programming Language :: Python :: 3",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: OS Independent",
     ],
 )

@@ -1,4 +1,5 @@
-"""Main entry point into the dataprepkit package
-"""
-from dataprepkit import helpers
-from dataprepkit import processors
+"""Main entry point into the dataprepkit package."""
+
+from . import scd2
+
+__all__ = ["scd2"]

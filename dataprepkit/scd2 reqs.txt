@@ -1,0 +1,167 @@
+DB Requirements
+Stage 1 - Slowly changing dimensions of type 2
+Behaviour [must have]
+System managed columns: surrogate_key [uint64], join_numeric_key [uint64], Row_Hash[sha256 hex string], Insert_Date [datetime up to 1ms precision], Update_Date [datetime up to 1ms precision], Current_Ind[bool].
+Data driven columns whose types may vary table by table: join_key_1, data_column_1
+Note:
+•	Current_Ind: 1 = current row, 0 = historical row
+•	Update_Date: last modification timestamp
+•	Row_Hash: hash of the data columns
+•	join_numeric_key: a single numeric incremental representation of the join_key_1 columns
+1. Insert
+Initial table:
+surrogate_key	join_key_1	join_numeric_key	data_column_1	Row_Hash	Insert_Date	Update_Date	Current_Ind	Deleted_Ind
+1	a1	1	a2	123	2026-01-08 14:44:55.123		1	0
+2	b1	2	b2	456	2026-01-08 14:44:55.123		1	0
+3	c1	3	c3	789	2026-01-08 14:44:55.123		1	0
+Incoming data:
+join_key_1	data_column_1
+a1	a2
+b1	b2
+c1	c2
+d1	d2
+Inserted new row d1
+Resulting table:
+surrogate_key	join_key_1	join_numeric_key	data_column_1	Row_Hash	Insert_Date	Update_Date	Current_Ind	Deleted_Ind
+1	a1	1	a2	123	2026-01-08 14:44:55.123		1	0
+2	b1	2	b2	456	2026-01-08 14:44:55.123		1	0
+3	c1	3	c2	789	2026-01-08 14:44:55.123		1	0
+4	d1	4	d2	101112	2026-01-08 14:55:55.123		1	0
+2. Delete
+Initial table:
+surrogate_key	join_key_1	join_numeric_key	data_column_1	Row_Hash	Insert_Date	Update_Date	Current_Ind	Deleted_Ind
+1	a1	1	a2	123	2026-01-08 14:44:55.123		1	0
+2	b1	2	b2	456	2026-01-08 14:44:55.123		1	0
+3	c1	3	c2	789	2026-01-08 14:44:55.123		1	0
+4	d1	4	d2	101112	2026-01-08 14:55:55.123		1	0
+Incoming data:
+join_key_1	data_column_1
+a1	a2
+b1	b2
+c1	c2
+Resulting table:
+surrogate_key	join_key_1	join_numeric_key	data_column_1	Row_Hash	Insert_Date	Update_Date	Current_Ind	Deleted_Ind
+1	a1	1	a2	123	2026-01-08 14:44:55.123		1	0
+2	b1	2	b2	456	2026-01-08 14:44:55.123		1	0
+3	c1	3	c2	789	2026-01-08 14:44:55.123		1	0
+4	d1	4	d2	101112	2026-01-08 14:55:55.123	2026-01-08 14:56:55.123	0	1
+Removed row d1, soft deleted it from the final table
+3. Update
+Initial table:
+surrogate_key	join_key_1	join_numeric_key	data_column_1	Row_Hash	Insert_Date	Update_Date	Current_Ind	Deleted_Ind
+1	a1	1	a2	123	2026-01-08 14:44:55.123		1	0
+2	b1	2	b2	456	2026-01-08 14:44:55.123		1	0
+3	c1	3	c2	789	2026-01-08 14:44:55.123		1	0
+4	d1	4	d2	101112	2026-01-08 14:55:55.123	2026-01-08 14:56:55.123	0	1
+Incoming data:
+join_key_1	data_column_1
+a1	a2
+b1	b2
+c1	c2222
+Resulting table:
+surrogate_key	join_key_1	join_numeric_key	data_column_1	Row_Hash	Insert_Date	Update_Date	Current_Ind	Deleted_Ind
+1	a1	1	a2	123	2026-01-08 14:44:55.123		1	0
+2	b1	2	b2	456	2026-01-08 14:44:55.123		1	0
+3	c1	3	c2	789	2026-01-08 14:44:55.123	2026-01-08 15:05:55.123	0	0
+4	d1	4	d2	101112	2026-01-08 14:55:55.123	2026-01-08 14:56:55.123	0	1
+5	c1	3	c2222	131415	2026-01-08 15:05:55.123		1	0
+5. Reinsertion
+Initial table:
+surrogate_key	join_key_1	join_numeric_key	data_column_1	Row_Hash	Insert_Date	Update_Date	Current_Ind	Deleted_Ind
+1	a1	1	a2	123	2026-01-08 14:44:55.123		1	0
+2	b1	2	b2	456	2026-01-08 14:44:55.123		1	0
+3	c1	3	c2	789	2026-01-08 14:44:55.123	2026-01-08 15:05:55.123	0	0
+4	d1	4	d2	101112	2026-01-08 14:55:55.123	2026-01-08 14:56:55.123	0	1
+5	c1	3	c2222	131415	2026-01-08 15:05:55.123		1	0
+Incoming data:
+join_key_1	data_column_1
+a1	a2
+b1	b2
+c1	c2222
+d1	d2
+Resulting table:
+surrogate_key	join_key_1	join_numeric_key	data_column_1	Row_Hash	Insert_Date	Update_Date	Current_Ind	Deleted_Ind
+1	a1	1	a2	123	2026-01-08 14:44:55.123		1	0
+2	b1	2	b2	456	2026-01-08 14:44:55.123		1	0
+3	c1	3	c2	789	2026-01-08 14:44:55.123	2026-01-08 15:05:55.123	0	0
+4	d1	4	d2	101112	2026-01-08 14:55:55.123	2026-01-08 14:56:55.123	0	1
+5	c1	3	c2222	131415	2026-01-08 15:05:55.123		1	0
+6	d1	5	d2	10112	2026-01-08 15:13:55.123		1	0
+1. Behaviour [nice to have]
+The SCD2 implementation must be state-reproducible.
+Given:
+•	The full historical input data used to build the table (including deterministic change ordering per natural key)
+•	The same SCD2 configuration
+•	A total ordering over history that is stable, deterministic, and unique per natural key
+It must be possible to:
+•	Drop the existing SCD2 table
+•	Rebuild it from history
+Such that the rebuilt table is logically identical to the dropped table.
+Two tables are considered logically identical if:
+•	They contain the same set of rows when identified by natural keys and validity ranges
+•	All non-ephemeral, non-surrogate column values are equal
+•	Validity ranges and “current” indicators match exactly
+•	Exactly one current row exists per natural key
+Note: Surrogate keys are excluded from logical identity and may differ across rebuilds.
+________________________________________
+2. Table Constraints
+•	Surrogate key is the primary key and must be non-null
+•	Natural key columns must be non-null
+•	Table must enforce at most one current row per natural key
+•	Historical rows (Current_Ind = 0) are immutable
+•	Row count is non-decreasing for new insertions; soft-deletes do not increase row count
+•	Current_Ind = 1 and Deleted_Ind = 1 cannot occur simultaneously
+•	Timestamp uniqueness per natural key: no two rows for the same natural key may share the same timestamp or ordering value. Every change within a natural key must have a unique timestamp to maintain deterministic ordering.
+•	User-defined data columns must allow additional constraints (e.g., uniqueness, non-null) and default values
+________________________________________
+3. Surrogate Key Sequencing
+•	Surrogate keys must uniquely identify rows
+•	Must be non-null, unique, monotonically increasing over time, and never reused
+•	Soft-deleted rows that are reinserted receive new surrogate keys
+•	Surrogate keys are opaque; they carry no business meaning and are not reproducible across rebuilds
+________________________________________
+4. Execution Context & Atomicity
+•	All SCD2 processing must occur within a single execution environment
+•	Partial processing across Spark, Pandas, database sessions, or other environments is prohibited
+•	Intermediate writes outside the execution context are not allowed
+•	Atomicity: Either all changes from an execution are applied, or none are. Failures must leave the table exactly as it was prior to execution
+•	Any error (constraint violation, execution failure, unexpected termination) must abort processing immediately
+•	Intermediate staging tables are allowed only if they do not violate atomicity
+•	Ensures consistency, idempotency, and enforceable constraints
+________________________________________
+5. Row Deletion (Soft Delete)
+•	Deleted rows are marked with Deleted_Ind = 1
+•	Current_Ind is set to 0 and Update_Date is updated
+•	Soft-deleted rows remain in the table for historical queries
+•	Soft-deletes do not increase row count
+•	Reinsertions after deletion create a new row with a new surrogate key
+________________________________________
+6. Join Numeric Key Sequencing
+•	Multiple natural key columns are allowed, but there must be a single join_numeric_key
+•	join_numeric_key is a stable numeric surrogate for the combination of natural keys
+•	Reinserted rows must receive new, unique join_numeric_keys
+•	Assignment of join_numeric_key must be deterministic per recorded history and ordering
+•	Unlike surrogate keys, join_numeric_key values must remain consistent across rebuilds for reproducible analytical joins
+________________________________________
+7. Idempotency, Testability, and Generic Logic
+•	Reapplying the same historical input must not change the table state
+•	Core SCD2 logic should be generic: configurable by keys, tracked attributes, and ordering, without changes for new tables or domains
+•	Implementation must support automated, repeatable regression tests, practical for a subset of historical inputs
+•	Deterministic outcomes are required for business-relevant columns, validity ranges, and current indicators, not for surrogate keys
+•	Logic must be unified: no mutation outside the main execution context
+________________________________________
+8. Deployability & Platform Compatibility
+•	Must be deployable in production without manual setup
+•	Deployment must include all necessary configuration, dependencies, and scripts to initialize, run, and test SCD2 logic reliably
+•	Must integrate into automated CI/CD pipelines without modifying core logic
+•	Implementation should be standard SQL compatible; lightweight engines like SQLite or DuckDB may be used for testing
+•	Avoid tight coupling to any orchestration platform (e.g., Fabric, Airflow)
+________________________________________
+9. Reuse & Non-goals
+•	Prefer existing tools if they meet requirements
+•	Non-goals:
+o	Late-arriving corrections that rewrite history
+o	Parallel writes
+o	Non-deterministic ingestion
+o	Surrogate key reproducibility
+o	Real-time ingestion (batch-only assumption)

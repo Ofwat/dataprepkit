@@ -12,3 +12,5 @@
 - Always mention tests or checks you performed in your final response.
 - When the user mentions public API endpoints, add tests that exercise those behaviors and favor unions or shared fixtures to minimize duplicated test code.
 - Avoid focusing on testing private API branches; prioritize public surface behavior when recommending tests.
+- Follow a test-driven development approach: propose/tests public behavior before implementing or modifying the supporting code path.
+- Assume Fabric SQL Database is the production target for SCD2 workloads, but rely on SQLite (or DuckDB) for local/unit testing to keep feedback loops fast.
