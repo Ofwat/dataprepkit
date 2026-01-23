@@ -21,16 +21,16 @@ This checklist captures the concrete pieces we still need to implement so the me
 4. **SCD2 invocation & logging**
    - [x] Capture a single execution timestamp per table and pass it along with the staged DataFrame to `apply_changes`.
    - [x] Log SCD2 classification counts (`inserts`, `updates`, `deletes`) or log “not available” if the implementation cannot provide them.
-   - [ ] Surface SCD2 errors (e.g., missing key infrastructure) as table failures, roll back transactions, and emit the run policy outcome.
+   - [x] Surface SCD2 errors (e.g., missing key infrastructure) as table failures, roll back transactions, and emit the run policy outcome.
 
 5. **Post-SCD2 validation**
    - [x] Query the target table to ensure `Current_Ind=1` rows are unique per natural key, `Current_Ind/Deleted_Ind` flags are consistent with timestamps, and rows marked closed have non-null `Update_Date`.
    - [ ] Log any validation failures and roll back if the invariants are broken.
 
 6. **Run policies & logging**
-   - [ ] Apply table/dependency failure policies (`run.on_table_failure`, `run.on_dependency_failure`) consistently.
+   - [x] Apply table/dependency failure policies (`run.on_table_failure`, `run.on_dependency_failure`) consistently.
    - [ ] Log the final result per table (success/failure, whether a rollback happened).
-   - [ ] Include schema drift summaries, safe write set details, transform steps, and execution metadata in the logs.
+   - [x] Include schema drift summaries, safe write set details, transform steps, and execution metadata in the logs.
 
 7. **Operational notes**
    - [ ] Ensure the smoke test is documented and runnable in CI.

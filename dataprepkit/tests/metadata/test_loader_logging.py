@@ -358,3 +358,36 @@ def test_schema_evolve_adds_columns(monkeypatch):
     assert "extra_add" in columns
     assert captured["data_cols"] == ["data_column", "extra_add"]
     METADATA_REGISTRY.pop(metadata_name, None)
+
+
+def test_run_policy_continue_on_failure(monkeypatch, caplog):
+    engine = create_engine("sqlite:///:memory:")
+    _create_dimension_table(engine)
+    metadata_name = "policy_continue"
+    register_metadata(
+        metadata_name,
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": ["data_column"],
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+            "run_policy": {"on_table_failure": "continue"},
+        },
+    )
+
+    def fake_apply_changes(*args, **kwargs):
+        raise RuntimeError("failure")
+
+    monkeypatch.setattr("dataprepkit.metadata_loader.apply_changes", fake_apply_changes)
+    caplog.set_level(logging.INFO)
+
+    run_dimension(
+        engine,
+        metadata_name,
+        override_df=pd.DataFrame([{"natural_key": "x", "data_column": "v"}]),
+    )
+
+    assert "Run policy on table failure: continue" in caplog.text
+    METADATA_REGISTRY.pop(metadata_name, None)

@@ -32,6 +32,11 @@ class SchemaHandling(BaseModel):
     mode: Literal["suggest", "evolve"] = "suggest"
 
 
+class RunPolicy(BaseModel):
+    on_table_failure: Literal["continue", "abort"] = "abort"
+    on_dependency_failure: Literal["skip_dependents", "abort"] = "skip_dependents"
+
+
 class DimensionMetadata(BaseModel):
     """Defines the metadata required to load a single dimension table."""
 
@@ -46,6 +51,7 @@ class DimensionMetadata(BaseModel):
     description: str | None = None
     schema_handling: SchemaHandling = Field(default_factory=SchemaHandling)
     dependencies: Sequence[DependencyJoin] = Field(default_factory=list)
+    run_policy: RunPolicy = Field(default_factory=RunPolicy)
 
     @field_validator("natural_key_cols", "data_columns")
     def must_define_columns(cls, value: Sequence[str]) -> Sequence[str]:
@@ -164,7 +170,13 @@ def run_dimension(
         )
     except Exception as exc:
         logger.error("SCD2 invocation failed for %s: %s", metadata.name, exc)
-        raise
+        logger.info("Run policy on table failure: %s", metadata.run_policy.on_table_failure)
+        if metadata.run_policy.on_table_failure == "abort":
+            raise
+        logger.info("Continuing despite table failure per policy.")
+        return incoming
+    else:
+        logger.info("Run policy on success: %s", metadata.run_policy.on_table_failure)
     logger.info("SCD2 classification counts: not available")
     _post_scd2_validation(engine, metadata.target_table, metadata.natural_key_cols)
     return incoming
