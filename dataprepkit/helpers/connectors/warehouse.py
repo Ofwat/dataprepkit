@@ -1,1 +1,54 @@
-"\"\"\"Fabric SQLAlchemy connector utilities.\"\"\"\n+\n+from __future__ import annotations\n+\n+import logging\n+import struct\n+from typing import Optional\n+\n+import pyodbc\n+import sqlalchemy as sa\n+\n+logger = logging.getLogger(__name__)\n+\n+\n+try:\n+    from notebookutils import credentials\n+except ImportError:  # pragma: no cover - Fabric only\n+    credentials = None  # type: ignore[assignment]\n+\n+\n+class MockCredentials:\n+    def getToken(self, resource: str) -> str:\n+        logger.warning(\"Using mock credentials for resource: %s\", resource)\n+        return \"FAKE_TOKEN\"\n+\n+\n+def _select_driver() -> str:\n+    drivers = pyodbc.drivers()\n+    candidates = [d for d in drivers if \"ODBC Driver\" in d]\n+    if not candidates:\n+        raise RuntimeError(\"No suitable ODBC driver found.\")\n+    return max(candidates)\n+\n+\n+def get_fabric_warehouse_engine(\n+    sql_endpoint: str,\n+    port: int = 1433,\n+    creds: Optional[object] = None,\n+) -> sa.engine.Engine:\n+    if not sql_endpoint:\n+        raise ValueError(\"sql_endpoint is required\")\n+    provider = creds or credentials or MockCredentials()\n+    token = provider.getToken(\"https://database.windows.net/\").encode(\"UTF-16-LE\")\n+    attrs_before = struct.pack(f\"<I{len(token)}s\", len(token), token)\n+\n+    driver = _select_driver()\n+    connection_string = f\"DRIVER={{{driver}}};SERVER={sql_endpoint},{port};\"\n+    connection_url = sa.engine.URL.create(\"mssql+pyodbc\", query={\"odbc_connect\": connection_string})\n+\n+    return sa.create_engine(\n+        connection_url,\n+        connect_args={\"attrs_before\": {1256: attrs_before}},\n+        pool_pre_ping=True,\n+        pool_recycle=3600,\n+    )\n*** End Patch***  
+"""Fabric SQLAlchemy connector utilities."""
+
+from __future__ import annotations
+
+import logging
+import struct
+from typing import Optional
+
+import pyodbc
+import sqlalchemy as sa
+
+logger = logging.getLogger(__name__)
+
+try:
+    from notebookutils import credentials
+except ImportError:  # pragma: no cover - Fabric only
+    credentials = None  # type: ignore[assignment]
+
+
+class MockCredentials:
+    def getToken(self, resource: str) -> str:
+        logger.warning("Using mock credentials for resource: %s", resource)
+        return "FAKE_TOKEN"
+
+
+def _select_driver() -> str:
+    drivers = pyodbc.drivers()
+    candidates = [d for d in drivers if "ODBC Driver" in d]
+    if not candidates:
+        raise RuntimeError("No suitable ODBC driver found.")
+    return max(candidates)
+
+
+def get_fabric_warehouse_engine(
+    sql_endpoint: str,
+    port: int = 1433,
+    creds: Optional[object] = None,
+) -> sa.engine.Engine:
+    if not sql_endpoint:
+        raise ValueError("sql_endpoint is required")
+    provider = creds or credentials or MockCredentials()
+    token = provider.getToken("https://database.windows.net/").encode("UTF-16-LE")
+    attrs_before = struct.pack(f"<I{len(token)}s", len(token), token)
+
+    driver = _select_driver()
+    connection_string = f"DRIVER={{{driver}}};SERVER={sql_endpoint},{port};"
+    connection_url = sa.engine.URL.create("mssql+pyodbc", query={"odbc_connect": connection_string})
+
+    return sa.create_engine(
+        connection_url,
+        connect_args={"attrs_before": {1256: attrs_before}},
+        pool_pre_ping=True,
+        pool_recycle=3600,
+    )
