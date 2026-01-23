@@ -6,15 +6,20 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+import sqlalchemy as sa
 from sqlalchemy import text
 
-from dataprepkit.helpers.connectors.fabric import get_fabric_sql_engine
+from dataprepkit.helpers.connectors.fabric import (
+    get_fabric_sql_engine,
+    validate_fabric_sql_engine,
+)
 from dataprepkit.metadata_loader import register_metadata, run_dimension
 from dataprepkit.storage import LakehouseMount, mount_lakehouse
 
 
 FABRIC_ENDPOINT = "myfabric.warehouse.microsoft.com"
 FABRIC_PORT = 1433
+FABRIC_DATABASE = "mydb-8be33c12-255a-43ff-bead-2fbe027bf1ed"
 FABRIC_TARGET_TABLE = "[dbo].[dimension]"
 FABRIC_METADATA_NAME = "fabric_dimension"
 FABRIC_WORKSPACE = "Ocean_Data_PROD"
@@ -112,11 +117,22 @@ def _register_metadata_for_target(raw_file: Path) -> str:
     return FABRIC_METADATA_NAME
 
 
-def main() -> None:
-    engine = get_fabric_sql_engine(
+def _create_engine() -> sa.engine.Engine:
+    return get_fabric_sql_engine(
         FABRIC_ENDPOINT,
+        database=FABRIC_DATABASE,
         port=FABRIC_PORT,
     )
+
+
+def _validate_connection(engine: sa.engine.Engine) -> None:
+    if not validate_fabric_sql_engine(engine):
+        raise RuntimeError("Fabric connection test failed.")
+
+
+def main() -> None:
+    engine = _create_engine()
+    _validate_connection(engine)
 
     target_table = FABRIC_TARGET_TABLE
     _ensure_table(engine, target_table)
