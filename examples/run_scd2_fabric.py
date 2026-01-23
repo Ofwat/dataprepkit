@@ -1,20 +1,24 @@
-"""Fabric SQL example that reuses the dataprepkit SCD2 API."""
+"""Fabric SQL example that reuses the dataprepkit metadata driven SCD2 API."""
 
 from __future__ import annotations
 
 import os
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 from sqlalchemy import text
 
 from dataprepkit.helpers.connectors.warehouse import get_fabric_warehouse_engine
-from dataprepkit.scd2 import apply_changes
+from dataprepkit.metadata_loader import register_metadata, run_dimension
 
 
 ENDPOINT_ENV = "FABRIC_SQL_ENDPOINT"
 PORT_ENV = "FABRIC_SQL_PORT"
 TARGET_TABLE_ENV = "FABRIC_TARGET_TABLE"
+METADATA_NAME_ENV = "FABRIC_METADATA_NAME"
+RAW_FILE_ENV = "FABRIC_RAW_FILEPATH"
+DEFAULT_RAW_FILE = Path(__file__).resolve().parents[2] / "examples" / "dummy_dimension.csv"
 
 
 def _load_insert_batch() -> pd.DataFrame:
@@ -82,17 +86,29 @@ def _summarize(engine, label: str) -> None:
     print(df.sort_values(["natural_key", "surrogate_key"]))
 
 
-def _run_batch(engine, label: str, df: pd.DataFrame) -> None:
-    apply_changes(
-        engine=engine,
-        target_table=os.environ[TARGET_TABLE_ENV],
-        incoming=df,
-        natural_key_cols=["natural_key"],
-        data_cols=["data_column"],
-        join_numeric_key_col="join_numeric_key",
-        surrogate_key_col="surrogate_key",
+def _run_batch(engine, label: str, df: pd.DataFrame, metadata_name: str) -> None:
+    run_dimension(
+        engine,
+        metadata_name,
+        override_df=df,
     )
     _summarize(engine, label)
+
+
+def _register_metadata_for_target(raw_file: Path) -> str:
+    name = os.environ.get(METADATA_NAME_ENV, "fabric_dimension")
+    register_metadata(
+        name,
+        {
+            "target_table": os.environ[TARGET_TABLE_ENV],
+            "natural_key_cols": ["natural_key"],
+            "data_columns": ["data_column"],
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": str(raw_file),
+        },
+    )
+    return name
 
 
 def main() -> None:
@@ -104,10 +120,13 @@ def main() -> None:
     target_table = os.environ[TARGET_TABLE_ENV]
     _ensure_table(engine, target_table)
 
-    _run_batch(engine, "Insert phase", _load_insert_batch())
-    _run_batch(engine, "Update phase", _load_update_batch())
-    _run_batch(engine, "Delete phase", _load_delete_batch())
-    _run_batch(engine, "Reinsert phase", _load_reinsert_batch())
+    raw_file = Path(os.environ.get(RAW_FILE_ENV, DEFAULT_RAW_FILE))
+    metadata_name = _register_metadata_for_target(raw_file)
+
+    _run_batch(engine, "Insert phase", _load_insert_batch(), metadata_name)
+    _run_batch(engine, "Update phase", _load_update_batch(), metadata_name)
+    _run_batch(engine, "Delete phase", _load_delete_batch(), metadata_name)
+    _run_batch(engine, "Reinsert phase", _load_reinsert_batch(), metadata_name)
 
     print("Fabric SCD2 load finished at", datetime.utcnow().isoformat())
 

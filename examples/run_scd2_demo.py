@@ -1,15 +1,12 @@
-"""
-Example script that creates a dummy table, runs the SCD2 pipeline, and validates outcomes.
-
-This script uses SQLite so you can test locally before switching to Fabric.
-"""
+"""SQLite demo that uses the metadata loader to drive the SCD2 API."""
 
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-from dataprepkit.scd2 import apply_changes
+from dataprepkit.metadata_loader import register_metadata, run_dimension
 
 
 def _create_schema(engine):
@@ -31,47 +28,41 @@ def _create_schema(engine):
         conn.execute(text(create_sql))
 
 
+def _register_demo_metadata() -> None:
+    register_metadata(
+        "demo_dimension",
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": ["data_column"],
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": str(Path(__file__).resolve().parents[2] / "examples" / "dummy_dimension.csv"),
+            "description": "In-memory demo powered via metadata and override DataFrames.",
+        },
+    )
+
+
 def _seed_initial_data(engine):
-    initial = pd.DataFrame(
+    incoming = pd.DataFrame(
         [
             {"natural_key": "a1", "join_numeric_key": 1, "data_column": "a2"},
             {"natural_key": "b1", "join_numeric_key": 2, "data_column": "b2"},
         ]
     )
-    apply_changes(
-        engine=engine,
-        target_table="dimension",
-        incoming=initial,
-        natural_key_cols=["natural_key"],
-        data_cols=["data_column"],
-        join_numeric_key_col="join_numeric_key",
-        surrogate_key_col="surrogate_key",
-    )
+    run_dimension(engine, "demo_dimension", override_df=incoming)
 
 
-def _run_scd2(engine):
-    incoming = pd.DataFrame(
-        [
-            {"natural_key": "a1", "data_column": "a2"},
-            {"natural_key": "b1", "data_column": "updated"},
-            {"natural_key": "c1", "data_column": "c2"},
-        ]
-    )
-    apply_changes(
-        engine=engine,
-        target_table="dimension",
-        incoming=incoming,
-        natural_key_cols=["natural_key"],
-        data_cols=["data_column"],
-        join_numeric_key_col="join_numeric_key",
-        surrogate_key_col="surrogate_key",
-    )
+def _run_next_batch(engine, label, rows):
+    incoming = pd.DataFrame(rows)
+    run_dimension(engine, "demo_dimension", override_df=incoming)
+    _summarize(engine, label)
 
 
-def _summarize(engine):
+def _summarize(engine, label):
     with engine.connect() as conn:
         df = pd.read_sql_table("dimension", conn)
-    print("Final table:")
+    print(f"\n--- {label} ---")
     print(df.sort_values(["natural_key", "surrogate_key"]))
 
 
@@ -84,10 +75,18 @@ def _validate(engine):
 
 def main():
     engine = create_engine("sqlite:///:memory:")
+    _register_demo_metadata()
     _create_schema(engine)
     _seed_initial_data(engine)
-    _run_scd2(engine)
-    _summarize(engine)
+    _run_next_batch(
+        engine,
+        "Update phase",
+        [
+            {"natural_key": "a1", "data_column": "a2"},
+            {"natural_key": "b1", "data_column": "updated"},
+            {"natural_key": "c1", "data_column": "c2"},
+        ],
+    )
     _validate(engine)
     print("SCD2 demo completed successfully at", datetime.utcnow().isoformat())
 
