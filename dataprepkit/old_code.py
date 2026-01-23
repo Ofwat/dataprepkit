@@ -882,7 +882,7 @@ env = env.upper()
 # engine = create_engine(sql_connection_string, fast_executemany=True)
 
 engine = get_fabric_warehouse_engine(sql_connection_string)
-dataprepkit.helpers.connectors.warehouse.validate_fabric_warehouse_engine(engine)
+dataprepkit.helpers.connectors.fabric.validate_fabric_warehouse_engine(engine)
 
 
 import sempy.fabric as fabric

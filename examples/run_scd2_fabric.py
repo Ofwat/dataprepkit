@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 from sqlalchemy import text
 
-from dataprepkit.helpers.connectors.database import get_fabric_sql_engine
+from dataprepkit.helpers.connectors.fabric import get_fabric_sql_engine
 from dataprepkit.metadata_loader import register_metadata, run_dimension
 from dataprepkit.storage import LakehouseMount, mount_lakehouse
 
