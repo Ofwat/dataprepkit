@@ -68,7 +68,8 @@ def apply_changes(
     hash_col = cols["row_hash"]
     incoming_df[hash_col] = incoming_df.apply(lambda row: _compute_row_hash(row, data_cols), axis=1)
 
-    staging_table = f"temp_snapshot_{uuid.uuid4().hex}"
+    base_name = f"temp_snapshot_{uuid.uuid4().hex}"
+    staging_table = _resolve_staging_table_name(engine, base_name)
     execution_time = _execution_timestamp()
 
     with engine.begin() as conn:
@@ -97,6 +98,15 @@ def _execution_timestamp() -> str:
     return truncated.isoformat(timespec="milliseconds")
 
 
+def _resolve_staging_table_name(engine: Engine, base_name: str) -> str:
+    dialect = engine.dialect.name
+    if dialect == "mssql":
+        return f"#{base_name}"
+    if dialect == "sqlite":
+        return f"temp_{base_name}"
+    return base_name
+
+
 def _compute_row_hash(row: pd.Series, data_columns: Sequence[str]) -> str:
     tokens = []
     for column in sorted(data_columns):
@@ -108,12 +118,14 @@ def _compute_row_hash(row: pd.Series, data_columns: Sequence[str]) -> str:
 
 
 def _create_staging_table(conn, table_name, natural_key_cols, data_cols, hash_col):
-    column_defs = [f"{col} TEXT NOT NULL" for col in natural_key_cols + data_cols]
-    column_defs.append(f"{hash_col} TEXT NOT NULL")
+    dialect = conn.engine.dialect.name
+    column_type = "NVARCHAR(MAX)" if dialect == "mssql" else "TEXT"
+    column_defs = [f"{col} {column_type} NOT NULL" for col in natural_key_cols + data_cols]
+    column_defs.append(f"{hash_col} {column_type} NOT NULL")
     unique_clause = f", UNIQUE({', '.join(natural_key_cols)})" if natural_key_cols else ""
     create_sql = text(
         f"""
-        CREATE TEMP TABLE {table_name} (
+        CREATE {'TABLE' if dialect != 'sqlite' else 'TEMP TABLE'} {table_name} (
             {', '.join(column_defs)}
             {unique_clause}
         )
