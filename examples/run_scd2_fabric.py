@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 from sqlalchemy import text
 
-from dataprepkit.helpers.connectors.warehouse import get_fabric_warehouse_engine
+from dataprepkit.helpers.connectors.database import get_fabric_sql_engine
 from dataprepkit.metadata_loader import register_metadata, run_dimension
 from dataprepkit.storage import LakehouseMount, mount_lakehouse
 
@@ -113,7 +113,7 @@ def _register_metadata_for_target(raw_file: Path) -> str:
 
 
 def main() -> None:
-    engine = get_fabric_warehouse_engine(
+    engine = get_fabric_sql_engine(
         FABRIC_ENDPOINT,
         port=FABRIC_PORT,
     )
