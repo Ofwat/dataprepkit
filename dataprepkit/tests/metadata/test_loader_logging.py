@@ -391,3 +391,51 @@ def test_run_policy_continue_on_failure(monkeypatch, caplog):
 
     assert "Run policy on table failure: continue" in caplog.text
     METADATA_REGISTRY.pop(metadata_name, None)
+
+
+def test_processing_class_applied(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    _create_dimension_table(engine)
+    metadata_name = "transform"
+    register_metadata(
+        metadata_name,
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": ["data_column"],
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+            "processing_class": lambda df: df.assign(data_column=df["data_column"].str.upper()),
+        },
+    )
+
+    captured = {}
+
+    def fake_apply_changes(*args, **kwargs):
+        captured["incoming"] = kwargs["incoming"]
+
+    monkeypatch.setattr("dataprepkit.metadata_loader.apply_changes", fake_apply_changes)
+
+    run_dimension(
+        engine,
+        metadata_name,
+        override_df=pd.DataFrame([{"natural_key": "x", "data_column": "lower"}]),
+    )
+
+    assert captured["incoming"].iloc[0]["data_column"] == "LOWER"
+    METADATA_REGISTRY.pop(metadata_name, None)
+
+
+def test_metrics_logged(caplog, monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    _create_dimension_table(engine)
+    caplog.set_level(logging.INFO)
+
+    run_dimension(
+        engine,
+        "dummy_dimension",
+        override_df=pd.DataFrame([{"natural_key": "x", "data_column": "v"}]),
+    )
+
+    assert "Table dimension completed in" in caplog.text

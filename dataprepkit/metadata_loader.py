@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Mapping, Sequence, Literal
+from typing import Callable, Dict, Mapping, Sequence, Literal
 
 from typing import Literal
 
@@ -52,6 +52,7 @@ class DimensionMetadata(BaseModel):
     schema_handling: SchemaHandling = Field(default_factory=SchemaHandling)
     dependencies: Sequence[DependencyJoin] = Field(default_factory=list)
     run_policy: RunPolicy = Field(default_factory=RunPolicy)
+    processing_class: Callable[[pd.DataFrame], pd.DataFrame] | None = None
 
     @field_validator("natural_key_cols", "data_columns")
     def must_define_columns(cls, value: Sequence[str]) -> Sequence[str]:
@@ -133,6 +134,8 @@ def run_dimension(
             raise ValueError(
                 "Column renames introduced duplicate column names; check metadata."
             )
+    if metadata.processing_class:
+        incoming = metadata.processing_class(incoming)
     incoming = _apply_dependency_joins(incoming, metadata.dependencies, engine)
     execution_time = _capture_execution_time()
     logger.info(
@@ -157,6 +160,14 @@ def run_dimension(
             safe_data_columns,
         )
 
+    rows_processed = len(incoming)
+    logger.info(
+        "Starting table %s: rows=%d, execution_time=%s",
+        metadata.target_table,
+        rows_processed,
+        execution_time,
+    )
+    start_ts = datetime.now(timezone.utc)
     try:
         apply_changes(
             engine=engine,
@@ -169,14 +180,28 @@ def run_dimension(
             execution_time=execution_time,
         )
     except Exception as exc:
+        duration = (datetime.now(timezone.utc) - start_ts).total_seconds()
         logger.error("SCD2 invocation failed for %s: %s", metadata.name, exc)
         logger.info("Run policy on table failure: %s", metadata.run_policy.on_table_failure)
+        logger.info(
+            "Table %s failed after %.3fs (rows=%d)",
+            metadata.target_table,
+            duration,
+            rows_processed,
+        )
         if metadata.run_policy.on_table_failure == "abort":
             raise
         logger.info("Continuing despite table failure per policy.")
         return incoming
     else:
+        duration = (datetime.now(timezone.utc) - start_ts).total_seconds()
         logger.info("Run policy on success: %s", metadata.run_policy.on_table_failure)
+        logger.info(
+            "Table %s completed in %.3fs (rows=%d)",
+            metadata.target_table,
+            duration,
+            rows_processed,
+        )
     logger.info("SCD2 classification counts: not available")
     _post_scd2_validation(engine, metadata.target_table, metadata.natural_key_cols)
     return incoming

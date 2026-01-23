@@ -29,7 +29,7 @@ This checklist captures the concrete pieces we still need to implement so the me
 
 6. **Run policies & logging**
    - [x] Apply table/dependency failure policies (`run.on_table_failure`, `run.on_dependency_failure`) consistently.
-   - [ ] Log the final result per table (success/failure, whether a rollback happened).
+   - [x] Log the final result per table (success/failure, whether a rollback happened).
    - [x] Include schema drift summaries, safe write set details, transform steps, and execution metadata in the logs.
 
 7. **Operational notes**
