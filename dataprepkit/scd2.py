@@ -17,6 +17,8 @@ from typing import Mapping, Sequence
 import pandas as pd
 from sqlalchemy.engine import Engine
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+import uuid
 
 
 DEFAULT_SYSTEM_COLUMNS = {
@@ -63,108 +65,29 @@ def apply_changes(
     if not set(data_cols).issubset(incoming_df.columns):
         raise SCD2ValidationError("Incoming data must include all declared data columns.")
 
-    if incoming_df.duplicated(subset=list(natural_key_cols)).any():
-        raise SCD2ValidationError("Incoming data contains duplicate natural keys.")
-
     hash_col = cols["row_hash"]
     incoming_df[hash_col] = incoming_df.apply(lambda row: _compute_row_hash(row, data_cols), axis=1)
 
+    staging_table = f"temp_snapshot_{uuid.uuid4().hex}"
+    execution_time = _execution_timestamp()
+
     with engine.begin() as conn:
-        existing = pd.read_sql_table(target_table, con=engine)
-        current_mask = existing[cols["current_ind"]] == 1
-        current_rows = existing[current_mask]
-
-        existing_map = {
-            _make_key(record, natural_key_cols): record
-            for _, record in current_rows.iterrows()
-        }
-
-        existing_keys = set(existing_map)
-        incoming_map = {
-            _make_key(row, natural_key_cols): row for _, row in incoming_df.iterrows()
-        }
-        incoming_keys = set(incoming_map)
-
-        to_delete = existing_keys - incoming_keys
-        to_change = []
-        to_insert = []
-
-        for key in incoming_keys:
-            if key not in existing_keys:
-                to_insert.append(key)
-                continue
-            existing_row = existing_map[key]
-            incoming_row = incoming_map[key]
-            if existing_row[hash_col] != incoming_row[hash_col]:
-                to_change.append(key)
-            else:
-                # row unchanged; skip it explicitly
-                continue
-
-        now = _execution_timestamp()
-        where_clause = " AND ".join(f"{col} = :{col}" for col in natural_key_cols)
-
-        for key in to_delete:
-            _update_row_state(
+        _create_staging_table(conn, staging_table, natural_key_cols, data_cols, hash_col)
+        try:
+            _insert_snapshot_rows(conn, staging_table, incoming_df, natural_key_cols, data_cols, hash_col)
+            _apply_snapshot_to_target(
                 conn,
+                staging_table,
                 target_table,
                 natural_key_cols,
-                key,
+                data_cols,
+                join_numeric_key_col,
                 cols,
-                now,
-                deleted=1,
+                hash_col,
+                execution_time,
             )
-
-        for key in to_change:
-            _update_row_state(
-                conn,
-                target_table,
-                natural_key_cols,
-                key,
-                cols,
-                now,
-                deleted=0,
-            )
-
-        insert_keys = sorted(to_insert + to_change)
-        max_join_numeric = existing[join_numeric_key_col].max()
-        if pd.isna(max_join_numeric):
-            next_join_numeric = 0
-        else:
-            next_join_numeric = int(max_join_numeric)
-
-        insert_columns = list(natural_key_cols) + list(data_cols) + [
-            join_numeric_key_col,
-            hash_col,
-            cols["insert_date"],
-            cols["update_date"],
-            cols["current_ind"],
-            cols["deleted_ind"],
-        ]
-        insert_sql = text(
-            f"""
-            INSERT INTO {target_table} (
-                {", ".join(insert_columns)}
-            ) VALUES (
-                {", ".join(":" + col for col in insert_columns)}
-            )
-            """
-        )
-
-        for key in insert_keys:
-            incoming_row = incoming_map[key]
-            next_join_numeric += 1
-            join_numeric = next_join_numeric
-
-            params = {col: incoming_row[col] for col in natural_key_cols + list(data_cols)}
-            params[join_numeric_key_col] = join_numeric
-            params[hash_col] = incoming_row[hash_col]
-            params[cols["insert_date"]] = now
-            params[cols["update_date"]] = None
-            params[cols["current_ind"]] = 1
-            params[cols["deleted_ind"]] = 0
-
-            conn.execute(insert_sql, params)
+        finally:
+            conn.execute(text(f"DROP TABLE IF EXISTS {staging_table}"))
 
 
 def _execution_timestamp() -> str:
@@ -184,29 +107,135 @@ def _compute_row_hash(row: pd.Series, data_columns: Sequence[str]) -> str:
     return hashlib.sha256("|".join(tokens).encode("utf-8")).hexdigest()
 
 
-def _make_key(row, natural_key_cols: Sequence[str]) -> tuple:
-    return tuple(row[col] for col in natural_key_cols)
+def _create_staging_table(conn, table_name, natural_key_cols, data_cols, hash_col):
+    column_defs = [f"{col} TEXT NOT NULL" for col in natural_key_cols + data_cols]
+    column_defs.append(f"{hash_col} TEXT NOT NULL")
+    unique_clause = f", UNIQUE({', '.join(natural_key_cols)})" if natural_key_cols else ""
+    create_sql = text(
+        f"""
+        CREATE TEMP TABLE {table_name} (
+            {', '.join(column_defs)}
+            {unique_clause}
+        )
+        """
+    )
+    conn.execute(create_sql)
 
 
-def _update_row_state(
+def _insert_snapshot_rows(conn, table_name, incoming_df, natural_key_cols, data_cols, hash_col):
+    columns = list(natural_key_cols) + list(data_cols) + [hash_col]
+    insert_sql = text(
+        f"""
+        INSERT INTO {table_name} ({', '.join(columns)})
+        VALUES ({', '.join(':' + col for col in columns)})
+        """
+    )
+    records = [
+        {col: row[col] for col in columns}
+        for _, row in incoming_df[columns].iterrows()
+    ]
+    try:
+        if records:
+            conn.execute(insert_sql, records)
+    except IntegrityError as exc:
+        raise SCD2ValidationError("Incoming data contains duplicate natural keys.") from exc
+
+
+def _build_join_condition(left_alias: str, right_alias: str, columns: Sequence[str]) -> str:
+    return " AND ".join(f"{left_alias}.{col} = {right_alias}.{col}" for col in columns)
+
+
+def _apply_snapshot_to_target(
     conn,
+    staging_table: str,
     target_table: str,
     natural_key_cols: Sequence[str],
-    key: tuple,
+    data_cols: Sequence[str],
+    join_numeric_key_col: str,
     columns: Mapping[str, str],
-    update_ts: str,
-    deleted: int,
-) -> None:
-    clause = " AND ".join(f"{col} = :{col}" for col in natural_key_cols)
+    hash_col: str,
+    execution_time: str,
+):
+    join_condition = _build_join_condition(target_table, "s", natural_key_cols)
+
+    delete_sql = text(
+        f"""
+        UPDATE {target_table}
+        SET {columns['current_ind']} = 0,
+            {columns['deleted_ind']} = 1,
+            {columns['update_date']} = :execution_time
+        WHERE {columns['current_ind']} = 1
+          AND NOT EXISTS (
+            SELECT 1 FROM {staging_table} s
+            WHERE {join_condition}
+          )
+        """
+    )
+    conn.execute(delete_sql, {"execution_time": execution_time})
+
     update_sql = text(
         f"""
         UPDATE {target_table}
         SET {columns['current_ind']} = 0,
-            {columns['update_date']} = :update_ts,
-            {columns['deleted_ind']} = :deleted
-        WHERE {clause} AND {columns['current_ind']} = 1
+            {columns['update_date']} = :execution_time,
+            {columns['deleted_ind']} = 0
+        WHERE {columns['current_ind']} = 1
+          AND EXISTS (
+            SELECT 1 FROM {staging_table} s
+            WHERE {join_condition}
+              AND s.{hash_col} != {target_table}.{hash_col}
+          )
         """
     )
-    params = dict(zip(natural_key_cols, key))
-    params.update(update_ts=update_ts, deleted=deleted)
-    conn.execute(update_sql, params)
+    conn.execute(update_sql, {"execution_time": execution_time})
+
+    max_join_sql = text(f"SELECT COALESCE(MAX({join_numeric_key_col}), 0) FROM {target_table}")
+    max_join_numeric = conn.execute(max_join_sql).scalar() or 0
+
+    order_by = ", ".join(f"s.{col}" for col in natural_key_cols) or "1"
+
+    insert_columns = list(natural_key_cols) + list(data_cols) + [
+        join_numeric_key_col,
+        hash_col,
+        columns["insert_date"],
+        columns["update_date"],
+        columns["current_ind"],
+        columns["deleted_ind"],
+    ]
+
+    current_join_condition = (
+        f"{_build_join_condition('t', 's', natural_key_cols)} AND t.{columns['current_ind']} = 1"
+        if natural_key_cols
+        else f"t.{columns['current_ind']} = 1"
+    )
+
+    insert_sql = text(
+        f"""
+        WITH candidates AS (
+            SELECT
+                s.*,
+                ROW_NUMBER() OVER (ORDER BY {order_by}) AS rn
+            FROM {staging_table} s
+            LEFT JOIN {target_table} t ON {current_join_condition}
+            WHERE t.{columns['current_ind']} IS NULL
+               OR s.{hash_col} != t.{hash_col}
+        )
+        INSERT INTO {target_table} ({', '.join(insert_columns)})
+        SELECT
+            {', '.join(f"s.{col}" for col in natural_key_cols)},
+            {', '.join(f"s.{col}" for col in data_cols)},
+            :join_numeric_base + rn,
+            s.{hash_col},
+            :execution_time,
+            NULL,
+            1,
+            0
+        FROM candidates s
+        ORDER BY rn
+        """
+    )
+
+    conn.execute(
+        insert_sql,
+        {"join_numeric_base": max_join_numeric, "execution_time": execution_time},
+    )

@@ -1,167 +1,280 @@
-DB Requirements
-Stage 1 - Slowly changing dimensions of type 2
-Behaviour [must have]
-System managed columns: surrogate_key [uint64], join_numeric_key [uint64], Row_Hash[sha256 hex string], Insert_Date [datetime up to 1ms precision], Update_Date [datetime up to 1ms precision], Current_Ind[bool].
-Data driven columns whose types may vary table by table: join_key_1, data_column_1
-Note:
-•	Current_Ind: 1 = current row, 0 = historical row
-•	Update_Date: last modification timestamp
-•	Row_Hash: hash of the data columns
-•	join_numeric_key: a single numeric incremental representation of the join_key_1 columns
-1. Insert
-Initial table:
-surrogate_key	join_key_1	join_numeric_key	data_column_1	Row_Hash	Insert_Date	Update_Date	Current_Ind	Deleted_Ind
-1	a1	1	a2	123	2026-01-08 14:44:55.123		1	0
-2	b1	2	b2	456	2026-01-08 14:44:55.123		1	0
-3	c1	3	c3	789	2026-01-08 14:44:55.123		1	0
-Incoming data:
-join_key_1	data_column_1
-a1	a2
-b1	b2
-c1	c2
-d1	d2
-Inserted new row d1
-Resulting table:
-surrogate_key	join_key_1	join_numeric_key	data_column_1	Row_Hash	Insert_Date	Update_Date	Current_Ind	Deleted_Ind
-1	a1	1	a2	123	2026-01-08 14:44:55.123		1	0
-2	b1	2	b2	456	2026-01-08 14:44:55.123		1	0
-3	c1	3	c2	789	2026-01-08 14:44:55.123		1	0
-4	d1	4	d2	101112	2026-01-08 14:55:55.123		1	0
-2. Delete
-Initial table:
-surrogate_key	join_key_1	join_numeric_key	data_column_1	Row_Hash	Insert_Date	Update_Date	Current_Ind	Deleted_Ind
-1	a1	1	a2	123	2026-01-08 14:44:55.123		1	0
-2	b1	2	b2	456	2026-01-08 14:44:55.123		1	0
-3	c1	3	c2	789	2026-01-08 14:44:55.123		1	0
-4	d1	4	d2	101112	2026-01-08 14:55:55.123		1	0
-Incoming data:
-join_key_1	data_column_1
-a1	a2
-b1	b2
-c1	c2
-Resulting table:
-surrogate_key	join_key_1	join_numeric_key	data_column_1	Row_Hash	Insert_Date	Update_Date	Current_Ind	Deleted_Ind
-1	a1	1	a2	123	2026-01-08 14:44:55.123		1	0
-2	b1	2	b2	456	2026-01-08 14:44:55.123		1	0
-3	c1	3	c2	789	2026-01-08 14:44:55.123		1	0
-4	d1	4	d2	101112	2026-01-08 14:55:55.123	2026-01-08 14:56:55.123	0	1
-Removed row d1, soft deleted it from the final table
-3. Update
-Initial table:
-surrogate_key	join_key_1	join_numeric_key	data_column_1	Row_Hash	Insert_Date	Update_Date	Current_Ind	Deleted_Ind
-1	a1	1	a2	123	2026-01-08 14:44:55.123		1	0
-2	b1	2	b2	456	2026-01-08 14:44:55.123		1	0
-3	c1	3	c2	789	2026-01-08 14:44:55.123		1	0
-4	d1	4	d2	101112	2026-01-08 14:55:55.123	2026-01-08 14:56:55.123	0	1
-Incoming data:
-join_key_1	data_column_1
-a1	a2
-b1	b2
-c1	c2222
-Resulting table:
-surrogate_key	join_key_1	join_numeric_key	data_column_1	Row_Hash	Insert_Date	Update_Date	Current_Ind	Deleted_Ind
-1	a1	1	a2	123	2026-01-08 14:44:55.123		1	0
-2	b1	2	b2	456	2026-01-08 14:44:55.123		1	0
-3	c1	3	c2	789	2026-01-08 14:44:55.123	2026-01-08 15:05:55.123	0	0
-4	d1	4	d2	101112	2026-01-08 14:55:55.123	2026-01-08 14:56:55.123	0	1
-5	c1	3	c2222	131415	2026-01-08 15:05:55.123		1	0
-5. Reinsertion
-Initial table:
-surrogate_key	join_key_1	join_numeric_key	data_column_1	Row_Hash	Insert_Date	Update_Date	Current_Ind	Deleted_Ind
-1	a1	1	a2	123	2026-01-08 14:44:55.123		1	0
-2	b1	2	b2	456	2026-01-08 14:44:55.123		1	0
-3	c1	3	c2	789	2026-01-08 14:44:55.123	2026-01-08 15:05:55.123	0	0
-4	d1	4	d2	101112	2026-01-08 14:55:55.123	2026-01-08 14:56:55.123	0	1
-5	c1	3	c2222	131415	2026-01-08 15:05:55.123		1	0
-Incoming data:
-join_key_1	data_column_1
-a1	a2
-b1	b2
-c1	c2222
-d1	d2
-Resulting table:
-surrogate_key	join_key_1	join_numeric_key	data_column_1	Row_Hash	Insert_Date	Update_Date	Current_Ind	Deleted_Ind
-1	a1	1	a2	123	2026-01-08 14:44:55.123		1	0
-2	b1	2	b2	456	2026-01-08 14:44:55.123		1	0
-3	c1	3	c2	789	2026-01-08 14:44:55.123	2026-01-08 15:05:55.123	0	0
-4	d1	4	d2	101112	2026-01-08 14:55:55.123	2026-01-08 14:56:55.123	0	1
-5	c1	3	c2222	131415	2026-01-08 15:05:55.123		1	0
-6	d1	5	d2	10112	2026-01-08 15:13:55.123		1	0
-1. Behaviour [nice to have]
-The SCD2 implementation must be state-reproducible.
+## 1. Scope and Model
+
+This specification defines a **snapshot-based Slowly Changing Dimension Type 2 (SCD2)** table.
+
+Each execution processes a **complete snapshot** of the current source state. Deletes are inferred when a previously current natural key is missing from the incoming snapshot.
+
+The model is **append-heavy with in-place closure** of current rows.
+
+Out of scope:
+
+* Late-arriving corrections that rewrite history
+* Parallel or concurrent writes
+* Deterministic ordering across rebuilds
+* Reproducible surrogate keys or join numeric keys
+* Real-time ingestion (batch only)
+
+---
+
+## 2. Table Schema
+
+### 2.1 System-managed columns (mandatory)
+
+| Column           | Type                  | Description                                                                                   |
+| ---------------- | --------------------- | --------------------------------------------------------------------------------------------- |
+| surrogate_key    | uint64                | Primary key. Unique, non-null, strictly monotonically increasing, never reused                |
+| join_numeric_key | uint64                | Row-level numeric join key. Unique, non-null, strictly monotonically increasing, never reused |
+| Row_Hash         | string                | Hash of tracked data columns                                                                  |
+| Insert_Date      | datetime(3)           | Timestamp when the row was inserted                                                           |
+| Update_Date      | datetime(3), nullable | Closure timestamp (end of currentness). Null for current rows                                 |
+| Current_Ind      | bool                  | 1 = current row, 0 = non-current                                                              |
+| Deleted_Ind      | bool                  | 1 = soft-deleted row, 0 = not deleted                                                         |
+
+### 2.2 Natural key columns (mandatory)
+
+One or more columns defining the business/natural key.
+All natural key columns must be non-null.
+
+### 2.3 Data columns (configurable)
+
+Tracked attributes whose changes trigger SCD2 behavior.
+User-defined constraints (non-null, uniqueness, defaults) are allowed.
+
+---
+
+## 3. Global Invariants and Constraints
+
+The table must always satisfy the following:
+
+1. `surrogate_key` is the primary key and is unique and non-null.
+2. Natural key columns are non-null.
+3. At most **one row per natural key** may have `Current_Ind = 1`.
+4. `Current_Ind = 1` and `Deleted_Ind = 1` must never occur simultaneously.
+5. A row may be **mutated only while it is current**, and only to close it.
+6. After `Current_Ind` becomes 0, the row is immutable.
+7. Row count behavior:
+
+   * Inserts, updates, and reinsertions increase row count
+   * Soft deletes do not increase row count
+8. Incoming snapshots must contain **at most one row per natural key**.
+   Duplicates are a hard error and must abort processing.
+9. `Update_Date` is null for current rows and non-null for closed rows.
+10. `join_numeric_key` is unique and non-null, must be **strictly monotonically increasing**, and must never be reused.
+11. All changes from one execution are atomic.
+
+### Monotonicity definition (for `surrogate_key` and `join_numeric_key`)
+
+* “Created after” means **row creation order across successfully committed executions**.
+* If row r2 is created after r1 (in commit order), then:
+  `surrogate_key(r2) > surrogate_key(r1)` and
+  `join_numeric_key(r2) > join_numeric_key(r1)`.
+* Within a single successful execution that inserts multiple rows, assigned values must be **strictly increasing across the inserted rows**.
+  Any internal ordering is acceptable.
+
+---
+
+## 4. Snapshot Semantics
+
+Each execution receives a **full snapshot** of the source’s current state.
+
+Let:
+
+* `T` = existing SCD2 table
+* `S` = incoming snapshot
+* `K` = natural key
+
+All comparisons are performed against rows in `T` where `Current_Ind = 1`.
+
+---
+
+## 5. Core Row State Transitions
+
+### 5.1 Insert (new natural key)
+
+Condition:
+
+* `K` exists in `S`
+* `K` does not exist in `T` with `Current_Ind = 1`
+
+Action:
+
+* Insert new row
+* Assign new `surrogate_key`
+* Assign new `join_numeric_key`
+* Compute `Row_Hash` from tracked data columns
+* Set:
+
+  * `Insert_Date = execution_time`
+  * `Update_Date = NULL`
+  * `Current_Ind = 1`
+  * `Deleted_Ind = 0`
+
+---
+
+### 5.2 No-op (unchanged)
+
+Condition:
+
+* `K` exists in both `S` and `T`
+* Computed `Row_Hash` equals the current row’s `Row_Hash`
+
+Action:
+
+* No columns are written or updated
+* No timestamps or flags are modified
+
+---
+
+### 5.3 Update (tracked attribute change)
+
+Condition:
+
+* `K` exists in both `S` and `T`
+* Computed `Row_Hash` differs from the current row’s `Row_Hash`
+
+Action:
+
+1. Close existing current row:
+
+   * Set `Current_Ind = 0`
+   * Set `Update_Date = execution_time`
+   * Leave `Deleted_Ind = 0`
+2. Insert new row:
+
+   * New `surrogate_key`
+   * New `join_numeric_key`
+   * New `Row_Hash`
+   * `Insert_Date = execution_time`
+   * `Update_Date = NULL`
+   * `Current_Ind = 1`
+   * `Deleted_Ind = 0`
+
+---
+
+### 5.4 Soft Delete (missing from snapshot)
+
+Condition:
+
+* `K` exists in `T` with `Current_Ind = 1`
+* `K` does not exist in `S`
+
+Action:
+
+* Update the existing current row:
+
+  * Set `Current_Ind = 0`
+  * Set `Deleted_Ind = 1`
+  * Set `Update_Date = execution_time`
+* No new row is inserted
+
+---
+
+### 5.5 Reinsertion (after deletion)
+
+Condition:
+
+* `K` exists in `S`
+* The most recently created row for `K` in `T` has `Deleted_Ind = 1`
+
+Definition of “most recently created row for K”:
+
+* The row for `K` with the greatest `surrogate_key`.
+
+Action:
+
+* Treat as a new insert:
+
+  * New `surrogate_key`
+  * New `join_numeric_key`
+  * New `Row_Hash`
+  * `Insert_Date = execution_time`
+  * `Update_Date = NULL`
+  * `Current_Ind = 1`
+  * `Deleted_Ind = 0`
+
+Previous rows remain unchanged.
+
+---
+
+## 6. Row_Hash Semantics
+
+* `Row_Hash` is computed from tracked data columns only.
+* System-managed columns are excluded.
+* Hash algorithm and serialization are implementation-defined.
+* Within a given deployment, the following must be deterministic:
+
+  * Included columns
+  * Column ordering
+  * Null handling
+  * Type normalization / serialization rules
+* Cross-system hash equivalence is not required.
+
+---
+
+## 7. Surrogate Key Semantics
+
+* `surrogate_key` uniquely identifies rows.
+* Must be non-null, unique, strictly monotonically increasing, and never reused.
+* Soft deletes do not generate new `surrogate_key` values.
+* Updates and reinsertions generate new `surrogate_key` values.
+* Not required to be reproducible across rebuilds.
+
+---
+
+## 8. join_numeric_key Semantics
+
+* Assigned at row creation (inserts, updates’ new rows, reinsertions).
+* Must be unique and non-null.
+* Must be strictly monotonically increasing over time and never reused.
+* Soft deletes do not generate a new `join_numeric_key`.
+* Not required to be reproducible across rebuilds or across environments.
+* Carries no business meaning.
+
+---
+
+## 9. Execution Context and Atomicity
+
+1. All SCD2 logic must execute in a **single execution environment**.
+2. All writes must occur within a **single transactional boundary**.
+3. Intermediate staging tables or views are allowed only if atomicity is preserved.
+4. On any error (constraint violation, execution failure, unexpected termination):
+
+   * Processing must abort immediately
+   * All changes must be rolled back
+5. Partial application of a snapshot is not allowed.
+
+---
+
+## 10. Execution Time Semantics
+
+* Each execution must capture a **single `execution_time` value**.
+* This value must be used consistently for:
+
+  * `Insert_Date`
+  * `Update_Date`
+* `execution_time` must be written at `datetime(3)` precision using deterministic rounding or truncation.
+
+---
+
+## 11. Idempotency
+
 Given:
-•	The full historical input data used to build the table (including deterministic change ordering per natural key)
-•	The same SCD2 configuration
-•	A total ordering over history that is stable, deterministic, and unique per natural key
-It must be possible to:
-•	Drop the existing SCD2 table
-•	Rebuild it from history
-Such that the rebuilt table is logically identical to the dropped table.
-Two tables are considered logically identical if:
-•	They contain the same set of rows when identified by natural keys and validity ranges
-•	All non-ephemeral, non-surrogate column values are equal
-•	Validity ranges and “current” indicators match exactly
-•	Exactly one current row exists per natural key
-Note: Surrogate keys are excluded from logical identity and may differ across rebuilds.
-________________________________________
-2. Table Constraints
-•	Surrogate key is the primary key and must be non-null
-•	Natural key columns must be non-null
-•	Table must enforce at most one current row per natural key
-•	Historical rows (Current_Ind = 0) are immutable
-•	Row count is non-decreasing for new insertions; soft-deletes do not increase row count
-•	Current_Ind = 1 and Deleted_Ind = 1 cannot occur simultaneously
-•	Timestamp uniqueness per natural key: no two rows for the same natural key may share the same timestamp or ordering value. Every change within a natural key must have a unique timestamp to maintain deterministic ordering.
-•	User-defined data columns must allow additional constraints (e.g., uniqueness, non-null) and default values
-________________________________________
-3. Surrogate Key Sequencing
-•	Surrogate keys must uniquely identify rows
-•	Must be non-null, unique, monotonically increasing over time, and never reused
-•	Soft-deleted rows that are reinserted receive new surrogate keys
-•	Surrogate keys are opaque; they carry no business meaning and are not reproducible across rebuilds
-________________________________________
-4. Execution Context & Atomicity
-•	All SCD2 processing must occur within a single execution environment
-•	Partial processing across Spark, Pandas, database sessions, or other environments is prohibited
-•	Intermediate writes outside the execution context are not allowed
-•	Atomicity: Either all changes from an execution are applied, or none are. Failures must leave the table exactly as it was prior to execution
-•	Any error (constraint violation, execution failure, unexpected termination) must abort processing immediately
-•	Intermediate staging tables are allowed only if they do not violate atomicity
-•	Ensures consistency, idempotency, and enforceable constraints
-________________________________________
-5. Row Deletion (Soft Delete)
-•	Deleted rows are marked with Deleted_Ind = 1
-•	Current_Ind is set to 0 and Update_Date is updated
-•	Soft-deleted rows remain in the table for historical queries
-•	Soft-deletes do not increase row count
-•	Reinsertions after deletion create a new row with a new surrogate key
-________________________________________
-6. Join Numeric Key Sequencing
-•	Multiple natural key columns are allowed, but there must be a single join_numeric_key
-•	join_numeric_key is a stable numeric surrogate for the combination of natural keys
-•	Reinserted rows must receive new, unique join_numeric_keys
-•	Assignment of join_numeric_key must be deterministic per recorded history and ordering
-•	Unlike surrogate keys, join_numeric_key values must remain consistent across rebuilds for reproducible analytical joins
-________________________________________
-7. Idempotency, Testability, and Generic Logic
-•	Reapplying the same historical input must not change the table state
-•	Core SCD2 logic should be generic: configurable by keys, tracked attributes, and ordering, without changes for new tables or domains
-•	Implementation must support automated, repeatable regression tests, practical for a subset of historical inputs
-•	Deterministic outcomes are required for business-relevant columns, validity ranges, and current indicators, not for surrogate keys
-•	Logic must be unified: no mutation outside the main execution context
-________________________________________
-8. Deployability & Platform Compatibility
-•	Must be deployable in production without manual setup
-•	Deployment must include all necessary configuration, dependencies, and scripts to initialize, run, and test SCD2 logic reliably
-•	Must integrate into automated CI/CD pipelines without modifying core logic
-•	Implementation should be standard SQL compatible; lightweight engines like SQLite or DuckDB may be used for testing
-•	Avoid tight coupling to any orchestration platform (e.g., Fabric, Airflow)
-________________________________________
-9. Reuse & Non-goals
-•	Prefer existing tools if they meet requirements
-•	Non-goals:
-o	Late-arriving corrections that rewrite history
-o	Parallel writes
-o	Non-deterministic ingestion
-o	Surrogate key reproducibility
-o	Real-time ingestion (batch-only assumption)
+
+* The same initial table state
+* The same snapshot input
+
+Re-executing the process must produce **no net change** to the table.
+
+No-op paths must not rewrite rows, timestamps, or flags.
+
+---
+
+## 12. Non-goals (explicit)
+
+The implementation does not support:
+
+* Rewriting or correcting historical rows
+* Parallel or concurrent writes
+* Deterministic ordering across rebuilds
+* Reproducible surrogate keys or join numeric keys
+* Real-time ingestion (batch-only assumption)
