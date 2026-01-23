@@ -10,8 +10,8 @@ import sqlalchemy as sa
 from sqlalchemy import text
 
 from dataprepkit.helpers.connectors.fabric import (
-    get_fabric_sql_engine,
-    validate_fabric_sql_engine,
+    create_engine_for_fabric,
+    validate,
 )
 from dataprepkit.metadata_loader import register_metadata, run_dimension
 from dataprepkit.storage import LakehouseMount, mount_lakehouse
@@ -118,15 +118,15 @@ def _register_metadata_for_target(raw_file: Path) -> str:
 
 
 def _create_engine() -> sa.engine.Engine:
-    return get_fabric_sql_engine(
+    return create_engine_for_fabric(
         FABRIC_ENDPOINT,
-        database=FABRIC_DATABASE,
+        FABRIC_DATABASE,
         port=FABRIC_PORT,
     )
 
 
 def _validate_connection(engine: sa.engine.Engine) -> None:
-    if not validate_fabric_sql_engine(engine):
+    if not validate(engine):
         raise RuntimeError("Fabric connection test failed.")
 
 

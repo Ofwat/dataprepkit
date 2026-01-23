@@ -1,26 +1,13 @@
-"""Fabric SQLAlchemy connector utilities."""
-
-from __future__ import annotations
-
 import logging
 import struct
-from typing import Callable, Iterable, Optional
+from typing import Optional
 
 import pyodbc
 import sqlalchemy as sa
+from notebookutils import credentials
 from sqlalchemy import text
 
-logger = logging.getLogger(__name__)
-
-try:
-    from notebookutils import credentials
-
-    _default_token_provider: Iterable = (credentials,)
-    _token_provider_name = "notebookutils.credentials"
-except ImportError:  # pragma: no cover - Fabric-only runtime
-    credentials = None  # type: ignore[assignment]
-    _default_token_provider = ()
-    _token_provider_name = "local-mock"
+LOG = logging.getLogger(__name__)
 
 
 def _get_driver(preferred: Optional[str] = "ODBC Driver 18 for SQL Server") -> str:
@@ -35,10 +22,10 @@ def _get_driver(preferred: Optional[str] = "ODBC Driver 18 for SQL Server") -> s
 def _build_connection_string(
     driver: str,
     endpoint: str,
-    database: Optional[str],
-    port: int,
-    encrypt: bool,
-    trust_certificate: bool,
+    database: str,
+    port: int = 1433,
+    encrypt: bool = True,
+    trust_certificate: bool = False,
 ) -> str:
     parts = [
         f"Driver={{{driver}}}",
@@ -52,46 +39,17 @@ def _build_connection_string(
     return ";".join(parts)
 
 
-def _mock_token(resource: str) -> str:
-    logger.warning("Mock token provided for %s", resource)
-    return "".join(["MOCK", resource.replace(":", "")])
-
-
-def _get_token(provider: Optional[Callable[[str], str]]) -> bytes:
-    if provider:
-        token_value = provider("https://database.windows.net/")
-    else:
-        try:
-            token_provider = next(iter(_default_token_provider))
-        except StopIteration:
-            token_value = _mock_token("https://database.windows.net/")
-        else:
-            token_value = token_provider.getToken("https://database.windows.net/")
-    logger.debug("Token retrieved via %s", _token_provider_name)
-    return token_value.encode("UTF-16-LE")
-
-
-def get_fabric_sql_engine(
-    sql_endpoint: str,
-    *,
-    database: Optional[str] = None,
+def create_engine_for_fabric(
+    endpoint: str,
+    database: str,
     preferred_driver: Optional[str] = None,
     port: int = 1433,
-    encrypt: bool = True,
-    trust_certificate: bool = False,
-    token_provider: Optional[Callable[[str], str]] = None,
 ) -> sa.engine.Engine:
-    """Return a SQLAlchemy engine authenticated with Fabric SQL."""
-
-    if not sql_endpoint:
-        raise ValueError("sql_endpoint is required")
-
-    driver = _get_driver(preferred_driver)
-    token = _get_token(token_provider)
+    driver = _get_driver(preferred_driver) if preferred_driver else _get_driver()
+    token = credentials.getToken("https://database.windows.net/").encode("UTF-16-LE")
     attrs_before = struct.pack(f"<I{len(token)}s", len(token), token)
-    connection_string = _build_connection_string(driver, sql_endpoint, database, port, encrypt, trust_certificate)
-    url = sa.engine.URL.create("mssql+pyodbc", query={"odbc_connect": connection_string})
-
+    conn_str = _build_connection_string(driver, endpoint, database, port)
+    url = sa.engine.URL.create("mssql+pyodbc", query={"odbc_connect": conn_str})
     return sa.create_engine(
         url,
         connect_args={"attrs_before": {1256: attrs_before}},
@@ -100,20 +58,8 @@ def get_fabric_sql_engine(
     )
 
 
-def validate_fabric_sql_engine(engine: sa.engine.Engine) -> bool:
-    """Verify that the provided engine can actually run a trivial query."""
-
+def validate(engine: sa.engine.Engine) -> bool:
     with engine.connect() as conn:
-        result = conn.execute(text("SELECT 1")).scalar()
-    return result == 1
+        result = conn.execute(text("SELECT 1 AS value"))
+        return result.scalar() == 1
 
-
-def validate_fabric_warehouse_engine(engine: sa.engine.Engine) -> bool:
-    """Historic alias kept for compatibility with legacy scripts."""
-
-    return validate_fabric_sql_engine(engine)
-
-
-def validate_fabric_warehouse_engine(engine: sa.engine.Engine) -> bool:
-    """Historic alias kept for compatibility with legacy scripts."""
-    return validate_fabric_sql_engine(engine)
