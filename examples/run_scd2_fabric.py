@@ -11,6 +11,7 @@ from sqlalchemy import text
 
 from dataprepkit.helpers.connectors.warehouse import get_fabric_warehouse_engine
 from dataprepkit.metadata_loader import register_metadata, run_dimension
+from dataprepkit.storage import mount_lakehouse
 
 
 ENDPOINT_ENV = "FABRIC_SQL_ENDPOINT"
@@ -18,6 +19,9 @@ PORT_ENV = "FABRIC_SQL_PORT"
 TARGET_TABLE_ENV = "FABRIC_TARGET_TABLE"
 METADATA_NAME_ENV = "FABRIC_METADATA_NAME"
 RAW_FILE_ENV = "FABRIC_RAW_FILEPATH"
+WORKSPACE_ENV = "FABRIC_WORKSPACE"
+LAKEHOUSE_ENV = "FABRIC_LAKEHOUSE"
+MOUNT_POINT_ENV = "FABRIC_MOUNT_POINT"
 DEFAULT_RAW_FILE = Path(__file__).resolve().parents[2] / "examples" / "dummy_dimension.csv"
 
 
@@ -120,7 +124,18 @@ def main() -> None:
     target_table = os.environ[TARGET_TABLE_ENV]
     _ensure_table(engine, target_table)
 
-    raw_file = Path(os.environ.get(RAW_FILE_ENV, DEFAULT_RAW_FILE))
+    workspace_name = os.environ.get(WORKSPACE_ENV)
+    lakehouse_name = os.environ.get(LAKEHOUSE_ENV)
+    mount_point = os.environ.get(MOUNT_POINT_ENV, "/home/trusted-service-user/mounts/Source_Data")
+    mount_path = mount_lakehouse(workspace_name, lakehouse_name, mount_point) if workspace_name and lakehouse_name else None
+
+    raw_file = Path(
+        os.environ.get(
+            RAW_FILE_ENV,
+            str(mount_path / "dimension.csv") if mount_path else str(DEFAULT_RAW_FILE),
+        )
+    )
+
     metadata_name = _register_metadata_for_target(raw_file)
 
     _run_batch(engine, "Insert phase", _load_insert_batch(), metadata_name)
