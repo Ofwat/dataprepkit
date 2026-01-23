@@ -62,6 +62,11 @@ def main():
     engine = create_engine("sqlite:///:memory:")
     _bootstrap_tables(engine)
 
+    try:
+        base_dir = Path(__file__).resolve().parents[1]
+    except NameError:
+        base_dir = Path.cwd()
+
     register_metadata(
         name="metadata_example",
         metadata={
@@ -73,7 +78,7 @@ def main():
             },
             "surrogate_key": "surrogate_key",
             "join_numeric_key": "join_numeric_key",
-            "filepath": str(Path(__file__).resolve().parents[1] / "examples" / "dummy_dimension.csv"),
+            "filepath": str(base_dir / "examples" / "dummy_dimension.csv"),
             "schema_handling": {"mode": "evolve"},
             "dependencies": [
                 {
@@ -85,7 +90,7 @@ def main():
             ],
             "processing_class": lambda df: df.assign(data_column=df.data_column.str.upper()),
             "run_policy": {"on_table_failure": "continue"},
-            "archive_path": str(Path(__file__).resolve().parents[1] / "examples" / "archives"),
+            "archive_path": str(base_dir / "examples" / "archives"),
         },
     )
 
