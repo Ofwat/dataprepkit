@@ -86,6 +86,7 @@ def main():
                     "on": [{"source": "natural_key", "target": "source_key"}],
                     "select": {"dep_value": "dep_value"},
                     "how": "left",
+                    "on_missing": "null",
                 }
             ],
             "processing_class": lambda df: df.assign(data_column=df.data_column.str.upper()),
