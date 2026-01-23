@@ -28,6 +28,13 @@ def _create_schema(engine):
         conn.execute(text(create_sql))
 
 
+def _resolve_base_dir() -> Path:
+    try:
+        return Path(__file__).resolve().parents[2]
+    except NameError:
+        return Path.cwd()
+
+
 def _register_demo_metadata() -> None:
     register_metadata(
         "demo_dimension",
@@ -37,7 +44,7 @@ def _register_demo_metadata() -> None:
             "data_columns": ["data_column"],
             "surrogate_key": "surrogate_key",
             "join_numeric_key": "join_numeric_key",
-            "filepath": str(Path(__file__).resolve().parents[2] / "examples" / "dummy_dimension.csv"),
+            "filepath": str(_resolve_base_dir() / "examples" / "dummy_dimension.csv"),
             "description": "In-memory demo powered via metadata and override DataFrames.",
         },
     )

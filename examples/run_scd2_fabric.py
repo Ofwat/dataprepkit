@@ -25,7 +25,14 @@ FABRIC_METADATA_NAME = "fabric_dimension"
 FABRIC_WORKSPACE = "Ocean_Data_PROD"
 FABRIC_LAKEHOUSE = "Dimension_Source_Data"
 FABRIC_MOUNT_POINT = "/home/trusted-service-user/mounts/Source_Data"
-DEFAULT_RAW_FILE = Path(__file__).resolve().parents[2] / "examples" / "dummy_dimension.csv"
+def _resolve_base_dir() -> Path:
+    try:
+        return Path(__file__).resolve().parents[2]
+    except NameError:
+        return Path.cwd()
+
+
+DEFAULT_RAW_FILE = _resolve_base_dir() / "examples" / "dummy_dimension.csv"
 
 
 def _load_insert_batch() -> pd.DataFrame:
@@ -111,7 +118,7 @@ def _register_metadata_for_target(raw_file: Path) -> str:
             "data_columns": ["data_column"],
             "surrogate_key": "surrogate_key",
             "join_numeric_key": "join_numeric_key",
-            "filepath": str(raw_file),
+        "filepath": str(raw_file or DEFAULT_RAW_FILE),
         },
     )
     return FABRIC_METADATA_NAME
