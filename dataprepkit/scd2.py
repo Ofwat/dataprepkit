@@ -119,7 +119,7 @@ def _compute_row_hash(row: pd.Series, data_columns: Sequence[str]) -> str:
 
 def _create_staging_table(conn, table_name, natural_key_cols, data_cols, hash_col):
     dialect = conn.engine.dialect.name
-    column_type = "NVARCHAR(MAX)" if dialect == "mssql" else "TEXT"
+    column_type = "NVARCHAR(4000)" if dialect == "mssql" else "TEXT"
     column_defs = [f"{col} {column_type} NOT NULL" for col in natural_key_cols + data_cols]
     column_defs.append(f"{hash_col} {column_type} NOT NULL")
     unique_clause = f", UNIQUE({', '.join(natural_key_cols)})" if natural_key_cols else ""
