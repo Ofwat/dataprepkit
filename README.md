@@ -10,3 +10,13 @@ python examples/run_scd2_smoke.py
 ```
 
 Run the same command in CI (or as a pre-deploy gate) to ensure the orchestrator + SCD2 path remains healthy before hitting Fabric.
+
+## Metadata Example
+
+The metadata loader is driven by JSON-like entries. `examples/run_metadata_example.py` shows a full workflow with dependency joins, schema evolution, transforms, policy logging, and parquet snapshot archiving. Execute it with:
+
+```bash
+python examples/run_metadata_example.py
+```
+
+Modify the metadata dictionary in the script to match your real tables/sources before running it in your environment.
