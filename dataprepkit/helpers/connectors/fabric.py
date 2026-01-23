@@ -1,1 +1,98 @@
-"\"\"\"Fabric SQLAlchemy connector utilities.\"\"\"\n+\n+from __future__ import annotations\n+\n+import logging\n+import struct\n+from typing import Optional\n+\n+import pyodbc\n+import sqlalchemy as sa\n+from sqlalchemy import text\n+\n+logger = logging.getLogger(__name__)\n+\n+\n+try:\n+    from notebookutils import credentials\n+except ImportError:  # pragma: no cover - Fabric only\n+    credentials = None  # type: ignore[assignment]\n+\n+\n+class MockCredentials:\n+    def getToken(self, resource: str) -> str:\n+        logger.warning(\"Using mock credentials for resource: %s\", resource)\n+        return \"FAKE_TOKEN\"\n+\n+\n+def _select_driver() -> str:\n+    drivers = pyodbc.drivers()\n+    candidates = [d for d in drivers if \"ODBC Driver\" in d]\n+    if not candidates:\n+        raise RuntimeError(\"No suitable ODBC driver found.\")\n+    return max(candidates)\n+\n+\n+def get_fabric_sql_engine(\n+    sql_endpoint: str,\n+    port: int = 1433,\n+    creds: Optional[object] = None,\n+) -> sa.engine.Engine:\n+    if not sql_endpoint:\n+        raise ValueError(\"sql_endpoint is required\")\n+    provider = creds or credentials or MockCredentials()\n+    token = provider.getToken(\"https://database.windows.net/\").encode(\"UTF-16-LE\")\n+    attrs_before = struct.pack(f\"<I{len(token)}s\", len(token), token)\n+\n+    driver = _select_driver()\n+    connection_string = f\"DRIVER={{{driver}}};SERVER={sql_endpoint},{port};\"\n+    connection_url = sa.engine.URL.create(\"mssql+pyodbc\", query={\"odbc_connect\": connection_string})\n+\n+    return sa.create_engine(\n+        connection_url,\n+        connect_args={\"attrs_before\": {1256: attrs_before}},\n+        pool_pre_ping=True,\n+        pool_recycle=3600,\n+    )\n+\n+\n+def validate_fabric_sql_engine(engine: sa.engine.Engine) -> bool:\n+    with engine.connect() as conn:\n+        result = conn.execute(text(\"SELECT 1\")).scalar()\n+    return result == 1\n+\n+\n+def validate_fabric_warehouse_engine(engine: sa.engine.Engine) -> bool:\n+    return validate_fabric_sql_engine(engine)\n*** End Patch**
+"""Fabric SQLAlchemy connector utilities."""
+
+from __future__ import annotations
+
+import logging
+import struct
+from typing import Iterable, Optional, Protocol
+
+import pyodbc
+import sqlalchemy as sa
+from sqlalchemy import text
+
+logger = logging.getLogger(__name__)
+
+
+class TokenProvider(Protocol):
+    """Abstract access token provider."""
+
+    def getToken(self, resource: str) -> str:  # pragma: no cover - Fabric only
+        ...
+
+
+try:
+    from notebookutils import credentials
+
+    _default_provider: Iterable = (credentials,)
+except ImportError:  # pragma: no cover - Fabric-only runtime
+    credentials = None  # type: ignore[assignment]
+    _default_provider = ()
+
+
+class _MockTokenProvider:
+    """Fallback token provider used when Fabric utilities are unavailable."""
+
+    def getToken(self, resource: str) -> str:  # pragma: no cover - local testing
+        logger.warning("Mock token provided for %s", resource)
+        return "".join(["MOCK", resource.replace(":", "")])
+
+
+def _select_driver(preferred: Optional[str] = None) -> str:
+    drivers = pyodbc.drivers()
+    if preferred and preferred in drivers:
+        return preferred
+    candidates = [driver for driver in drivers if "ODBC Driver" in driver]
+    if not candidates:
+        raise RuntimeError("No ODBC driver matching 'ODBC Driver' found.")
+    return sorted(candidates, reverse=True)[0]
+
+
+def _format_connection_string(
+    endpoint: str, port: int, driver: str, database: Optional[str]
+) -> str:
+    parts = [f"DRIVER={{{driver}}}", f"SERVER={endpoint},{port}"]
+    if database:
+        parts.append(f"DATABASE={database}")
+    return ";".join(parts)
+
+
+def get_fabric_sql_engine(
+    sql_endpoint: str,
+    *,
+    port: int = 1433,
+    database: Optional[str] = None,
+    driver_name: Optional[str] = None,
+    token_provider: Optional[TokenProvider] = None,
+) -> sa.engine.Engine:
+    """Return a SQLAlchemy engine authenticated with Fabric SQL."""
+
+    if not sql_endpoint:
+        raise ValueError("sql_endpoint is required")
+
+    provider = token_provider or next(iter(_default_provider), _MockTokenProvider())
+    token = provider.getToken("https://database.windows.net/").encode("UTF-16-LE")
+    attrs_before = struct.pack(f"<I{len(token)}s", len(token), token)
+
+    driver = _select_driver(driver_name)
+    connection_string = _format_connection_string(sql_endpoint, port, driver, database)
+    url = sa.engine.URL.create("mssql+pyodbc", query={"odbc_connect": connection_string})
+
+    return sa.create_engine(
+        url,
+        connect_args={"attrs_before": {1256: attrs_before}},
+        pool_pre_ping=True,
+        pool_recycle=3600,
+    )
+
+
+def validate_fabric_sql_engine(engine: sa.engine.Engine) -> bool:
+    """Verify that the provided engine can actually run a trivial query."""
+
+    with engine.connect() as conn:
+        result = conn.execute(text("SELECT 1")).scalar()
+    return result == 1
+
+
+def validate_fabric_warehouse_engine(engine: sa.engine.Engine) -> bool:
+    """Historic alias kept for compatibility with legacy scripts."""
+    return validate_fabric_sql_engine(engine)
