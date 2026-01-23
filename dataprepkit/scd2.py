@@ -45,6 +45,7 @@ def apply_changes(
     join_numeric_key_col: str,
     surrogate_key_col: str,
     system_columns: Mapping[str, str] | None = None,
+    execution_time: str | None = None,
 ) -> None:
     """
     Apply SCD2 semantics to the target table using the incoming DataFrame.
@@ -70,7 +71,7 @@ def apply_changes(
 
     base_name = f"temp_snapshot_{uuid.uuid4().hex}"
     staging_table = _resolve_staging_table_name(engine, base_name)
-    execution_time = _execution_timestamp()
+    execution_time = execution_time or _execution_timestamp()
 
     with engine.begin() as conn:
         _create_staging_table(conn, staging_table, natural_key_cols, data_cols, hash_col)

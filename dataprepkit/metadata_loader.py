@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Mapping, Sequence
 
 import logging
 import pandas as pd
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 from dataprepkit.scd2 import apply_changes
@@ -101,12 +102,14 @@ def run_dimension(
     )
     if metadata.column_renames:
         incoming = incoming.rename(columns=metadata.column_renames)
+    execution_time = _capture_execution_time()
     logger.info(
         "Loaded dimension '%s' from %s (%d rows)",
         metadata.name,
         metadata.filepath,
         len(incoming),
     )
+    logger.info("Execution timestamp: %s", execution_time)
     available_columns = _get_target_columns(engine, metadata.target_table)
     safe_data_columns, missing = _resolve_safe_data_columns(
         metadata.data_columns, available_columns
@@ -127,7 +130,10 @@ def run_dimension(
         data_cols=safe_data_columns,
         join_numeric_key_col=metadata.join_numeric_key,
         surrogate_key_col=metadata.surrogate_key,
+        execution_time=execution_time,
     )
+    logger.info("SCD2 classification counts: not available")
+    _post_scd2_validation(engine, metadata.target_table, metadata.natural_key_cols)
     return incoming
 
 
@@ -146,3 +152,45 @@ def _resolve_safe_data_columns(
     if not safe and missing:
         raise RuntimeError("No safe data columns available to write.")
     return safe, missing
+
+
+def _capture_execution_time() -> str:
+    now = datetime.now(timezone.utc)
+    milliseconds = (now.microsecond // 1000) * 1000
+    truncated = now.replace(microsecond=milliseconds)
+    return truncated.isoformat(timespec="milliseconds")
+
+
+def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence[str]) -> None:
+    key_expr = ", ".join(natural_key_cols)
+    current_dups_sql = text(
+        f"""
+        SELECT {key_expr}, COUNT(*) AS cnt
+        FROM {table}
+        WHERE Current_Ind = 1
+        GROUP BY {key_expr}
+        HAVING COUNT(*) > 1
+        """
+    )
+
+    validation_checks = [
+        (
+            text(f"SELECT 1 FROM {table} WHERE Current_Ind = 1 AND Deleted_Ind = 1 LIMIT 1"),
+            "row has Current_Ind=1 and Deleted_Ind=1",
+        ),
+        (
+            text(f"SELECT 1 FROM {table} WHERE Current_Ind = 1 AND Update_Date IS NOT NULL LIMIT 1"),
+            "current row has Update_Date not NULL",
+        ),
+        (
+            text(f"SELECT 1 FROM {table} WHERE Current_Ind = 0 AND Update_Date IS NULL LIMIT 1"),
+            "historical row missing Update_Date",
+        ),
+    ]
+
+    with engine.connect() as conn:
+        if conn.execute(current_dups_sql).first():
+            raise RuntimeError("Multiple current rows found for a natural key.")
+        for sql_stmt, message in validation_checks:
+            if conn.execute(sql_stmt).first():
+                raise RuntimeError(f"Post-SCD2 validation failed: {message}")
