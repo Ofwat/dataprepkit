@@ -78,10 +78,6 @@ def apply_changes(
             _make_key(record, natural_key_cols): record
             for _, record in current_rows.iterrows()
         }
-        existing_join_keys = {
-            _make_key(record, natural_key_cols): record[join_numeric_key_col]
-            for _, record in current_rows.iterrows()
-        }
 
         existing_keys = set(existing_map)
         incoming_map = {
@@ -105,7 +101,7 @@ def apply_changes(
                 # row unchanged; skip it explicitly
                 continue
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = _execution_timestamp()
         where_clause = " AND ".join(f"{col} = :{col}" for col in natural_key_cols)
 
         for key in to_delete:
@@ -130,7 +126,7 @@ def apply_changes(
                 deleted=0,
             )
 
-        insert_keys = to_insert + to_change
+        insert_keys = sorted(to_insert + to_change)
         max_join_numeric = existing[join_numeric_key_col].max()
         if pd.isna(max_join_numeric):
             next_join_numeric = 0
@@ -157,11 +153,8 @@ def apply_changes(
 
         for key in insert_keys:
             incoming_row = incoming_map[key]
-            if key in existing_join_keys:
-                join_numeric = existing_join_keys[key]
-            else:
-                next_join_numeric += 1
-                join_numeric = next_join_numeric
+            next_join_numeric += 1
+            join_numeric = next_join_numeric
 
             params = {col: incoming_row[col] for col in natural_key_cols + list(data_cols)}
             params[join_numeric_key_col] = join_numeric
@@ -172,6 +165,13 @@ def apply_changes(
             params[cols["deleted_ind"]] = 0
 
             conn.execute(insert_sql, params)
+
+
+def _execution_timestamp() -> str:
+    now = datetime.now(timezone.utc)
+    milliseconds = (now.microsecond // 1000) * 1000
+    truncated = now.replace(microsecond=milliseconds)
+    return truncated.isoformat(timespec="milliseconds")
 
 
 def _compute_row_hash(row: pd.Series, data_columns: Sequence[str]) -> str:
