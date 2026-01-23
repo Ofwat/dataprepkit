@@ -5,6 +5,8 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
 
+from dataprepkit.scd2 import SCD2ValidationError
+
 from dataprepkit.scd2 import apply_changes
 
 
@@ -337,3 +339,96 @@ def test_reinsert_gets_new_join_numeric():
     assert not reinserted.empty
     # Join numeric should have advanced from previous max
     assert reinserted.iloc[0]["join_numeric_key"] > 1
+
+
+def test_reject_duplicate_natural_keys():
+    engine = create_engine("sqlite:///:memory:")
+    _bootstrap_table(engine, [])
+
+    incoming = pd.DataFrame(
+        [
+            {"join_key": "a1", "join_numeric_key": 1, "data_column": "a"},
+            {"join_key": "a1", "join_numeric_key": 2, "data_column": "b"},
+        ]
+    )
+
+    with pytest.raises(SCD2ValidationError):
+        apply_changes(
+            engine=engine,
+            target_table="dimension",
+            incoming=incoming,
+            natural_key_cols=["join_key"],
+            data_cols=["data_column"],
+            join_numeric_key_col="join_numeric_key",
+            surrogate_key_col="surrogate_key",
+            system_columns=SYSTEM_COLUMNS,
+        )
+
+
+def test_execution_time_is_consistent(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    _bootstrap_table(
+        engine,
+        [
+            _build_initial_row("a1", 1, "a2"),
+            _build_initial_row("b1", 2, "b2"),
+        ],
+    )
+
+    incoming = pd.DataFrame(
+        [
+            {"join_key": "a1", "data_column": "a2"},
+            {"join_key": "b1", "data_column": "b22"},
+        ]
+    )
+
+    constant_ts = "2026-01-08T12:00:00.000+00:00"
+    monkeypatch.setattr("dataprepkit.scd2._execution_timestamp", lambda: constant_ts)
+
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=incoming,
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    df = _read_table(engine)
+    historical = df.loc[(df.join_key == "b1") & (df.Current_Ind == 0)].iloc[0]
+    current = df.loc[(df.join_key == "b1") & (df.Current_Ind == 1)].iloc[0]
+    assert historical["Update_Date"] == constant_ts
+    assert current["Insert_Date"] == constant_ts
+
+
+def test_join_numeric_increases_for_each_insert():
+    engine = create_engine("sqlite:///:memory:")
+    _bootstrap_table(engine, [_build_initial_row("a1", 1, "a2")])
+
+    incoming = pd.DataFrame(
+        [
+            {"join_key": "a1", "data_column": "a2"},
+            {"join_key": "b1", "data_column": "b2"},
+            {"join_key": "c1", "data_column": "c3"},
+            {"join_key": "d1", "data_column": "d4"},
+        ]
+    )
+
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=incoming,
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    df = _read_table(engine)
+    inserted = df.loc[
+        df.join_key.isin(["b1", "c1", "d1"]) & (df.Current_Ind == 1), :
+    ].sort_values("join_key")
+    assert inserted["join_numeric_key"].tolist() == [2, 3, 4]
