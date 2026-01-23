@@ -196,3 +196,144 @@ def test_apply_changes_scenarios(scenario):
 
     final = _read_table(engine)
     scenario["validator"](final)
+
+
+def test_apply_changes_repeated_insert_is_idempotent():
+    engine = create_engine("sqlite:///:memory:")
+    initial_rows = [
+        _build_initial_row("a1", 1, "a2"),
+        _build_initial_row("b1", 2, "b2"),
+    ]
+    _bootstrap_table(engine, initial_rows)
+
+    incoming = pd.DataFrame(
+        [
+            {"join_key": "a1", "join_numeric_key": 1, "data_column": "a2"},
+            {"join_key": "b1", "join_numeric_key": 2, "data_column": "b2"},
+        ]
+    )
+
+    target = "dimension"
+    apply_changes(
+        engine=engine,
+        target_table=target,
+        incoming=incoming,
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    first_count = len(_read_table(engine))
+
+    apply_changes(
+        engine=engine,
+        target_table=target,
+        incoming=incoming,
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    second_count = len(_read_table(engine))
+    assert first_count == second_count == len(initial_rows), "Repeated inserts should not add rows"
+
+
+def test_delete_marks_row_as_historical():
+    engine = create_engine("sqlite:///:memory:")
+    initial_rows = [
+        _build_initial_row("d1", 4, "d2"),
+    ]
+    _bootstrap_table(engine, initial_rows)
+
+    incoming = pd.DataFrame([{"join_key": "other", "join_numeric_key": 5, "data_column": "a2"}])
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=incoming,
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    final = _read_table(engine)
+    deleted = final.loc[final.join_key == "d1"]
+    assert not deleted.empty
+    assert deleted.iloc[0]["Current_Ind"] == 0
+    assert deleted.iloc[0]["Deleted_Ind"] == 1
+    assert pd.notna(deleted.iloc[0]["Update_Date"])
+
+
+def test_update_preserves_delete_flag_off():
+    engine = create_engine("sqlite:///:memory:")
+    initial_rows = [
+        _build_initial_row("b1", 2, "b2"),
+    ]
+    _bootstrap_table(engine, initial_rows)
+
+    incoming = pd.DataFrame([{"join_key": "b1", "join_numeric_key": 2, "data_column": "modified"}])
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=incoming,
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    final = _read_table(engine)
+    previous = final.loc[(final.join_key == "b1") & (final.Current_Ind == 0)]
+    current = final.loc[(final.join_key == "b1") & (final.Current_Ind == 1)]
+    assert len(current) == 1
+    assert previous.iloc[0]["Deleted_Ind"] == 0
+    assert pd.notna(previous.iloc[0]["Update_Date"])
+
+
+def test_reinsert_gets_new_join_numeric():
+    engine = create_engine("sqlite:///:memory:")
+    initial_rows = [
+        _build_initial_row("z1", 1, "old"),
+    ]
+    _bootstrap_table(engine, initial_rows)
+
+    # delete row by sending only another key
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=pd.DataFrame(
+            [{"join_key": "other", "join_numeric_key": 5, "data_column": "placeholder"}]
+        ),
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    # reinsert with new data
+    new_row = pd.DataFrame(
+        [{"join_key": "z1", "join_numeric_key": 1, "data_column": "new"}]
+    )
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=new_row,
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    final = _read_table(engine)
+    reinserted = final.loc[(final.join_key == "z1") & (final.Current_Ind == 1)]
+    assert not reinserted.empty
+    # Join numeric should have advanced from previous max
+    assert reinserted.iloc[0]["join_numeric_key"] > 1

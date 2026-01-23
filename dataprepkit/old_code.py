@@ -879,11 +879,6 @@ def get_fabric_warehouse_engine(
 
 env = env.upper()
 
-if env == "PROD":
-    sql_connection_string = "byx2sqtktgzedbish3jdpk4dcm-sbeaaeq5h43utfrbvrcuxytome.datawarehouse.fabric.microsoft.com"
-else:
-    sql_connection_string = "byx2sqtktgzedbish3jdpk4dcm-vd6yg3wowq2enahjchvizod6qa.datawarehouse.fabric.microsoft.com"
-
 # engine = create_engine(sql_connection_string, fast_executemany=True)
 
 engine = get_fabric_warehouse_engine(sql_connection_string)
