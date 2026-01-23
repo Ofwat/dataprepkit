@@ -1,1 +1,90 @@
-"\"\"\"Helper utilities for managing Fabric lakehouse mounts.\"\"\"\n+\n+from __future__ import annotations\n+\n+import time\n+\n+try:\n+    import sempy.fabric as fabric\n+except ImportError:  # pragma: no cover - Fabric only\n+    fabric = None  # type: ignore[assignment]\n+\n+try:\n+    from notebookutils import fs\n+except ImportError:  # pragma: no cover - Fabric only\n+    fs = None  # type: ignore[assignment]\n+\n+\n+class StorageMountError(RuntimeError):\n+    \"\"\"Raised when a mount operation cannot be completed.\"\"\"\n+\n+\n+def mount_lakehouse(\n+    workspace_name: str,\n+    lakehouse_display_name: str,\n+    mount_point: str = \"/home/trusted-service-user/mounts/Source_Data\",\n+    max_retries: int = 20,\n+    retry_delay: float = 1.0,\n+) -> dict[str, str]:\n+    \"\"\"\n+    Resolve a Fabric workspace/lakehouse by name and mount the lakehouse with retries.\n+\n+    Returns a dict containing the workspace/lakehouse IDs, the resolved base path, and\n+    the mounted path for immediate use.\n+    \"\"\"\n+    if fabric is None:\n+        raise ImportError(\"sempy.fabric is required to locate Fabric resources.\")\n+    if fs is None:\n+        raise ImportError(\"notebookutils.fs is required to manage mounts.\")\n+\n+    workspaces_df = fabric.list_workspaces()\n+    workspace_id = (\n+        workspaces_df[workspaces_df[\"Name\"] == workspace_name][\"Id\"]\n+        .to_list()[0]\n+    )\n+\n+    ws_items_df = fabric.list_items(workspace=workspace_id)\n+    lakehouse_id = (\n+        ws_items_df[\n+            (ws_items_df[\"Type\"] == \"Lakehouse\")\n+            & (ws_items_df[\"Display Name\"] == lakehouse_display_name)\n+        ][\"Id\"]\n+        .to_list()[0]\n+    )\n+\n+    lakehouse_base_path = (\n+        f\"abfss://{workspace_id}@onelake.dfs.fabric.microsoft.com/{lakehouse_id}\"\n+    )\n+\n+    last_error: Exception | None = None\n+    for _ in range(max_retries):\n+        try:\n+            fs.unmount(mount_point)\n+        except Exception:  # pragma: no cover\n+            pass\n+\n+        try:\n+            fs.mount(lakehouse_base_path, mount_point)\n+            source_data_path = fs.getMountPath(mount_point)\n+            return {\n+                \"workspace_id\": workspace_id,\n+                \"lakehouse_id\": lakehouse_id,\n+                \"lakehouse_base_path\": lakehouse_base_path,\n+                \"source_data_path\": source_data_path,\n+            }\n+        except Exception as error:\n+            last_error = error\n+            time.sleep(retry_delay)\n+\n+    raise StorageMountError(\n+        f\"Failed to mount after {max_retries} attempts: {last_error}\"\n+    )\n*** End Patch**##
+"""Minimal lakehouse mount helper for Fabric."""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+
+try:
+    import sempy.fabric as fabric
+except ImportError:  # pragma: no cover - Fabric only
+    fabric = None  # type: ignore[assignment]
+
+try:
+    from notebookutils import fs
+except ImportError:  # pragma: no cover - Fabric only
+    fs = None  # type: ignore[assignment]
+
+
+@dataclass(frozen=True)
+class LakehouseMount:
+    workspace_id: str
+    lakehouse_id: str
+    lakehouse_base_path: str
+    source_data_path: str
+
+
+class StorageMountError(RuntimeError):
+    """Raised when the lakehouse cannot be mounted."""
+
+
+def _resolve_ids(workspace_name: str, display_name: str) -> tuple[str, str]:
+    if fabric is None:
+        raise ImportError("sempy.fabric is required to resolve lakehouse metadata.")
+
+    workspaces_df = fabric.list_workspaces()
+    workspace_id = (
+        workspaces_df[workspaces_df["Name"] == workspace_name]["Id"].to_list()[0]
+    )
+    items_df = fabric.list_items(workspace=workspace_id)
+    lakehouse_id = (
+        items_df[
+            (items_df["Type"] == "Lakehouse")
+            & (items_df["Display Name"] == display_name)
+        ]["Id"]
+        .to_list()[0]
+    )
+    return workspace_id, lakehouse_id
+
+
+def _format_base_path(workspace_id: str, lakehouse_id: str) -> str:
+    return f"abfss://{workspace_id}@onelake.dfs.fabric.microsoft.com/{lakehouse_id}"
+
+
+def mount_lakehouse(
+    workspace_name: str,
+    lakehouse_display_name: str,
+    mount_point: str = "/home/trusted-service-user/mounts/Source_Data",
+    max_retries: int = 20,
+    retry_delay: float = 1.0,
+) -> LakehouseMount:
+    """Mount the Fabric lakehouse and return the mount metadata."""
+    if fs is None:
+        raise ImportError("notebookutils.fs is required to mount the lakehouse.")
+
+    workspace_id, lakehouse_id = _resolve_ids(workspace_name, lakehouse_display_name)
+    lakehouse_base_path = _format_base_path(workspace_id, lakehouse_id)
+
+    last_error: Exception | None = None
+    for _ in range(max_retries):
+        try:
+            fs.unmount(mount_point)
+        except Exception:
+            pass
+
+        try:
+            fs.mount(lakehouse_base_path, mount_point)
+            source_data_path = fs.getMountPath(mount_point)
+            return LakehouseMount(
+                workspace_id=workspace_id,
+                lakehouse_id=lakehouse_id,
+                lakehouse_base_path=lakehouse_base_path,
+                source_data_path=source_data_path,
+            )
+        except Exception as error:  # pragma: no cover
+            last_error = error
+            time.sleep(retry_delay)
+
+    raise StorageMountError(
+        f"Failed to mount after {max_retries} attempts: {last_error}"
+    )

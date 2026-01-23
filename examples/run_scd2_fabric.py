@@ -11,7 +11,7 @@ from sqlalchemy import text
 
 from dataprepkit.helpers.connectors.warehouse import get_fabric_warehouse_engine
 from dataprepkit.metadata_loader import register_metadata, run_dimension
-from dataprepkit.storage import mount_lakehouse
+from dataprepkit.storage import LakehouseMount, mount_lakehouse
 
 
 ENDPOINT_ENV = "FABRIC_SQL_ENDPOINT"
@@ -128,7 +128,7 @@ def main() -> None:
     lakehouse_name = os.environ[LAKEHOUSE_ENV]
     mount_point = os.environ.get(MOUNT_POINT_ENV, "/home/trusted-service-user/mounts/Source_Data")
     mount_info = mount_lakehouse(workspace_name, lakehouse_name, mount_point)
-    raw_file = Path(os.environ.get(RAW_FILE_ENV, str(Path(mount_info["source_data_path"]) / "dimension.csv")))
+    raw_file = Path(os.environ.get(RAW_FILE_ENV, str(Path(mount_info.source_data_path) / "dimension.csv")))
 
     metadata_name = _register_metadata_for_target(raw_file)
 
