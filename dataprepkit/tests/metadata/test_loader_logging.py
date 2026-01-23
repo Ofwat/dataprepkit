@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 
 from dataprepkit.metadata_loader import (
     METADATA_REGISTRY,
@@ -284,4 +284,77 @@ def test_dependency_join_enriches_dataframe(monkeypatch):
     )
 
     assert captured["incoming"].iloc[0]["dep_value"] == "extra"
+    METADATA_REGISTRY.pop(metadata_name, None)
+
+
+def test_schema_suggest_logs_plan(monkeypatch, caplog):
+    engine = create_engine("sqlite:///:memory:")
+    _create_dimension_table(engine)
+    metadata_name = "suggest_plan"
+    register_metadata(
+        metadata_name,
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": ["data_column", "extra"],
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+            "schema_handling": {"mode": "suggest"},
+        },
+    )
+
+    captured = {}
+
+    def fake_apply_changes(*args, **kwargs):
+        captured["data_cols"] = kwargs["data_cols"]
+
+    monkeypatch.setattr("dataprepkit.metadata_loader.apply_changes", fake_apply_changes)
+    caplog.set_level(logging.WARNING)
+
+    run_dimension(
+        engine,
+        metadata_name,
+        override_df=pd.DataFrame([{"natural_key": "x", "data_column": "v"}]),
+    )
+
+    assert "Schema evolution plan" in caplog.text
+    assert captured["data_cols"] == ["data_column"]
+    METADATA_REGISTRY.pop(metadata_name, None)
+
+
+def test_schema_evolve_adds_columns(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    _create_dimension_table(engine)
+    metadata_name = "evolve_plan"
+    register_metadata(
+        metadata_name,
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": ["data_column", "extra_add"],
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+            "schema_handling": {"mode": "evolve"},
+        },
+    )
+
+    captured = {}
+
+    def fake_apply_changes(*args, **kwargs):
+        captured["data_cols"] = kwargs["data_cols"]
+
+    monkeypatch.setattr("dataprepkit.metadata_loader.apply_changes", fake_apply_changes)
+
+    run_dimension(
+        engine,
+        metadata_name,
+        override_df=pd.DataFrame([{"natural_key": "x", "data_column": "v"}]),
+    )
+
+    inspector = inspect(engine)
+    columns = {col["name"] for col in inspector.get_columns("dimension")}
+    assert "extra_add" in columns
+    assert captured["data_cols"] == ["data_column", "extra_add"]
     METADATA_REGISTRY.pop(metadata_name, None)

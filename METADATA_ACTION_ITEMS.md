@@ -10,7 +10,7 @@ This checklist captures the concrete pieces we still need to implement so the me
 2. **Schema handling & safe write set**
    - [x] Detect schema drift by comparing system columns + data columns against the existing target table schema.
    - [x] Build a safe write set that only includes columns present and type-compatible with the target.
-   - [ ] Support `schema_handling.mode` = `suggest` vs `evolve`, including logging an evolution plan in suggest mode and performing light evolution (adding nullable columns, widening types, defaults) when allowed.
+   - [x] Support `schema_handling.mode` = `suggest` vs `evolve`, including logging an evolution plan in suggest mode and performing light evolution (adding nullable columns, widening types, defaults) when allowed.
    - [x] Log the final safe write set and any excluded columns.
 
 3. **Transform/dependency orchestration**

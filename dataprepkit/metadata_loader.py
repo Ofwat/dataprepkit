@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Mapping, Sequence
+from typing import Dict, Mapping, Sequence, Literal
 
 from typing import Literal
 
@@ -28,6 +28,10 @@ class DependencyJoin(BaseModel):
     on_missing: Literal["error", "null"] = "error"
 
 
+class SchemaHandling(BaseModel):
+    mode: Literal["suggest", "evolve"] = "suggest"
+
+
 class DimensionMetadata(BaseModel):
     """Defines the metadata required to load a single dimension table."""
 
@@ -40,6 +44,7 @@ class DimensionMetadata(BaseModel):
     filepath: str
     column_renames: Mapping[str, str] = Field(default_factory=dict[str, str])
     description: str | None = None
+    schema_handling: SchemaHandling = Field(default_factory=SchemaHandling)
     dependencies: Sequence[DependencyJoin] = Field(default_factory=list)
 
     @field_validator("natural_key_cols", "data_columns")
@@ -132,8 +137,11 @@ def run_dimension(
     )
     logger.info("Execution timestamp: %s", execution_time)
     available_columns = _get_target_columns(engine, metadata.target_table)
-    safe_data_columns, missing = _resolve_safe_data_columns(
-        metadata.data_columns, available_columns
+    safe_data_columns, missing = _handle_schema_drift(
+        engine,
+        metadata,
+        available_columns,
+        metadata.data_columns,
     )
     if missing:
         logger.warning(
@@ -214,6 +222,44 @@ def _apply_dependency_joins(
                 raise RuntimeError(f"Dependency join {dep.table} produced missing values.")
 
     return incoming
+
+
+def _handle_schema_drift(
+    engine: Engine,
+    metadata: DimensionMetadata,
+    available_columns: set[str],
+    requested_columns: Sequence[str],
+) -> tuple[list[str], list[str]]:
+    safe, missing = _resolve_safe_data_columns(requested_columns, available_columns)
+    if missing:
+        plan = f"Missing columns: {missing}"
+        if metadata.schema_handling.mode == "evolve":
+            _evolve_schema(engine, metadata.target_table, missing)
+            safe = list(requested_columns)
+            logger.info("Schema evolution applied for %s: added %s", metadata.target_table, missing)
+        else:
+            logger.warning(
+                "Schema evolution plan for %s: %s",
+                metadata.target_table,
+                plan,
+            )
+    return safe, missing
+
+
+def _column_type_for_engine(engine: Engine) -> str:
+    dialect = engine.dialect.name
+    if dialect == "mssql":
+        return "NVARCHAR(4000)"
+    return "TEXT"
+
+
+def _evolve_schema(engine: Engine, table_name: str, missing: Sequence[str]) -> None:
+    column_type = _column_type_for_engine(engine)
+    with engine.begin() as conn:
+        for column in missing:
+            conn.execute(
+                text(f"ALTER TABLE {table_name} ADD COLUMN {column} {column_type}")
+            )
 
 
 def _capture_execution_time() -> str:
