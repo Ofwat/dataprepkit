@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Mapping, Sequence
 
+from typing import Literal
+
 import logging
 import pandas as pd
 from pydantic import BaseModel, Field, field_validator
@@ -16,6 +18,15 @@ from dataprepkit.scd2 import apply_changes
 
 
 logger = logging.getLogger(__name__)
+
+class DependencyJoin(BaseModel):
+    table: str
+    how: Literal["left", "inner"] = "left"
+    filter_target_current: bool = True
+    on: Sequence[Mapping[str, str]]
+    select: Mapping[str, str]
+    on_missing: Literal["error", "null"] = "error"
+
 
 class DimensionMetadata(BaseModel):
     """Defines the metadata required to load a single dimension table."""
@@ -29,6 +40,7 @@ class DimensionMetadata(BaseModel):
     filepath: str
     column_renames: Mapping[str, str] = Field(default_factory=dict[str, str])
     description: str | None = None
+    dependencies: Sequence[DependencyJoin] = Field(default_factory=list)
 
     @field_validator("natural_key_cols", "data_columns")
     def must_define_columns(cls, value: Sequence[str]) -> Sequence[str]:
@@ -102,6 +114,15 @@ def run_dimension(
     )
     if metadata.column_renames:
         incoming = incoming.rename(columns=metadata.column_renames)
+        if incoming.columns.duplicated().any():
+            logger.error(
+                "Column rename collision detected with %s",
+                metadata.column_renames,
+            )
+            raise ValueError(
+                "Column renames introduced duplicate column names; check metadata."
+            )
+    incoming = _apply_dependency_joins(incoming, metadata.dependencies, engine)
     execution_time = _capture_execution_time()
     logger.info(
         "Loaded dimension '%s' from %s (%d rows)",
@@ -122,16 +143,20 @@ def run_dimension(
             safe_data_columns,
         )
 
-    apply_changes(
-        engine=engine,
-        target_table=metadata.target_table,
-        incoming=incoming,
-        natural_key_cols=list(metadata.natural_key_cols),
-        data_cols=safe_data_columns,
-        join_numeric_key_col=metadata.join_numeric_key,
-        surrogate_key_col=metadata.surrogate_key,
-        execution_time=execution_time,
-    )
+    try:
+        apply_changes(
+            engine=engine,
+            target_table=metadata.target_table,
+            incoming=incoming,
+            natural_key_cols=list(metadata.natural_key_cols),
+            data_cols=safe_data_columns,
+            join_numeric_key_col=metadata.join_numeric_key,
+            surrogate_key_col=metadata.surrogate_key,
+            execution_time=execution_time,
+        )
+    except Exception as exc:
+        logger.error("SCD2 invocation failed for %s: %s", metadata.name, exc)
+        raise
     logger.info("SCD2 classification counts: not available")
     _post_scd2_validation(engine, metadata.target_table, metadata.natural_key_cols)
     return incoming
@@ -152,6 +177,43 @@ def _resolve_safe_data_columns(
     if not safe and missing:
         raise RuntimeError("No safe data columns available to write.")
     return safe, missing
+
+
+def _apply_dependency_joins(
+    incoming: pd.DataFrame,
+    dependencies: Sequence[DependencyJoin],
+    engine: Engine,
+) -> pd.DataFrame:
+    for dep in dependencies:
+        dep_df = pd.read_sql_table(dep.table, con=engine)
+        if dep.filter_target_current and "Current_Ind" in dep_df.columns:
+            dep_df = dep_df[dep_df["Current_Ind"] == 1]
+
+        on_source = [relation["source"] for relation in dep.on]
+        on_target = [relation["target"] for relation in dep.on]
+        rename_map = dict(zip(on_target, on_source))
+        dep_df = dep_df.rename(columns=rename_map)
+
+        select_aliases = {}
+        for target_col, alias in dep.select.items():
+            dep_df = dep_df.rename(columns={target_col: alias})
+            select_aliases[alias] = target_col
+
+        columns_to_keep = on_source + list(select_aliases.keys())
+        dep_df = dep_df[columns_to_keep]
+
+        incoming = incoming.merge(
+            dep_df.drop_duplicates(subset=on_source),
+            on=on_source,
+            how=dep.how,
+        )
+
+        if dep.on_missing == "error":
+            missing_mask = incoming[select_aliases.keys()].isna().any(axis=1)
+            if missing_mask.any():
+                raise RuntimeError(f"Dependency join {dep.table} produced missing values.")
+
+    return incoming
 
 
 def _capture_execution_time() -> str:

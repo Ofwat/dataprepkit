@@ -97,6 +97,31 @@ def test_schema_drift_logs_safe_write_set(monkeypatch, caplog):
     METADATA_REGISTRY.pop(metadata_name, None)
 
 
+def test_rename_collision_raises(caplog):
+    engine = create_engine("sqlite:///:memory:")
+    _create_dimension_table(engine)
+    metadata_name = "rename_collision"
+    register_metadata(
+        metadata_name,
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": ["data_column"],
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+            "column_renames": {"natural_key": "data_column"},
+        },
+    )
+
+    caplog.set_level(logging.ERROR)
+    with pytest.raises(ValueError):
+        run_dimension(engine, metadata_name, override_df=pd.DataFrame([{"natural_key": "x", "data_column": "v"}]))
+
+    assert "Column rename collision detected" in caplog.text
+    METADATA_REGISTRY.pop(metadata_name, None)
+
+
 def _create_dimension_table(engine):
     with engine.begin() as conn:
         conn.execute(
@@ -198,3 +223,65 @@ def test_post_scd2_validation_detects_current_with_update_date():
     )
     with pytest.raises(RuntimeError, match="current row has Update_Date not NULL"):
         _post_scd2_validation(engine, "dimension", ["natural_key"])
+
+
+def test_dependency_join_enriches_dataframe(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    _create_dimension_table(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dependency (
+                    source_key TEXT NOT NULL,
+                    dep_value TEXT NOT NULL,
+                    Current_Ind INTEGER NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dependency (source_key, dep_value, Current_Ind)
+                VALUES ('x', 'extra', 1)
+                """
+            )
+        )
+
+    metadata_name = "dep_dimension"
+    register_metadata(
+        metadata_name,
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": ["data_column", "dep_value"],
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+            "dependencies": [
+                {
+                    "table": "dependency",
+                    "on": [{"source": "natural_key", "target": "source_key"}],
+                    "select": {"dep_value": "dep_value"},
+                    "how": "left",
+                }
+            ],
+        },
+    )
+
+    captured = {}
+
+    def fake_apply_changes(*args, **kwargs):
+        captured["incoming"] = kwargs["incoming"]
+
+    monkeypatch.setattr("dataprepkit.metadata_loader.apply_changes", fake_apply_changes)
+
+    run_dimension(
+        engine,
+        metadata_name,
+        override_df=pd.DataFrame([{"natural_key": "x", "data_column": "base"}]),
+    )
+
+    assert captured["incoming"].iloc[0]["dep_value"] == "extra"
+    METADATA_REGISTRY.pop(metadata_name, None)
