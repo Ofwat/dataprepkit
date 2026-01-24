@@ -27,6 +27,7 @@ setup(
         "sqlalchemy",
         "pyodbc",
         "pydantic>=1.10.0",
+        "pyarrow",
     ],
     extras_require={
         "dev": [

@@ -2,8 +2,8 @@
 Example that exercises the metadata-driven orchestrator end-to-end.
 
 Create target tables, register metadata, and call `run_dimension` to invoke
-the new SQL-backed SCD2 logic, dependency joins, schema evolution, run policies,
-and snapshot archiving.
+the new SQL-backed SCD2 logic, schema evolution, run policies, dependency
+joins, and snapshot archiving.
 """
 
 from pathlib import Path
@@ -30,10 +30,8 @@ def _bootstrap_tables(engine):
         )
         conn.execute(
             text(
-                """
-                INSERT INTO dependency (source_key, dep_value, Current_Ind)
-                VALUES ('x', 'extra-context', 1)
-                """
+                "INSERT INTO dependency (source_key, dep_value, Current_Ind) "
+                "VALUES ('x', 'extra-context', 1), ('y', 'medium-context', 1)"
             )
         )
 
@@ -46,7 +44,6 @@ def _bootstrap_tables(engine):
                     natural_key TEXT NOT NULL,
                     join_numeric_key INTEGER NOT NULL,
                     data_column TEXT,
-                    dep_value TEXT,
                     row_hash TEXT NOT NULL,
                     Insert_Date TEXT NOT NULL,
                     Update_Date TEXT,
@@ -56,6 +53,12 @@ def _bootstrap_tables(engine):
                 """
             )
         )
+
+
+def _progressive_quality_flag(df: pd.DataFrame) -> pd.DataFrame:
+    """Derive a quality flag so the metadata can show transform hooks."""
+    flag_map = {"x": "high", "y": "medium", "z": "low"}
+    return df.assign(quality_flag=df["natural_key"].map(flag_map).fillna("unknown"))
 
 
 def main():
@@ -74,7 +77,8 @@ def main():
             "natural_key_cols": ["natural_key"],
             "data_columns": {
                 "data_column": {"type": "TEXT", "nullable": False},
-                "dep_value": {"type": "TEXT"},
+                "dep_value": {"type": "TEXT", "nullable": True, "default": "'unset'"},
+                "quality_flag": {"type": "TEXT", "nullable": True},
             },
             "surrogate_key": "surrogate_key",
             "join_numeric_key": "join_numeric_key",
@@ -89,23 +93,41 @@ def main():
                     "on_missing": "null",
                 }
             ],
-            "processing_class": lambda df: df.assign(data_column=df.data_column.str.upper()),
+            "processing_class": _progressive_quality_flag,
             "run_policy": {"on_table_failure": "continue"},
             "archive_path": str(base_dir / "examples" / "archives"),
         },
     )
 
-    incoming = pd.DataFrame(
+    initial_snapshot = pd.DataFrame(
         [
             {"natural_key": "x", "data_column": "a"},
             {"natural_key": "y", "data_column": "b"},
         ]
     )
 
+    print("=== Initial load ===")
     run_dimension(
         engine,
         "metadata_example",
-        override_df=incoming,
+        override_df=initial_snapshot,
+    )
+
+    with engine.connect() as conn:
+        print(pd.read_sql_table("dimension", conn))
+
+    second_snapshot = pd.DataFrame(
+        [
+            {"natural_key": "x", "data_column": "updated"},
+            {"natural_key": "y", "data_column": "b"},
+        ]
+    )
+
+    print("\n=== Second snapshot (update + insert) ===")
+    run_dimension(
+        engine,
+        "metadata_example",
+        override_df=second_snapshot,
     )
 
     with engine.connect() as conn:
