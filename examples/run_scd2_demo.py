@@ -73,11 +73,11 @@ def _summarize(engine, label):
     print(df.sort_values(["natural_key", "surrogate_key"]))
 
 
-def _validate(engine):
+def _validate(engine, expected_current: int):
     with engine.connect() as conn:
         result = conn.execute(text("SELECT COUNT(*) FROM dimension WHERE Current_Ind = 1"))
         current_count = result.scalar()
-    assert current_count == 3, "There should be exactly three current rows."
+    assert current_count == expected_current, "Current rows should not decrease"
 
 
 def main():
@@ -94,7 +94,35 @@ def main():
             {"natural_key": "c1", "data_column": "c2"},
         ],
     )
-    _validate(engine)
+    _run_next_batch(
+        engine,
+        "Delete phase",
+        [
+            {"natural_key": "c1", "data_column": "c2"},
+            {"natural_key": "d1", "data_column": "placeholder"},
+            {"natural_key": "e1", "data_column": "placeholder"},
+            {"natural_key": "f1", "data_column": "placeholder"},
+        ],
+    )
+    _run_next_batch(
+        engine,
+        "Reinsert phase",
+        [
+            {"natural_key": "a1", "data_column": "a2"},
+            {"natural_key": "b1", "data_column": "b2"},
+            {"natural_key": "c1", "data_column": "c2"},
+            {"natural_key": "g1", "data_column": "new"},
+        ],
+    )
+    expected_current = len(
+        {
+            "a1",
+            "b1",
+            "c1",
+            "g1",
+        }
+    )
+    _validate(engine, expected_current)
     print("SCD2 demo completed successfully at", datetime.utcnow().isoformat())
 
 

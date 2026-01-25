@@ -36,7 +36,7 @@ class RunPolicy(BaseModel):
 
 
 class ColumnSpec(BaseModel):
-    type: str
+    type: str = "TEXT"
     nullable: bool = True
     unique: bool = False
     default: str | None = None

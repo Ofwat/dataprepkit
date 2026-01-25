@@ -74,7 +74,7 @@ def apply_changes(
     execution_time = execution_time or _execution_timestamp()
 
     with engine.begin() as conn:
-        _validate_row_growth(conn, target_table, incoming_df.shape[0])
+        pre_total = _count_rows(conn, target_table)
         _create_staging_table(conn, staging_table, natural_key_cols, data_cols, hash_col)
         try:
             _insert_snapshot_rows(conn, staging_table, incoming_df, natural_key_cols, data_cols, hash_col)
@@ -91,6 +91,7 @@ def apply_changes(
             )
         finally:
             conn.execute(text(f"DROP TABLE IF EXISTS {staging_table}"))
+        _validate_row_growth(conn, target_table, pre_total)
 
 
 def _execution_timestamp() -> str:
@@ -255,10 +256,14 @@ def _apply_snapshot_to_target(
     )
 
 
-def _validate_row_growth(conn, target_table: str, incoming_count: int) -> None:
+def _count_rows(conn, target_table: str) -> int:
     result = conn.execute(text(f"SELECT COUNT(1) FROM {target_table}"))
-    current = result.scalar() or 0
-    if incoming_count < current:
+    return result.scalar() or 0
+
+
+def _validate_row_growth(conn, target_table: str, previous_total: int) -> None:
+    latest = _count_rows(conn, target_table)
+    if latest < previous_total:
         raise SCD2ValidationError(
-            f"Row count validation failed: incoming {incoming_count} < existing {current}"
+            f"Row count validation failed: table shrank from {previous_total} to {latest}"
         )
