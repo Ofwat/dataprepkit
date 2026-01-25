@@ -76,6 +76,25 @@ def apply_changes(
     with engine.begin() as conn:
         pre_total = _count_rows(conn, target_table)
         column_types = _get_column_types(conn, target_table)
+        extra_columns = ["existing_join_numeric"]
+        existing_join_map = {}
+        if natural_key_cols:
+            select_cols = ", ".join(natural_key_cols + [join_numeric_key_col])
+            rows = conn.execute(
+                text(
+                    f"SELECT {select_cols} FROM {target_table} WHERE {cols['current_ind']} = 1"
+                )
+            ).fetchall()
+            for row in rows:
+                key = tuple(row[:-1])
+                existing_join_map[key] = row[-1]
+        incoming_df = incoming_df.copy()
+        if natural_key_cols:
+            incoming_df["existing_join_numeric"] = incoming_df.apply(
+                lambda row: existing_join_map.get(tuple(row[col] for col in natural_key_cols)), axis=1
+            )
+        else:
+            incoming_df["existing_join_numeric"] = None
         _create_staging_table(
             conn,
             staging_table,
@@ -83,9 +102,18 @@ def apply_changes(
             data_cols,
             hash_col,
             column_types,
+            extra_columns=extra_columns,
         )
         try:
-            _insert_snapshot_rows(conn, staging_table, incoming_df, natural_key_cols, data_cols, hash_col)
+            _insert_snapshot_rows(
+                conn,
+                staging_table,
+                incoming_df,
+                natural_key_cols,
+                data_cols,
+                hash_col,
+                extra_columns=extra_columns,
+            )
             _apply_snapshot_to_target(
                 conn,
                 staging_table,
@@ -135,6 +163,7 @@ def _create_staging_table(
     data_cols,
     hash_col,
     column_types: Mapping[str, str],
+    extra_columns: Sequence[str] | None = None,
 ):
     dialect = conn.engine.dialect.name
     column_defs = []
@@ -145,6 +174,10 @@ def _create_staging_table(
     column_defs.append(
         f"{hash_col} {_column_type_for_column(hash_col, column_types, conn.engine)} NOT NULL"
     )
+    for extra in extra_columns or []:
+        column_defs.append(
+            f"{extra} {_column_type_for_column(extra, column_types, conn.engine)}"
+        )
     unique_clause = f", UNIQUE({', '.join(natural_key_cols)})" if natural_key_cols else ""
     create_sql = text(
         f"""
@@ -157,8 +190,18 @@ def _create_staging_table(
     conn.execute(create_sql)
 
 
-def _insert_snapshot_rows(conn, table_name, incoming_df, natural_key_cols, data_cols, hash_col):
+def _insert_snapshot_rows(
+    conn,
+    table_name,
+    incoming_df,
+    natural_key_cols,
+    data_cols,
+    hash_col,
+    extra_columns: Sequence[str] | None = None,
+):
     columns = list(natural_key_cols) + list(data_cols) + [hash_col]
+    if extra_columns:
+        columns.extend(extra_columns)
     insert_sql = text(
         f"""
         INSERT INTO {table_name} ({', '.join(columns)})
@@ -244,24 +287,13 @@ def _apply_snapshot_to_target(
         else f"t.{columns['current_ind']} = 1"
     )
 
-    natural_join_condition = _build_join_condition("s", "ej", natural_key_cols)
     insert_sql = text(
         f"""
-        WITH existing_join AS (
-            SELECT
-                {', '.join(natural_key_cols)},
-                MAX({join_numeric_key_col}) AS existing_join_numeric
-            FROM {target_table}
-            WHERE {columns['deleted_ind']} = 0
-            GROUP BY {', '.join(natural_key_cols)}
-        ),
-        candidates AS (
+        WITH candidates AS (
             SELECT
                 s.*,
-                ej.existing_join_numeric,
                 ROW_NUMBER() OVER (ORDER BY {order_by}) AS rn
             FROM {staging_table} s
-            LEFT JOIN existing_join ej ON {natural_join_condition}
             LEFT JOIN {target_table} t ON {current_join_condition}
             WHERE t.{columns['current_ind']} IS NULL
                OR s.{hash_col} != t.{hash_col}
@@ -319,11 +351,18 @@ def _column_type_for_column(
     if explicit:
         sanitized = explicit.split()[0]
         if engine.dialect.name == "mssql":
-            if sanitized.upper() == "TEXT":
-                return "NVARCHAR(4000)"
             return "NVARCHAR(4000)"
         return sanitized
     return _column_type_for_engine(engine)
+
+
+def _column_type_for_engine(engine: Engine) -> str:
+    dialect = engine.dialect.name
+    if dialect == "sqlite":
+        return "INTEGER"
+    if dialect == "mssql":
+        return "NVARCHAR(4000)"
+    return "TEXT"
 
 
 def _split_table_name(name: str) -> tuple[str | None, str]:
