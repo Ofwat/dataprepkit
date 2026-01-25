@@ -291,7 +291,8 @@ def _validate_row_growth(conn, target_table: str, previous_total: int) -> None:
 
 def _get_column_types(conn, target_table: str) -> Mapping[str, str]:
     inspector = inspect(conn.engine)
-    columns = inspector.get_columns(target_table)
+    schema, table = _split_table_name(target_table)
+    columns = inspector.get_columns(table, schema=schema)
     result: dict[str, str] = {}
     for column in columns:
         name = column["name"]
@@ -312,3 +313,12 @@ def _column_type_for_column(
             return "NVARCHAR(4000)"
         return sanitized
     return _column_type_for_engine(engine)
+
+
+def _split_table_name(name: str) -> tuple[str | None, str]:
+    if "." in name:
+        schema, table = name.split(".", 1)
+        schema = schema.strip("[]\"")
+        table = table.strip("[]\"")
+        return schema, table
+    return None, name
