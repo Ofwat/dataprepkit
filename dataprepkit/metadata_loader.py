@@ -460,6 +460,10 @@ def _system_column_type(column: str, engine: Engine) -> str:
         if dialect == "mssql":
             return "BIT"
         return "BOOLEAN"
+    if column == DEFAULT_SYSTEM_COLUMNS["row_hash"]:
+        if dialect == "mssql":
+            return "NVARCHAR(4000)"
+        return "TEXT"
     if dialect == "mssql":
         return "DATETIME2(3)"
     return "DATETIME"
