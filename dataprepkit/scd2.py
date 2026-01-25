@@ -305,5 +305,8 @@ def _column_type_for_column(
     key = column_name.lower()
     explicit = column_types.get(key)
     if explicit:
-        return explicit
+        sanitized = explicit.split()[0]
+        if engine.dialect.name == "mssql":
+            return "NVARCHAR(4000)"
+        return sanitized
     return _column_type_for_engine(engine)
