@@ -125,6 +125,17 @@ def _register_default_metadata() -> None:
     )
 
 
+def _default_csv_reader(filepath: str) -> pd.DataFrame:
+    return pd.read_csv(
+        filepath,
+        header=0,
+        encoding="utf-8",
+        dtype=str,
+        keep_default_na=False,
+        na_values=["NULL"],
+    )
+
+
 _register_default_metadata()
 
 
@@ -141,7 +152,7 @@ def run_dimension(
     metadata_name: str,
     *,
     override_df: pd.DataFrame | None = None,
-    csv_reader: callable = pd.read_csv,
+    csv_reader: callable = _default_csv_reader,
 ) -> pd.DataFrame:
     """
     Load a dimension based on metadata and apply SCD2 semantics.
