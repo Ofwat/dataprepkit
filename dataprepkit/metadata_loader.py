@@ -310,7 +310,7 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
     natural_specs = {
         **{col: spec for col, spec in metadata.natural_key_specs.items()},
         **{
-            col: ColumnSpec(type="TEXT", nullable=False)
+            col: ColumnSpec(type=None, nullable=False)
             for col in metadata.natural_key_cols
             if col not in metadata.natural_key_specs
         },

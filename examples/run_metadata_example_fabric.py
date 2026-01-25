@@ -30,6 +30,7 @@ FABRIC_FILEPATH = Path(__file__).resolve().parents[2] / "examples" / "dummy_dime
         {
             "target_table": FABRIC_TARGET_TABLE,
             "natural_key_cols": ["natural_key"],
+            "natural_key_specs": {"natural_key": {"type": "NVARCHAR(4000)"},},
             "data_columns": {
                 "data_column": {"type": "NVARCHAR(4000)"},
                 "source_system": {"type": "NVARCHAR(4000)", "nullable": True},
