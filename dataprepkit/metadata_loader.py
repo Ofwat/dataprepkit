@@ -293,18 +293,13 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
     if inspector.has_table(table_name, schema=schema_name):
         current_columns = {col["name"] for col in inspector.get_columns(table_name, schema=schema_name)}
         expected_columns = _expected_column_names(metadata)
-        if not expected_columns.issubset(current_columns):
-            raise RuntimeError(
-                f"Existing table '{metadata.target_table}' does not match metadata columns: "
-                f"expected {expected_columns}, found {current_columns}"
-            )
-        return
-        current_columns = {col["name"] for col in inspector.get_columns(metadata.target_table)}
-        expected_columns = _expected_column_names(metadata)
-        if not expected_columns.issubset(current_columns):
-            raise RuntimeError(
-                f"Existing table '{metadata.target_table}' does not match metadata columns: "
-                f"expected {expected_columns}, found {current_columns}"
+        missing = expected_columns - current_columns
+        if missing:
+            logger.warning(
+                "Existing table '%s' is missing metadata columns %s; schema handling=%s",
+                metadata.target_table,
+                missing,
+                metadata.schema_handling.mode,
             )
         return
     natural_specs = {

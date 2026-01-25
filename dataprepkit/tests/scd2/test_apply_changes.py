@@ -404,6 +404,63 @@ def test_reinsert_gets_new_join_numeric():
     assert reinserted.iloc[0]["join_numeric_key"] > 1
 
 
+def test_reinsert_after_delete_uses_new_join_numeric():
+    engine = create_engine("sqlite:///:memory:")
+    initial_rows = [
+        _build_initial_row("a1", 1, "a2"),
+        _build_initial_row("b1", 2, "b2"),
+    ]
+    _bootstrap_table(engine, initial_rows)
+
+    # Force an update to create a new join_numeric_key beyond the placeholder values.
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=pd.DataFrame(
+            [
+                {"join_key": "a1", "data_column": "a2"},
+                {"join_key": "b1", "data_column": "b2-modified"},
+            ]
+        ),
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    updated = _read_table(engine)
+    max_join_after_update = updated["join_numeric_key"].max()
+
+    # Delete the current b1 so we can reinsert it.
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=pd.DataFrame([{"join_key": "a1", "data_column": "a2"}]),
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    reinsert = pd.DataFrame([{"join_key": "b1", "data_column": "b2-reinsert"}])
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=reinsert,
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    final = _read_table(engine)
+    current = final.loc[(final.join_key == "b1") & (final.Current_Ind == 1)].iloc[0]
+    assert current["join_numeric_key"] > max_join_after_update
+
+
 def test_reject_duplicate_natural_keys():
     engine = create_engine("sqlite:///:memory:")
     _bootstrap_table(engine, [])
