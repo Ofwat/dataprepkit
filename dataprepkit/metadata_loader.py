@@ -312,6 +312,8 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
                 missing,
                 metadata.schema_handling.mode,
             )
+            if metadata.schema_handling.mode == "evolve":
+                _evolve_table_columns(engine, metadata, missing)
         return
     natural_specs = {
         **{col: spec for col, spec in metadata.natural_key_specs.items()},
@@ -367,6 +369,30 @@ def _expected_column_names(metadata: DimensionMetadata) -> set[str]:
     names.update(DEFAULT_SYSTEM_COLUMNS.values())
     return names
 
+def _column_spec_for_missing(name: str, metadata: DimensionMetadata) -> ColumnSpec | None:
+    if name in metadata.natural_key_specs:
+        return metadata.natural_key_specs[name]
+    if name in metadata.natural_key_cols:
+        return ColumnSpec(type=None, nullable=False)
+    return metadata.data_columns.get(name)
+
+
+def _evolve_table_columns(
+    engine: Engine,
+    metadata: DimensionMetadata,
+    missing_columns: set[str],
+) -> None:
+    dialect = engine.dialect.name
+    with engine.begin() as conn:
+        for column in sorted(missing_columns):
+            spec = _column_spec_for_missing(column, metadata)
+            if spec is None:
+                logger.warning("Cannot evolve column '%s': no spec defined", column)
+                continue
+            clause = _column_spec_clause(column, spec, engine)
+            add_sql = text(f"ALTER TABLE {metadata.target_table} ADD {clause}")
+            conn.execute(add_sql)
+            logger.info("Evolved table %s by adding column %s for mode=%s", metadata.target_table, column, metadata.schema_handling.mode)
 
 def _surrogate_column_clause(engine: Engine, name: str) -> str:
     dialect = engine.dialect.name
