@@ -57,3 +57,28 @@ def test_dimension_model_requires_columns():
             join_numeric_key="join_numeric_key",
             filepath="dummy.csv",
         )
+
+
+def test_schema_mismatch_raises(engine=None):
+    engine = engine or create_engine("sqlite:///:memory:")
+    # missing data_column to force mismatch
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dimension (
+                    surrogate_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                    natural_key TEXT NOT NULL,
+                    join_numeric_key INTEGER NOT NULL,
+                    row_hash TEXT NOT NULL,
+                    Insert_Date TEXT NOT NULL,
+                    Update_Date TEXT,
+                    Current_Ind INTEGER NOT NULL,
+                    Deleted_Ind INTEGER NOT NULL
+                )
+                """
+            )
+        )
+
+    with pytest.raises(RuntimeError):
+        run_dimension(engine, "dummy_dimension", override_df=pd.DataFrame([{"natural_key": "x", "data_column": "v"}]))

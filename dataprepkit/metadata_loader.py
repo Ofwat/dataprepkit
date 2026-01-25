@@ -289,6 +289,13 @@ def _column_spec_clause(name: str, spec: ColumnSpec, engine: Engine) -> str:
 def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
     inspector = inspect(engine)
     if inspector.has_table(metadata.target_table):
+        current_columns = {col["name"] for col in inspector.get_columns(metadata.target_table)}
+        expected_columns = _expected_column_names(metadata)
+        if not expected_columns.issubset(current_columns):
+            raise RuntimeError(
+                f"Existing table '{metadata.target_table}' does not match metadata columns: "
+                f"expected {expected_columns}, found {current_columns}"
+            )
         return
     natural_specs = {
         **{col: spec for col, spec in metadata.natural_key_specs.items()},
@@ -325,6 +332,14 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
     logger.info("Creating target table %s with DDL:\n%s", metadata.target_table, create_sql)
     with engine.begin() as conn:
         conn.execute(text(create_sql))
+
+
+def _expected_column_names(metadata: DimensionMetadata) -> set[str]:
+    names = {metadata.surrogate_key, metadata.join_numeric_key}
+    names.update(metadata.natural_key_cols)
+    names.update(metadata.data_columns.keys())
+    names.update(DEFAULT_SYSTEM_COLUMNS.values())
+    return names
 
 
 def _surrogate_column_clause(engine: Engine, name: str) -> str:
