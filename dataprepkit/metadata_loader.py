@@ -268,9 +268,10 @@ def run_dimension(
 
 def _get_target_columns(engine: Engine, table_name: str) -> set[str]:
     inspector = inspect(engine)
-    if not inspector.has_table(table_name):
+    schema, table = _split_table_name(table_name)
+    if not inspector.has_table(table, schema=schema):
         raise RuntimeError(f"Target table '{table_name}' does not exist.")
-    return {col["name"] for col in inspector.get_columns(table_name)}
+    return {col["name"] for col in inspector.get_columns(table, schema=schema)}
 
 
 def _column_spec_clause(name: str, spec: ColumnSpec, engine: Engine) -> str:
