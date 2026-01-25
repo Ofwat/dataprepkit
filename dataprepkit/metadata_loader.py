@@ -314,15 +314,31 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
         f"{DEFAULT_SYSTEM_COLUMNS['current_ind']} {system_type} NOT NULL",
         f"{DEFAULT_SYSTEM_COLUMNS['deleted_ind']} {system_type} NOT NULL",
     ]
+    surrogate_clause = _surrogate_column_clause(engine, metadata.surrogate_key)
+    join_numeric_clause = _join_numeric_clause(engine, metadata.join_numeric_key)
     create_sql = f"""
         CREATE TABLE {metadata.target_table} (
-            {metadata.surrogate_key} INTEGER PRIMARY KEY AUTOINCREMENT,
-            {metadata.join_numeric_key} INTEGER NOT NULL,
+            {surrogate_clause},
+            {join_numeric_clause},
             {', '.join(column_defs + system_columns)}
         )
         """
     with engine.begin() as conn:
         conn.execute(text(create_sql))
+
+
+def _surrogate_column_clause(engine: Engine, name: str) -> str:
+    dialect = engine.dialect.name
+    if dialect == "mssql":
+        return f"{name} BIGINT IDENTITY(1,1) PRIMARY KEY"
+    return f"{name} INTEGER PRIMARY KEY AUTOINCREMENT"
+
+
+def _join_numeric_clause(engine: Engine, name: str) -> str:
+    dialect = engine.dialect.name
+    if dialect == "mssql":
+        return f"{name} BIGINT NOT NULL"
+    return f"{name} INTEGER NOT NULL"
 
 
 def _resolve_safe_data_columns(
