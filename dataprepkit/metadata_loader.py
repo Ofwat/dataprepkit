@@ -90,7 +90,7 @@ def _normalize_column_specs(
                 normalized[name] = ColumnSpec(**spec)
         return normalized
     return {
-        name: ColumnSpec(type="TEXT", nullable=False)
+        name: ColumnSpec(type=None, nullable=False)
         for name in raw
     }
 
