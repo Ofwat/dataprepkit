@@ -9,28 +9,24 @@ from sqlalchemy import text
 from dataprepkit.helpers.connectors.fabric import create_engine_for_fabric, validate
 from dataprepkit.metadata_loader import register_metadata, run_dimension
 
+def _resolve_base_dir() -> Path:
+    try:
+        return Path(__file__).resolve().parents[2]
+    except NameError:
+        return Path.cwd()
+
 FABRIC_ENDPOINT = "byx2sqtktgzedbish3jdpk4dcm-qybek6cxp2yulbokgc3c6aie5u.database.fabric.microsoft.com"
 FABRIC_DATABASE = "mydb-8be33c12-255a-43ff-bead-2fbe027bf1ed"
-FABRIC_TARGET_TABLE = "[dbo].[dimension]"
+FABRIC_TARGET_TABLE = "blah4"
 FABRIC_METADATA_NAME = "fabric_demo_dimension"
-FABRIC_FILEPATH = Path(__file__).resolve().parents[2] / "examples" / "dummy_dimension.csv"
+FABRIC_FILEPATH = _resolve_base_dir() / "examples" / "dummy_dimension.csv"
 
-\n+\n+def _build_engine():
-    engine = create_engine_for_fabric(
-        FABRIC_ENDPOINT,
-        FABRIC_DATABASE,
-        preferred_driver="ODBC Driver 18 for SQL Server",
-    )
-    if not validate(engine):
-        raise RuntimeError("Fabric connection test failed.")
-    return engine
-\n+\n+def _register_metadata():
+def _register_metadata():
     register_metadata(
         FABRIC_METADATA_NAME,
         {
             "target_table": FABRIC_TARGET_TABLE,
             "natural_key_cols": ["natural_key"],
-            "natural_key_specs": {"natural_key": {"type": "NVARCHAR(4000)"},},
             "data_columns": {
                 "data_column": {"type": "NVARCHAR(4000)"},
                 "source_system": {"type": "NVARCHAR(4000)", "nullable": True},
@@ -41,8 +37,13 @@ FABRIC_FILEPATH = Path(__file__).resolve().parents[2] / "examples" / "dummy_dime
             "description": "Fabric metadata-driven SCD2 load",
         },
     )
-\n+\n+def main():
-    engine = _build_engine()
+
+def main():
+    engine = create_engine_for_fabric(
+        FABRIC_ENDPOINT,
+        FABRIC_DATABASE,
+        preferred_driver="ODBC Driver 18 for SQL Server",
+    )
     _register_metadata()
 
     incoming = pd.DataFrame(
@@ -58,5 +59,6 @@ FABRIC_FILEPATH = Path(__file__).resolve().parents[2] / "examples" / "dummy_dime
         rows = conn.execute(text(f"SELECT COUNT(*) FROM {FABRIC_TARGET_TABLE} WHERE Current_Ind = 1")).scalar()
         print("Current row count:", rows)
         print(pd.read_sql_table(FABRIC_TARGET_TABLE, conn).head())
-\n+\n+if __name__ == "__main__":
+
+if __name__ == "__main__":
     main()
