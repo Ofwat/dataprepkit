@@ -322,6 +322,7 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
             {', '.join(column_defs + system_columns)}
         )
         """
+    logger.info("Creating target table %s with DDL:\n%s", metadata.target_table, create_sql)
     with engine.begin() as conn:
         conn.execute(text(create_sql))
 
