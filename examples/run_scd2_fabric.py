@@ -35,6 +35,14 @@ def _build_engine():
     return engine
 
 
+def _ensure_join_numeric_key(df: pd.DataFrame) -> pd.DataFrame:
+    if "join_numeric_key" in df.columns and not df["join_numeric_key"].isna().any():
+        return df
+    result = df.copy()
+    result["join_numeric_key"] = range(1, len(result) + 1)
+    return result
+
+
 def _register_metadata():
     register_metadata(
         FABRIC_METADATA_NAME,
@@ -47,6 +55,7 @@ def _register_metadata():
             },
             "surrogate_key": "surrogate_key",
             "join_numeric_key": "join_numeric_key",
+            "processing_class": _ensure_join_numeric_key,
             "filepath": str(FABRIC_FILEPATH),
             "description": "Fabric metadata-driven SCD2 load",
         },
@@ -56,9 +65,9 @@ def _register_metadata():
 def _load_insert_batch() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"natural_key": "a1", "join_numeric_key": 1, "data_column": "a2", "source_system": "demo"},
-            {"natural_key": "b1", "join_numeric_key": 2, "data_column": "b2", "source_system": "demo"},
-            {"natural_key": "d1", "join_numeric_key": 4, "data_column": "d2", "source_system": "demo"},
+            {"natural_key": "a1", "data_column": "a2", "source_system": "demo"},
+            {"natural_key": "b1", "data_column": "b2", "source_system": "demo"},
+            {"natural_key": "d1", "data_column": "d2", "source_system": "demo"},
         ]
     )
 
@@ -66,8 +75,8 @@ def _load_insert_batch() -> pd.DataFrame:
 def _load_update_batch() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"natural_key": "a1", "join_numeric_key": 1, "data_column": "a2", "source_system": "demo"},
-            {"natural_key": "b1", "join_numeric_key": 2, "data_column": "updated", "source_system": "demo"},
+            {"natural_key": "a1", "data_column": "a2", "source_system": "demo"},
+            {"natural_key": "b1", "data_column": "updated", "source_system": "demo"},
         ]
     )
 
@@ -75,7 +84,7 @@ def _load_update_batch() -> pd.DataFrame:
 def _load_delete_batch() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"natural_key": "a1", "join_numeric_key": 1, "data_column": "a2", "source_system": "demo"},
+            {"natural_key": "a1", "data_column": "a2", "source_system": "demo"},
         ]
     )
 
@@ -83,9 +92,9 @@ def _load_delete_batch() -> pd.DataFrame:
 def _load_reinsert_batch() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"natural_key": "d1", "join_numeric_key": 4, "data_column": "d2", "source_system": "demo"},
-            {"natural_key": "a1", "join_numeric_key": 1, "data_column": "a2", "source_system": "demo"},
-            {"natural_key": "b1", "join_numeric_key": 2, "data_column": "updated", "source_system": "demo"},
+            {"natural_key": "d1", "data_column": "d2", "source_system": "demo"},
+            {"natural_key": "a1", "data_column": "a2", "source_system": "demo"},
+            {"natural_key": "b1", "data_column": "updated", "source_system": "demo"},
         ]
     )
 
