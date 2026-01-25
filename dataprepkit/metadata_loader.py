@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
-from dataprepkit.scd2 import apply_changes
+from dataprepkit.scd2 import DEFAULT_SYSTEM_COLUMNS, apply_changes
 
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,7 @@ class DimensionMetadata(BaseModel):
     name: str
     target_table: str
     natural_key_cols: Sequence[str]
+    natural_key_specs: Mapping[str, ColumnSpec] = Field(default_factory=dict[str, ColumnSpec])
     data_columns: Mapping[str, ColumnSpec]
     surrogate_key: str
     join_numeric_key: str
@@ -77,7 +78,7 @@ ROOT = Path(__file__).resolve().parents[1]
 METADATA_REGISTRY: Dict[str, DimensionMetadata] = {}
 
 
-def _normalize_data_columns(
+def _normalize_column_specs(
     raw: Sequence[str] | Mapping[str, Any]
 ) -> Mapping[str, ColumnSpec]:
     if isinstance(raw, Mapping):
@@ -88,15 +89,22 @@ def _normalize_data_columns(
             else:
                 normalized[name] = ColumnSpec(**spec)
         return normalized
-    return {name: ColumnSpec(type="TEXT") for name in raw}
+    return {
+        name: ColumnSpec(type="TEXT", nullable=False)
+        for name in raw
+    }
 
 
 def register_metadata(name: str, metadata: Dict[str, object]) -> None:
     """Register metadata using a JSON-like dictionary for familiarity with old_code.py."""
+    metadata = metadata.copy()
     if "data_columns" in metadata:
-        metadata = metadata.copy()
-        metadata["data_columns"] = _normalize_data_columns(
+        metadata["data_columns"] = _normalize_column_specs(
             metadata["data_columns"]  # type: ignore[arg-type]
+        )
+    if "natural_key_specs" in metadata:
+        metadata["natural_key_specs"] = _normalize_column_specs(
+            metadata["natural_key_specs"]  # type: ignore[arg-type]
         )
     METADATA_REGISTRY[name] = DimensionMetadata(name=name, **metadata)
 
@@ -155,6 +163,14 @@ def run_dimension(
         if override_df is not None
         else csv_reader(metadata.filepath)
     )
+    logger.info(
+        "Read raw snapshot for %s from %s (%d rows, columns=%s)",
+        metadata_name,
+        metadata.filepath,
+        len(incoming),
+        list(incoming.columns),
+    )
+    _ensure_target_table(engine, metadata)
     if metadata.column_renames:
         incoming = incoming.rename(columns=metadata.column_renames)
         if incoming.columns.duplicated().any():
@@ -167,7 +183,18 @@ def run_dimension(
             )
     if metadata.processing_class:
         incoming = metadata.processing_class(incoming)
+        logger.debug(
+            "Applied processing_class for %s; first rows:\n%s",
+            metadata_name,
+            incoming.head(),
+        )
     incoming = _apply_dependency_joins(incoming, metadata.dependencies, engine)
+    logger.debug(
+        "After dependency joins for %s: %d rows, columns=%s",
+        metadata_name,
+        len(incoming),
+        list(incoming.columns),
+    )
     execution_time = _capture_execution_time()
     logger.info(
         "Loaded dimension '%s' from %s (%d rows)",
@@ -244,6 +271,58 @@ def _get_target_columns(engine: Engine, table_name: str) -> set[str]:
     if not inspector.has_table(table_name):
         raise RuntimeError(f"Target table '{table_name}' does not exist.")
     return {col["name"] for col in inspector.get_columns(table_name)}
+
+
+def _column_spec_clause(name: str, spec: ColumnSpec, engine: Engine) -> str:
+    column_type = spec.type or _column_type_for_engine(engine)
+    constraints = []
+    if not spec.nullable:
+        constraints.append("NOT NULL")
+    if spec.unique:
+        constraints.append("UNIQUE")
+    if spec.default is not None:
+        constraints.append(f"DEFAULT {spec.default}")
+    constraint_sql = " ".join(constraints)
+    return f"{name} {column_type} {constraint_sql}".strip()
+
+
+def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
+    inspector = inspect(engine)
+    if inspector.has_table(metadata.target_table):
+        return
+    natural_specs = {
+        **{col: spec for col, spec in metadata.natural_key_specs.items()},
+        **{
+            col: ColumnSpec(type="TEXT", nullable=False)
+            for col in metadata.natural_key_cols
+            if col not in metadata.natural_key_specs
+        },
+    }
+    column_defs = [
+        _column_spec_clause(name, spec, engine)
+        for name, spec in natural_specs.items()
+    ]
+    column_defs += [
+        _column_spec_clause(name, spec, engine)
+        for name, spec in metadata.data_columns.items()
+    ]
+    system_type = _column_type_for_engine(engine)
+    system_columns = [
+        f"{DEFAULT_SYSTEM_COLUMNS['row_hash']} {system_type} NOT NULL",
+        f"{DEFAULT_SYSTEM_COLUMNS['insert_date']} {system_type} NOT NULL",
+        f"{DEFAULT_SYSTEM_COLUMNS['update_date']} {system_type}",
+        f"{DEFAULT_SYSTEM_COLUMNS['current_ind']} {system_type} NOT NULL",
+        f"{DEFAULT_SYSTEM_COLUMNS['deleted_ind']} {system_type} NOT NULL",
+    ]
+    create_sql = f"""
+        CREATE TABLE {metadata.target_table} (
+            {metadata.surrogate_key} INTEGER PRIMARY KEY AUTOINCREMENT,
+            {metadata.join_numeric_key} INTEGER NOT NULL,
+            {', '.join(column_defs + system_columns)}
+        )
+        """
+    with engine.begin() as conn:
+        conn.execute(text(create_sql))
 
 
 def _resolve_safe_data_columns(
