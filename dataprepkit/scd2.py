@@ -16,7 +16,7 @@ from typing import Mapping, Sequence
 
 import pandas as pd
 from sqlalchemy.engine import Engine
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 import uuid
 
@@ -75,7 +75,15 @@ def apply_changes(
 
     with engine.begin() as conn:
         pre_total = _count_rows(conn, target_table)
-        _create_staging_table(conn, staging_table, natural_key_cols, data_cols, hash_col)
+        column_types = _get_column_types(conn, target_table)
+        _create_staging_table(
+            conn,
+            staging_table,
+            natural_key_cols,
+            data_cols,
+            hash_col,
+            column_types,
+        )
         try:
             _insert_snapshot_rows(conn, staging_table, incoming_df, natural_key_cols, data_cols, hash_col)
             _apply_snapshot_to_target(
@@ -120,11 +128,23 @@ def _compute_row_hash(row: pd.Series, data_columns: Sequence[str]) -> str:
     return hashlib.sha256("|".join(tokens).encode("utf-8")).hexdigest()
 
 
-def _create_staging_table(conn, table_name, natural_key_cols, data_cols, hash_col):
+def _create_staging_table(
+    conn,
+    table_name,
+    natural_key_cols,
+    data_cols,
+    hash_col,
+    column_types: Mapping[str, str],
+):
     dialect = conn.engine.dialect.name
-    column_type = "NVARCHAR(4000)" if dialect == "mssql" else "TEXT"
-    column_defs = [f"{col} {column_type} NOT NULL" for col in natural_key_cols + data_cols]
-    column_defs.append(f"{hash_col} {column_type} NOT NULL")
+    column_defs = []
+    for col in natural_key_cols + data_cols:
+        column_defs.append(
+            f"{col} {_column_type_for_column(col, column_types, conn.engine)} NOT NULL"
+        )
+    column_defs.append(
+        f"{hash_col} {_column_type_for_column(hash_col, column_types, conn.engine)} NOT NULL"
+    )
     unique_clause = f", UNIQUE({', '.join(natural_key_cols)})" if natural_key_cols else ""
     create_sql = text(
         f"""
@@ -267,3 +287,23 @@ def _validate_row_growth(conn, target_table: str, previous_total: int) -> None:
         raise SCD2ValidationError(
             f"Row count validation failed: table shrank from {previous_total} to {latest}"
         )
+
+
+def _get_column_types(conn, target_table: str) -> Mapping[str, str]:
+    inspector = inspect(conn.engine)
+    columns = inspector.get_columns(target_table)
+    result: dict[str, str] = {}
+    for column in columns:
+        name = column["name"]
+        result[name.lower()] = str(column["type"])
+    return result
+
+
+def _column_type_for_column(
+    column_name: str, column_types: Mapping[str, str], engine: Engine
+) -> str:
+    key = column_name.lower()
+    explicit = column_types.get(key)
+    if explicit:
+        return explicit
+    return _column_type_for_engine(engine)
