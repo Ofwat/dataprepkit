@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -41,6 +42,9 @@ def _register_metadata():
         {
             "target_table": FABRIC_TARGET_TABLE,
             "natural_key_cols": ["natural_key"],
+            "natural_key_specs": {
+                "natural_key": {"type": "NVARCHAR(4000)", "nullable": False},
+            },
             "data_columns": {
                 "data_column": {"type": "NVARCHAR(4000)"},
                 "source_system": {"type": "NVARCHAR(4000)", "nullable": True},

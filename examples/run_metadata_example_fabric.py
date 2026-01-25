@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
-
-import pandas as pd
-from sqlalchemy import text
 
 from dataprepkit.helpers.connectors.fabric import create_engine_for_fabric, validate
 from dataprepkit.metadata_loader import register_metadata, run_dimension
+
 
 def _resolve_base_dir() -> Path:
     try:
@@ -15,17 +12,17 @@ def _resolve_base_dir() -> Path:
     except NameError:
         return Path.cwd()
 
+
 FABRIC_ENDPOINT = "byx2sqtktgzedbish3jdpk4dcm-qybek6cxp2yulbokgc3c6aie5u.database.fabric.microsoft.com"
 FABRIC_DATABASE = "mydb-8be33c12-255a-43ff-bead-2fbe027bf1ed"
-FABRIC_TARGET_TABLE = "blah4"
-FABRIC_METADATA_NAME = "fabric_demo_dimension"
-FABRIC_FILEPATH = _resolve_base_dir() / "examples" / "dummy_dimension.csv"
+FABRIC_LAKEHOUSE_PATH = "/lakehouse/data/dimensions.csv"
 
-def _register_metadata():
-    register_metadata(
-        FABRIC_METADATA_NAME,
-        {
-            "target_table": FABRIC_TARGET_TABLE,
+
+METADATA_MAP = [
+    {
+        "name": "fabric_demo_dimension",
+        "metadata": {
+            "target_table": "fabric_dim_demo",
             "natural_key_cols": ["natural_key"],
             "data_columns": {
                 "data_column": {"type": "NVARCHAR(4000)"},
@@ -33,32 +30,67 @@ def _register_metadata():
             },
             "surrogate_key": "surrogate_key",
             "join_numeric_key": "join_numeric_key",
-            "filepath": str(FABRIC_FILEPATH),
-            "description": "Fabric metadata-driven SCD2 load",
+            "filepath": FABRIC_LAKEHOUSE_PATH,
+            "description": "Fabric demo dimension loaded purely from lakehouse CSV",
         },
-    )
+    },
+    {
+        "name": "fabric_customer_dimension",
+        "metadata": {
+            "target_table": "fabric_dim_customer",
+            "natural_key_cols": ["natural_key"],
+            "natural_key_specs": {
+                "natural_key": {"type": "NVARCHAR(4000)", "nullable": False},
+            },
+            "data_columns": {
+                "customer_name": {"type": "NVARCHAR(4000)"},
+                "source_system": {"type": "NVARCHAR(4000)", "nullable": True},
+            },
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": FABRIC_LAKEHOUSE_PATH,
+            "description": "Fabric customer dimension referenced from the same CSV",
+        },
+    },
+]
 
-def main():
+
+def _build_engine():
     engine = create_engine_for_fabric(
         FABRIC_ENDPOINT,
         FABRIC_DATABASE,
         preferred_driver="ODBC Driver 18 for SQL Server",
     )
-    _register_metadata()
+    if not validate(engine):
+        raise RuntimeError("Fabric connection test failed.")
+    return engine
 
-    incoming = pd.DataFrame(
-        [
-            {"natural_key": "a1", "join_numeric_key": 1, "data_column": "a2", "source_system": "demo"},
-            {"natural_key": "b1", "join_numeric_key": 2, "data_column": "b2", "source_system": "demo"},
-        ]
+
+def _register_metadata():
+    for entry in METADATA_MAP:
+        register_metadata(entry["name"], entry["metadata"])
+
+
+def _lake_csv_reader(filepath: str) -> pd.DataFrame:
+    return pd.read_csv(
+        filepath,
+        header=0,
+        encoding="utf-8",
+        dtype=str,
+        keep_default_na=False,
+        na_values=["NULL"],
     )
 
-    run_dimension(engine, FABRIC_METADATA_NAME, override_df=incoming)
 
-    with engine.connect() as conn:
-        rows = conn.execute(text(f"SELECT COUNT(*) FROM {FABRIC_TARGET_TABLE} WHERE Current_Ind = 1")).scalar()
-        print("Current row count:", rows)
-        print(pd.read_sql_table(FABRIC_TARGET_TABLE, conn).head())
+def main():
+    engine = _build_engine()
+    _register_metadata()
+    for entry in METADATA_MAP:
+        name = entry["name"]
+        table = entry["metadata"]["target_table"]
+        run_dimension(engine, name, csv_reader=_lake_csv_reader)
+        print(f"Loaded dimension {name} into {table}")
+
 
 if __name__ == "__main__":
     main()
