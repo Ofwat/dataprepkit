@@ -6,8 +6,7 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from dataprepkit.scd2 import SCD2ValidationError
-
-from dataprepkit.scd2 import apply_changes
+from dataprepkit.scd2 import _insert_snapshot_rows, apply_changes
 
 
 SYSTEM_COLUMNS = {
@@ -552,3 +551,40 @@ def test_join_numeric_increases_for_each_insert():
         df.join_key.isin(["b1", "c1", "d1"]) & (df.Current_Ind == 1), :
     ].sort_values("join_key")
     assert inserted["join_numeric_key"].tolist() == [2, 3, 4]
+
+
+def test_insert_snapshot_rows_sanitizes_nan():
+    engine = create_engine("sqlite:///:memory:")
+    staging_table = "stage_nan"
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE stage_nan (
+                    natural_key TEXT NOT NULL,
+                    data_column TEXT,
+                    row_hash TEXT NOT NULL,
+                    existing_join_numeric REAL
+                )
+                """
+            )
+        )
+        incoming = pd.DataFrame(
+            {
+                "natural_key": ["nan-key"],
+                "data_column": ["payload"],
+                "row_hash": ["hash-payload"],
+                "existing_join_numeric": [float("nan")],
+            }
+        )
+        _insert_snapshot_rows(
+            conn,
+            staging_table,
+            incoming,
+            natural_key_cols=["natural_key"],
+            data_cols=["data_column"],
+            hash_col="row_hash",
+            extra_columns=["existing_join_numeric"],
+        )
+        result = pd.read_sql_table(staging_table, conn)
+        assert pd.isna(result.loc[0, "existing_join_numeric"])

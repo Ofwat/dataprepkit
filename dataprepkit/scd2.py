@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Mapping, Sequence
 
 import pandas as pd
+import math
 from sqlalchemy.engine import Engine
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
@@ -208,10 +209,17 @@ def _insert_snapshot_rows(
         VALUES ({', '.join(':' + col for col in columns)})
         """
     )
-    records = [
-        {col: row[col] for col in columns}
-        for _, row in incoming_df[columns].iterrows()
-    ]
+    def _sanitize(value):
+        if isinstance(value, float) and math.isnan(value):
+            return None
+        return value
+
+    records = []
+    for _, row in incoming_df[columns].iterrows():
+        record = {}
+        for col in columns:
+            record[col] = _sanitize(row[col])
+        records.append(record)
     try:
         if records:
             conn.execute(insert_sql, records)
