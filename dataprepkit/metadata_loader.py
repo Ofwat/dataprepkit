@@ -506,17 +506,26 @@ def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence
         """
     )
 
+    dialect = engine.dialect.name
+    top = "TOP 1 " if dialect == "mssql" else ""
+    limit = "" if dialect == "mssql" else " LIMIT 1"
     validation_checks = [
         (
-            text(f"SELECT 1 FROM {table} WHERE Current_Ind = 1 AND Deleted_Ind = 1 LIMIT 1"),
+            text(
+                f"SELECT {top}1 FROM {table} WHERE Current_Ind = 1 AND Deleted_Ind = 1{limit}"
+            ),
             "row has Current_Ind=1 and Deleted_Ind=1",
         ),
         (
-            text(f"SELECT 1 FROM {table} WHERE Current_Ind = 1 AND Update_Date IS NOT NULL LIMIT 1"),
+            text(
+                f"SELECT {top}1 FROM {table} WHERE Current_Ind = 1 AND Update_Date IS NOT NULL{limit}"
+            ),
             "current row has Update_Date not NULL",
         ),
         (
-            text(f"SELECT 1 FROM {table} WHERE Current_Ind = 0 AND Update_Date IS NULL LIMIT 1"),
+            text(
+                f"SELECT {top}1 FROM {table} WHERE Current_Ind = 0 AND Update_Date IS NULL{limit}"
+            ),
             "historical row missing Update_Date",
         ),
     ]
