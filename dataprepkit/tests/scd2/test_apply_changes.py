@@ -322,6 +322,45 @@ def test_join_numeric_reused_for_existing_key():
     assert current["join_numeric_key"] == 10
 
 
+def test_reinsert_grows_past_current_max():
+    engine = create_engine("sqlite:///:memory:")
+    initial_rows = [
+        _build_initial_row("z1", 10, "old"),
+        _build_initial_row("other", 20, "placeholder"),
+    ]
+    _bootstrap_table(engine, initial_rows)
+
+    # Remove z1 (delete scenario)
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=pd.DataFrame([{"join_key": "other", "join_numeric_key": 20, "data_column": "placeholder"}]),
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    # Reinsert z1 and expect join numeric to exceed previous max (20)
+    reinsert = pd.DataFrame([{"join_key": "z1", "join_numeric_key": 10, "data_column": "new"}])
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=reinsert,
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    final = _read_table(engine)
+    current = final.loc[(final.join_key == "z1") & (final.Current_Ind == 1)]
+    assert not current.empty
+    assert current.iloc[0]["join_numeric_key"] > 20
+
+
 def test_reinsert_gets_new_join_numeric():
     engine = create_engine("sqlite:///:memory:")
     initial_rows = [

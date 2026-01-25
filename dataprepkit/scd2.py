@@ -252,6 +252,7 @@ def _apply_snapshot_to_target(
                 {', '.join(natural_key_cols)},
                 MAX({join_numeric_key_col}) AS existing_join_numeric
             FROM {target_table}
+            WHERE {columns['deleted_ind']} = 0
             GROUP BY {', '.join(natural_key_cols)}
         ),
         candidates AS (
