@@ -288,7 +288,16 @@ def _column_spec_clause(name: str, spec: ColumnSpec, engine: Engine) -> str:
 
 def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
     inspector = inspect(engine)
-    if inspector.has_table(metadata.target_table):
+    schema_name, table_name = _split_table_name(metadata.target_table)
+    if inspector.has_table(table_name, schema=schema_name):
+        current_columns = {col["name"] for col in inspector.get_columns(table_name, schema=schema_name)}
+        expected_columns = _expected_column_names(metadata)
+        if not expected_columns.issubset(current_columns):
+            raise RuntimeError(
+                f"Existing table '{metadata.target_table}' does not match metadata columns: "
+                f"expected {expected_columns}, found {current_columns}"
+            )
+        return
         current_columns = {col["name"] for col in inspector.get_columns(metadata.target_table)}
         expected_columns = _expected_column_names(metadata)
         if not expected_columns.issubset(current_columns):
@@ -332,6 +341,16 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
     logger.info("Creating target table %s with DDL:\n%s", metadata.target_table, create_sql)
     with engine.begin() as conn:
         conn.execute(text(create_sql))
+
+
+def _split_table_name(name: str) -> tuple[str | None, str]:
+    if "." in name:
+        schema, table = name.split(".", 1)
+    else:
+        return None, name
+    schema = schema.strip("[]\"")
+    table = table.strip("[]\"")
+    return schema, table
 
 
 def _expected_column_names(metadata: DimensionMetadata) -> set[str]:
