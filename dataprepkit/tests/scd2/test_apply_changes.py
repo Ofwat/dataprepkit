@@ -298,6 +298,30 @@ def test_update_preserves_delete_flag_off():
     assert pd.notna(previous.iloc[0]["Update_Date"])
 
 
+def test_join_numeric_reused_for_existing_key():
+    engine = create_engine("sqlite:///:memory:")
+    initial_rows = [
+        _build_initial_row("x1", 10, "initial"),
+    ]
+    _bootstrap_table(engine, initial_rows)
+
+    incoming = pd.DataFrame([{"join_key": "x1", "data_column": "updated"}])
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=incoming,
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    final = _read_table(engine)
+    current = final.loc[(final.join_key == "x1") & (final.Current_Ind == 1)].iloc[0]
+    assert current["join_numeric_key"] == 10
+
+
 def test_reinsert_gets_new_join_numeric():
     engine = create_engine("sqlite:///:memory:")
     initial_rows = [

@@ -249,6 +249,7 @@ def _apply_snapshot_to_target(
         WITH candidates AS (
             SELECT
                 s.*,
+                t.{join_numeric_key_col} AS existing_join_numeric,
                 ROW_NUMBER() OVER (ORDER BY {order_by}) AS rn
             FROM {staging_table} s
             LEFT JOIN {target_table} t ON {current_join_condition}
@@ -259,7 +260,7 @@ def _apply_snapshot_to_target(
         SELECT
             {', '.join(f"s.{col}" for col in natural_key_cols)},
             {', '.join(f"s.{col}" for col in data_cols)},
-            :join_numeric_base + rn,
+            COALESCE(s.existing_join_numeric, :join_numeric_base + rn),
             s.{hash_col},
             :execution_time,
             NULL,
