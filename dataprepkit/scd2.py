@@ -244,14 +244,23 @@ def _apply_snapshot_to_target(
         else f"t.{columns['current_ind']} = 1"
     )
 
+    natural_join_condition = _build_join_condition("s", "ej", natural_key_cols)
     insert_sql = text(
         f"""
-        WITH candidates AS (
+        WITH existing_join AS (
+            SELECT
+                {', '.join(natural_key_cols)},
+                MAX({join_numeric_key_col}) AS existing_join_numeric
+            FROM {target_table}
+            GROUP BY {', '.join(natural_key_cols)}
+        ),
+        candidates AS (
             SELECT
                 s.*,
-                t.{join_numeric_key_col} AS existing_join_numeric,
+                ej.existing_join_numeric,
                 ROW_NUMBER() OVER (ORDER BY {order_by}) AS rn
             FROM {staging_table} s
+            LEFT JOIN existing_join ej ON {natural_join_condition}
             LEFT JOIN {target_table} t ON {current_join_condition}
             WHERE t.{columns['current_ind']} IS NULL
                OR s.{hash_col} != t.{hash_col}
