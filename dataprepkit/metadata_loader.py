@@ -306,13 +306,12 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
         _column_spec_clause(name, spec, engine)
         for name, spec in metadata.data_columns.items()
     ]
-    system_type = _column_type_for_engine(engine)
-    system_columns = [
-        f"{DEFAULT_SYSTEM_COLUMNS['row_hash']} {system_type} NOT NULL",
-        f"{DEFAULT_SYSTEM_COLUMNS['insert_date']} {system_type} NOT NULL",
-        f"{DEFAULT_SYSTEM_COLUMNS['update_date']} {system_type}",
-        f"{DEFAULT_SYSTEM_COLUMNS['current_ind']} {system_type} NOT NULL",
-        f"{DEFAULT_SYSTEM_COLUMNS['deleted_ind']} {system_type} NOT NULL",
+    column_defs += [
+        f"{DEFAULT_SYSTEM_COLUMNS['row_hash']} {_system_column_type(engine)} NOT NULL",
+        f"{DEFAULT_SYSTEM_COLUMNS['insert_date']} {_system_column_type(engine)} NOT NULL",
+        f"{DEFAULT_SYSTEM_COLUMNS['update_date']} {_system_column_type(engine)}",
+        f"{DEFAULT_SYSTEM_COLUMNS['current_ind']} {_system_column_type(engine)} NOT NULL",
+        f"{DEFAULT_SYSTEM_COLUMNS['deleted_ind']} {_system_column_type(engine)} NOT NULL",
     ]
     surrogate_clause = _surrogate_column_clause(engine, metadata.surrogate_key)
     join_numeric_clause = _join_numeric_clause(engine, metadata.join_numeric_key)
@@ -417,6 +416,13 @@ def _column_type_for_engine(engine: Engine) -> str:
     if dialect == "mssql":
         return "NVARCHAR(4000)"
     return "TEXT"
+
+
+def _system_column_type(engine: Engine) -> str:
+    dialect = engine.dialect.name
+    if dialect == "mssql":
+        return "DATETIME2(3)"
+    return "DATETIME"
 
 
 def _evolve_schema(engine: Engine, table_name: str, missing: Mapping[str, ColumnSpec]) -> None:
