@@ -306,7 +306,7 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
         _column_spec_clause(name, spec, engine)
         for name, spec in metadata.data_columns.items()
     ]
-    column_defs += [
+    system_columns = [
         f"{DEFAULT_SYSTEM_COLUMNS['row_hash']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['row_hash'], engine)} NOT NULL",
         f"{DEFAULT_SYSTEM_COLUMNS['insert_date']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['insert_date'], engine)} NOT NULL",
         f"{DEFAULT_SYSTEM_COLUMNS['update_date']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['update_date'], engine)}",
