@@ -35,13 +35,6 @@ def _build_engine():
     return engine
 
 
-def _ensure_join_numeric_key(df: pd.DataFrame) -> pd.DataFrame:
-    if "join_numeric_key" in df.columns and not df["join_numeric_key"].isna().any():
-        return df
-    result = df.copy()
-    result["join_numeric_key"] = range(1, len(result) + 1)
-    return result
-
 
 def _register_metadata():
     register_metadata(
@@ -55,7 +48,6 @@ def _register_metadata():
             },
             "surrogate_key": "surrogate_key",
             "join_numeric_key": "join_numeric_key",
-            "processing_class": _ensure_join_numeric_key,
             "filepath": str(FABRIC_FILEPATH),
             "description": "Fabric metadata-driven SCD2 load",
         },
