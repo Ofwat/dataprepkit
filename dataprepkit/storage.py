@@ -54,7 +54,7 @@ def _format_base_path(workspace_id: str, lakehouse_id: str) -> str:
 def mount_lakehouse(
     workspace_name: str,
     lakehouse_display_name: str,
-    mount_point: str = "/home/trusted-service-user/mounts/Source_Data",
+    mount_point: str | None = None,
     max_retries: int = 20,
     retry_delay: float = 1.0,
 ) -> LakehouseMount:
@@ -64,6 +64,7 @@ def mount_lakehouse(
 
     workspace_id, lakehouse_id = _resolve_ids(workspace_name, lakehouse_display_name)
     lakehouse_base_path = _format_base_path(workspace_id, lakehouse_id)
+    mount_point = mount_point or f"/home/trusted-service-user/mounts/{lakehouse_display_name.replace(' ', '_')}"
 
     last_error: Exception | None = None
     for _ in range(max_retries):
