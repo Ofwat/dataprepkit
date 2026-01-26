@@ -308,6 +308,7 @@ def _column_spec_clause(name: str, spec: ColumnSpec, engine: Engine) -> str:
 def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
     inspector = inspect(engine)
     schema_name, table_name = _split_table_name(metadata.target_table)
+    _ensure_schema_exists(engine, schema_name)
     if inspector.has_table(table_name, schema=schema_name):
         current_columns = {col["name"] for col in inspector.get_columns(table_name, schema=schema_name)}
         expected_columns = _expected_column_names(metadata)
@@ -367,6 +368,22 @@ def _split_table_name(name: str) -> tuple[str | None, str]:
     schema = schema.strip("[]\"")
     table = table.strip("[]\"")
     return schema, table
+
+
+def _ensure_schema_exists(engine: Engine, schema: str | None) -> None:
+    if not schema:
+        return
+    if engine.dialect.name != "mssql":
+        return
+    schema_safe = schema.replace("]", "]]")
+    create_sql = text(
+        f"""
+        IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = :schema)
+            EXEC('CREATE SCHEMA [{schema_safe}]')
+        """
+    )
+    with engine.begin() as conn:
+        conn.execute(create_sql, {"schema": schema})
 
 
 def _expected_column_names(metadata: DimensionMetadata) -> set[str]:
