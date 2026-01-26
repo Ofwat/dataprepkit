@@ -6,6 +6,7 @@ import os
 import time
 from pathlib import Path
 from dataclasses import dataclass
+import requests
 
 try:
     import sempy.fabric as fabric
@@ -13,8 +14,9 @@ except ImportError:  # pragma: no cover - Fabric only
     fabric = None  # type: ignore[assignment]
 
 try:
-    from notebookutils import fs
+    from notebookutils import credentials, fs
 except ImportError:  # pragma: no cover - Fabric only
+    credentials = None  # type: ignore[assignment]
     fs = None  # type: ignore[assignment]
 
 
@@ -91,4 +93,44 @@ def mount_lakehouse(
 
     raise StorageMountError(
         f"Failed to mount after {max_retries} attempts: {last_error}"
+    )
+
+
+def get_sql_db_endpoint(workspace_name: str, sql_db_display_name: str) -> dict[str, str]:
+    if credentials is None:
+        raise ImportError("notebookutils.credentials is required for Fabric SQL metadata.")
+    token = credentials.getToken("https://api.fabric.microsoft.com")
+
+    if fabric is None:
+        raise ImportError("sempy.fabric is required to list workspaces.")
+
+    ws_df = fabric.list_workspaces()
+    matches = ws_df[ws_df["Name"] == workspace_name]
+
+    if matches.empty:
+        raise ValueError(f"Workspace '{workspace_name}' not found")
+
+    workspace_id = matches["Id"].iloc[0]
+
+    url = f"https://api.fabric.microsoft.com/v1/workspaces/{workspace_id}/sqlDatabases"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    data = response.json()
+
+    for db in data.get("value", []):
+        if db.get("displayName") == sql_db_display_name:
+            props = db.get("properties", {})
+            return {
+                "databaseName": props.get("databaseName"),
+                "serverFqdn": props.get("serverFqdn"),
+                "id": db.get("id"),
+            }
+
+    raise ValueError(
+        f"SQL database '{sql_db_display_name}' not found in workspace '{workspace_name}'"
     )
