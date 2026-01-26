@@ -21,8 +21,9 @@ FABRIC_LAKEHOUSE_PATH = "/lakehouse/data/dimensions.csv"
 METADATA_MAP = [
     {
         "name": "fabric_demo_dimension",
+        "table": "fabric_dim_demo",
+        "schema": "dbo",
         "metadata": {
-            "target_table": "fabric_dim_demo",
             "natural_key_cols": ["natural_key"],
             "data_columns": {
                 "data_column": {"type": "NVARCHAR(4000)"},
@@ -36,8 +37,9 @@ METADATA_MAP = [
     },
     {
         "name": "fabric_customer_dimension",
+        "table": "fabric_dim_customer",
+        "schema": "dbo",
         "metadata": {
-            "target_table": "fabric_dim_customer",
             "natural_key_cols": ["natural_key"],
             "natural_key_specs": {
                 "natural_key": {"type": "NVARCHAR(4000)", "nullable": False},
@@ -68,7 +70,11 @@ def _build_engine():
 
 def _register_metadata():
     for entry in METADATA_MAP:
-        register_metadata(entry["name"], entry["metadata"])
+        schema = entry.get("schema")
+        table = entry["table"]
+        metadata = entry["metadata"].copy()
+        metadata["target_table"] = f"{schema}.{table}" if schema else table
+        register_metadata(entry["name"], metadata)
 
 
 def _lake_csv_reader(filepath: str) -> pd.DataFrame:
@@ -87,9 +93,11 @@ def main():
     _register_metadata()
     for entry in METADATA_MAP:
         name = entry["name"]
-        table = entry["metadata"]["target_table"]
+        schema = entry.get("schema")
+        table = entry["table"]
+        qualified = f"{schema}.{table}" if schema else table
         run_dimension(engine, name, csv_reader=_lake_csv_reader)
-        print(f"Loaded dimension {name} into {table}")
+        print(f"Loaded dimension {name} into {qualified}")
 
 
 if __name__ == "__main__":

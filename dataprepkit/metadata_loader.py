@@ -60,6 +60,7 @@ class DimensionMetadata(BaseModel):
     run_policy: RunPolicy = Field(default_factory=RunPolicy)
     processing_class: Callable[[pd.DataFrame], pd.DataFrame] | None = None
     archive_path: str | None = None
+    target_schema: str | None = None
 
     @field_validator("natural_key_cols")
     def must_define_key_columns(cls, value: Sequence[str]) -> Sequence[str]:
@@ -98,6 +99,7 @@ def _normalize_column_specs(
 def register_metadata(name: str, metadata: Dict[str, object]) -> None:
     """Register metadata using a JSON-like dictionary for familiarity with old_code.py."""
     metadata = metadata.copy()
+    schema = metadata.pop("target_schema", None)
     if "data_columns" in metadata:
         metadata["data_columns"] = _normalize_column_specs(
             metadata["data_columns"]  # type: ignore[arg-type]
@@ -106,6 +108,11 @@ def register_metadata(name: str, metadata: Dict[str, object]) -> None:
         metadata["natural_key_specs"] = _normalize_column_specs(
             metadata["natural_key_specs"]  # type: ignore[arg-type]
         )
+    if schema:
+        table = metadata.get("target_table") or ""
+        if schema and table and "." not in table:
+            metadata["target_table"] = f"{schema}.{table}"
+        metadata["target_schema"] = schema
     METADATA_REGISTRY[name] = DimensionMetadata(name=name, **metadata)
 
 
