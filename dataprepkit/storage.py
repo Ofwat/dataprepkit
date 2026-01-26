@@ -96,7 +96,14 @@ def mount_lakehouse(
     )
 
 
-def get_sql_db_endpoint(workspace_name: str, sql_db_display_name: str) -> dict[str, str]:
+@dataclass(frozen=True)
+class SQLDatabaseEndpoint:
+    database_name: str | None
+    server_fqdn: str | None
+    resource_id: str | None
+
+
+def get_sql_db_endpoint(workspace_name: str, sql_db_display_name: str) -> SQLDatabaseEndpoint:
     if credentials is None:
         raise ImportError("notebookutils.credentials is required for Fabric SQL metadata.")
     token = credentials.getToken("https://api.fabric.microsoft.com")
@@ -125,11 +132,11 @@ def get_sql_db_endpoint(workspace_name: str, sql_db_display_name: str) -> dict[s
     for db in data.get("value", []):
         if db.get("displayName") == sql_db_display_name:
             props = db.get("properties", {})
-            return {
-                "databaseName": props.get("databaseName"),
-                "serverFqdn": props.get("serverFqdn"),
-                "id": db.get("id"),
-            }
+            return SQLDatabaseEndpoint(
+                database_name=props.get("databaseName"),
+                server_fqdn=props.get("serverFqdn"),
+                resource_id=db.get("id"),
+            )
 
     raise ValueError(
         f"SQL database '{sql_db_display_name}' not found in workspace '{workspace_name}'"
