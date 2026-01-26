@@ -8,6 +8,7 @@ from sqlalchemy import text
 
 from dataprepkit.helpers.connectors.fabric import create_engine_for_fabric, validate
 from dataprepkit.metadata_loader import register_metadata, run_dimension
+from dataprepkit.storage import mount_lakehouse
 
 
 def _resolve_base_dir() -> Path:
@@ -22,6 +23,9 @@ FABRIC_DATABASE = "mydb-8be33c12-255a-43ff-bead-2fbe027bf1ed"
 FABRIC_TARGET_TABLE = "blah4"
 FABRIC_METADATA_NAME = "fabric_demo_dimension"
 FABRIC_FILEPATH = _resolve_base_dir() / "examples" / "dummy_dimension.csv"
+FABRIC_WORKSPACE = "Ocean_Data_PROD"
+FABRIC_LAKEHOUSE = "Dimension_Source_Data"
+FABRIC_MOUNT_POINT: Path | None = None
 
 
 def _build_engine():
@@ -36,7 +40,7 @@ def _build_engine():
 
 
 
-def _register_metadata():
+def _register_metadata(filepath: Path):
     register_metadata(
         FABRIC_METADATA_NAME,
         {
@@ -51,10 +55,26 @@ def _register_metadata():
             },
             "surrogate_key": "surrogate_key",
             "join_numeric_key": "join_numeric_key",
-            "filepath": str(FABRIC_FILEPATH),
+            "filepath": str(filepath),
             "description": "Fabric metadata-driven SCD2 load",
         },
     )
+
+
+def _default_mount_point() -> Path:
+    return FABRIC_MOUNT_POINT or Path.home() / "mounts" / FABRIC_LAKEHOUSE
+
+
+def _mount_source_path() -> Path | None:
+    if not FABRIC_WORKSPACE or not FABRIC_LAKEHOUSE:
+        return None
+    mount_point = _default_mount_point()
+    mount_info = mount_lakehouse(
+        FABRIC_WORKSPACE,
+        FABRIC_LAKEHOUSE,
+        str(mount_point),
+    )
+    return Path(mount_info.source_data_path) / "dimension.csv"
 
 
 def _load_insert_batch() -> pd.DataFrame:
@@ -108,7 +128,8 @@ def _run_batch(engine, label: str, incoming: pd.DataFrame) -> None:
 
 def main():
     engine = _build_engine()
-    _register_metadata()
+    source_path = _mount_source_path() or FABRIC_FILEPATH
+    _register_metadata(source_path)
 
     _run_batch(engine, "Insert phase", _load_insert_batch())
     _run_batch(engine, "Update phase", _load_update_batch())
