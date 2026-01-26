@@ -64,7 +64,7 @@ def mount_lakehouse(
 
     workspace_id, lakehouse_id = _resolve_ids(workspace_name, lakehouse_display_name)
     lakehouse_base_path = _format_base_path(workspace_id, lakehouse_id)
-    mount_point = mount_point or f"/home/trusted-service-user/mounts/{lakehouse_display_name.replace(' ', '_')}"
+    mount_point = mount_point or str(Path.home() / "mounts" / lakehouse_display_name.replace(" ", "_"))
 
     last_error: Exception | None = None
     for _ in range(max_retries):
