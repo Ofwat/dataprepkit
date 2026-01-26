@@ -47,12 +47,10 @@ def create_engine_for_fabric(
     driver = _get_driver(preferred_driver) if preferred_driver else _get_driver()
     token = credentials.getToken("https://database.windows.net/").encode("UTF-16-LE")
     attrs_before = struct.pack(f"<I{len(token)}s", len(token), token)
-    if ":" in endpoint:
-        host, parsed_port = endpoint.split(":", 1)
-        port = int(parsed_port)
-    else:
-        host = endpoint
-        port = 1433
+    host = endpoint
+    port = 1433
+    if endpoint.endswith(",1433"):
+        host = endpoint.rstrip(",1433")
     conn_str = _build_connection_string(driver, host, database, port)
     url = sa.engine.URL.create("mssql+pyodbc", query={"odbc_connect": conn_str})
     return sa.create_engine(
