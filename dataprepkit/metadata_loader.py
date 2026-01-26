@@ -258,6 +258,11 @@ def run_dimension(
             data_cols=safe_data_columns,
             join_numeric_key_col=metadata.join_numeric_key,
             surrogate_key_col=metadata.surrogate_key,
+            nullable_columns=[
+                name
+                for name, spec in metadata.data_columns.items()
+                if spec.nullable
+            ],
             execution_time=execution_time,
         )
     except Exception as exc:

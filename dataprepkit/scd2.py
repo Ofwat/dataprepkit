@@ -46,6 +46,7 @@ def apply_changes(
     join_numeric_key_col: str,
     surrogate_key_col: str,
     system_columns: Mapping[str, str] | None = None,
+    nullable_columns: Sequence[str] | None = None,
     execution_time: str | None = None,
 ) -> None:
     """
@@ -104,6 +105,7 @@ def apply_changes(
             hash_col,
             column_types,
             extra_columns=extra_columns,
+            nullable_data_cols=nullable_columns,
         )
         try:
             _insert_snapshot_rows(
@@ -165,12 +167,23 @@ def _create_staging_table(
     hash_col,
     column_types: Mapping[str, str],
     extra_columns: Sequence[str] | None = None,
+    nullable_data_cols: Sequence[str] | None = None,
 ):
     dialect = conn.engine.dialect.name
     column_defs = []
-    for col in natural_key_cols + data_cols:
+    nullable_set = set(nullable_data_cols or [])
+    for col in natural_key_cols:
         column_defs.append(
             f"{col} {_column_type_for_column(col, column_types, conn.engine)} NOT NULL"
+        )
+    for col in data_cols:
+        null_clause = (
+            ""
+            if col in nullable_set
+            else " NOT NULL"
+        )
+        column_defs.append(
+            f"{col} {_column_type_for_column(col, column_types, conn.engine)}{null_clause}"
         )
     column_defs.append(
         f"{hash_col} {_column_type_for_column(hash_col, column_types, conn.engine)} NOT NULL"
