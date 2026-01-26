@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, Mapping, Sequence, Literal
 
 import logging
 import pandas as pd
+import uuid
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
@@ -472,14 +473,14 @@ def _apply_dependency_joins(
         dep_df = dep_df.rename(columns=dict(zip(on_target, on_source)))
         dep_df = dep_df.rename(columns=select_aliases)
 
-        columns_to_keep = on_source + list(select_aliases.values())
-        dep_df = dep_df[columns_to_keep]
+        dep_map = {}
+        for _, row in dep_df.iterrows():
+            key = tuple(row[src] for src in on_source)
+            dep_map[key] = {alias: row[alias] for alias in select_aliases.values()}
 
-        incoming = incoming.merge(
-            dep_df.drop_duplicates(subset=on_source),
-            on=on_source,
-            how=dep.how,
-        )
+        key_series = incoming[on_source].apply(lambda row: tuple(row[src] for src in on_source), axis=1)
+        for alias in select_aliases.values():
+            incoming[alias] = key_series.map(lambda key: dep_map.get(key, {}).get(alias))
 
         if dep.on_missing == "error":
             missing_mask = incoming[list(select_aliases.values())].isna().any(axis=1)
