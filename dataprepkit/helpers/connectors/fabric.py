@@ -21,15 +21,15 @@ def _get_driver(preferred: Optional[str] = "ODBC Driver 18 for SQL Server") -> s
 
 def _build_connection_string(
     driver: str,
-    endpoint: str,
+    host: str,
     database: str,
-    port: int = 1433,
+    port: int,
     encrypt: bool = True,
     trust_certificate: bool = False,
 ) -> str:
     parts = [
         f"Driver={{{driver}}}",
-        f"Server={endpoint},{port}",
+        f"Server={host},{port}",
     ]
     if database:
         parts.append(f"Database={database}")
@@ -43,12 +43,17 @@ def create_engine_for_fabric(
     endpoint: str,
     database: str,
     preferred_driver: Optional[str] = None,
-    port: int = 1433,
 ) -> sa.engine.Engine:
     driver = _get_driver(preferred_driver) if preferred_driver else _get_driver()
     token = credentials.getToken("https://database.windows.net/").encode("UTF-16-LE")
     attrs_before = struct.pack(f"<I{len(token)}s", len(token), token)
-    conn_str = _build_connection_string(driver, endpoint, database, port)
+    if ":" in endpoint:
+        host, parsed_port = endpoint.split(":", 1)
+        port = int(parsed_port)
+    else:
+        host = endpoint
+        port = 1433
+    conn_str = _build_connection_string(driver, host, database, port)
     url = sa.engine.URL.create("mssql+pyodbc", query={"odbc_connect": conn_str})
     return sa.create_engine(
         url,
@@ -62,4 +67,3 @@ def validate(engine: sa.engine.Engine) -> bool:
     with engine.connect() as conn:
         result = conn.execute(text("SELECT 1 AS value"))
         return result.scalar() == 1
-
