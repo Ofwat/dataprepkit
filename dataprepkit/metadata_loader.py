@@ -452,26 +452,27 @@ def _apply_dependency_joins(
     engine: Engine,
 ) -> pd.DataFrame:
     for dep in dependencies:
-        dep_df = pd.read_sql_table(dep.table, con=engine, schema=dep.schema)
-        if dep.filter_target_current and "Current_Ind" in dep_df.columns:
-            dep_df = dep_df[dep_df["Current_Ind"] == 1]
-
-        if dep.where:
-            for expressions in dep.where.values():
-                for expr in expressions:
-                    dep_df = dep_df.query(expr)
-
+        schema, table = dep.schema, dep.table
+        table_ref = f"[{schema}].[{table}]" if schema else f"[{table}]"
         on_source = [relation["source"] for relation in dep.on]
         on_target = [relation["target"] for relation in dep.on]
-        rename_map = dict(zip(on_target, on_source))
-        dep_df = dep_df.rename(columns=rename_map)
+        select_aliases = dict(dep.select)
+        select_columns = on_target + list(select_aliases.keys())
+        quoted_cols = ", ".join(f"[{col}]" for col in select_columns)
+        where_clauses = []
+        if dep.filter_target_current:
+            where_clauses.append("[Current_Ind] = 1")
+        for expressions in dep.where.values():
+            where_clauses.extend(expressions)
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
-        select_aliases = {}
-        for target_col, alias in dep.select.items():
-            dep_df = dep_df.rename(columns={target_col: alias})
-            select_aliases[alias] = target_col
+        query = text(f"SELECT {quoted_cols} FROM {table_ref} {where_sql}")
+        dep_df = pd.read_sql_query(query, con=engine)
 
-        columns_to_keep = on_source + list(select_aliases.keys())
+        dep_df = dep_df.rename(columns=dict(zip(on_target, on_source)))
+        dep_df = dep_df.rename(columns=select_aliases)
+
+        columns_to_keep = on_source + list(select_aliases.values())
         dep_df = dep_df[columns_to_keep]
 
         incoming = incoming.merge(
@@ -481,7 +482,7 @@ def _apply_dependency_joins(
         )
 
         if dep.on_missing == "error":
-            missing_mask = incoming[select_aliases.keys()].isna().any(axis=1)
+            missing_mask = incoming[list(select_aliases.values())].isna().any(axis=1)
             if missing_mask.any():
                 raise RuntimeError(f"Dependency join {dep.table} produced missing values.")
 

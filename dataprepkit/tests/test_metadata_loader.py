@@ -79,6 +79,7 @@ def test_dependency_where_clause_filters_join():
         on=[{"source": "Service_Type_Cd", "target": "Service_Type_Cd"}],
         select={"Policy_Flag": "Policy_Flag"},
         where={"target": ["Current_Ind == 1"]},
+        on_missing="null",
     )
 
     joined = metadata_loader._apply_dependency_joins(
