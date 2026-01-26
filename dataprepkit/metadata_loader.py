@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, Mapping, Sequence, Literal
 import logging
 import pandas as pd
 import uuid
+import warnings
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
@@ -44,6 +45,7 @@ class ColumnSpec(BaseModel):
     nullable: bool = True
     unique: bool = False
     default: str | None = None
+    parse_format: str | None = None
 
 
 class DimensionMetadata(BaseModel):
@@ -500,8 +502,18 @@ def _apply_dependency_joins(
 def _cast_data_columns(incoming: pd.DataFrame, metadata: DimensionMetadata) -> pd.DataFrame:
     df = incoming.copy()
     for name, spec in metadata.data_columns.items():
-        if spec.type and "DATETIME" in spec.type.upper():
-            df[name] = pd.to_datetime(df[name], errors="coerce")
+            if spec.type and "DATETIME" in spec.type.upper():
+                fmt = spec.parse_format
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="Could not infer format, so each element will be parsed individually.*",
+                )
+                df[name] = pd.to_datetime(
+                    df[name],
+                    format=fmt,
+                    errors="coerce",
+                )
     return df
 
 
