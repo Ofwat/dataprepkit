@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, Mapping, Sequence, Literal
 import logging
 import pandas as pd
 import uuid
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
@@ -19,8 +19,9 @@ from dataprepkit.scd2 import DEFAULT_SYSTEM_COLUMNS, apply_changes
 logger = logging.getLogger(__name__)
 
 class DependencyJoin(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
     table: str
-    schema: str | None = None
+    schema_name: str | None = Field(default=None, alias="schema")
     how: Literal["left", "inner"] = "left"
     filter_target_current: bool = True
     on: Sequence[Mapping[str, str]]
@@ -458,7 +459,7 @@ def _apply_dependency_joins(
     engine: Engine,
 ) -> pd.DataFrame:
     for dep in dependencies:
-        schema, table = dep.schema, dep.table
+        schema, table = dep.schema_name, dep.table
         table_ref = f"[{schema}].[{table}]" if schema else f"[{table}]"
         on_source = [relation["source"] for relation in dep.on]
         on_target = [relation["target"] for relation in dep.on]
