@@ -19,11 +19,13 @@ logger = logging.getLogger(__name__)
 
 class DependencyJoin(BaseModel):
     table: str
+    schema: str | None = None
     how: Literal["left", "inner"] = "left"
     filter_target_current: bool = True
     on: Sequence[Mapping[str, str]]
     select: Mapping[str, str]
     on_missing: Literal["error", "null"] = "error"
+    where: Mapping[str, Sequence[str]] = Field(default_factory=dict)
 
 
 class SchemaHandling(BaseModel):
@@ -450,9 +452,14 @@ def _apply_dependency_joins(
     engine: Engine,
 ) -> pd.DataFrame:
     for dep in dependencies:
-        dep_df = pd.read_sql_table(dep.table, con=engine)
+        dep_df = pd.read_sql_table(dep.table, con=engine, schema=dep.schema)
         if dep.filter_target_current and "Current_Ind" in dep_df.columns:
             dep_df = dep_df[dep_df["Current_Ind"] == 1]
+
+        if dep.where:
+            for expressions in dep.where.values():
+                for expr in expressions:
+                    dep_df = dep_df.query(expr)
 
         on_source = [relation["source"] for relation in dep.on]
         on_target = [relation["target"] for relation in dep.on]
