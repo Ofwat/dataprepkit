@@ -96,3 +96,11 @@ Joins run inside SQL; pandas only reads the filtered result set, renames columns
 - Metadata entries are validated via Pydantic; missing keys raise errors.
 - Update metadata before rerunning `run_dimension` to maintain the registry.
 - The system is designed for declarative metadata so you can add dimensions by editing metadata, not code.
+
+## Helpers modules
+
+`dataprepkit.helpers` exposes reusable utilities:
+
+* `helpers/connectors/fabric.py` – Fabric SQL connection builder that handles MSI tokens, driver selection, and pooling. Use `create_engine_for_fabric(endpoint, database, preferred_driver, ...)` plus `validate(engine)` before running any metadata loads.
+* `helpers/storage.py` – Lakehouse/mount helpers (mounting, paths) used by the Fabric examples; consult it for paths when you need to read raw CSVs stored in your lakehouse.
+* Additional helper modules (e.g., connector-specific tooling) are referenced by the examples so you can replicate the Fabric patterns on other platforms.
