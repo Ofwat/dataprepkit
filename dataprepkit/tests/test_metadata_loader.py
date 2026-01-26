@@ -99,7 +99,11 @@ def test_cast_data_columns_parses_datetime():
             "target_table": "dimtable",
             "natural_key_cols": ["id"],
             "data_columns": {
-                "value": {"type": "DATETIME2(3)", "nullable": True}
+                "value": {
+                    "type": "DATETIME2(3)",
+                    "nullable": True,
+                    "parse_format": "%Y-%m-%dT%H:%M:%S.%fZ",
+                }
             },
             "surrogate_key": "surrogate",
             "join_numeric_key": "join_key",
