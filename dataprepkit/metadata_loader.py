@@ -100,6 +100,8 @@ def register_metadata(name: str, metadata: Dict[str, object]) -> None:
     """Register metadata using a JSON-like dictionary for familiarity with old_code.py."""
     metadata = metadata.copy()
     schema = metadata.pop("target_schema", None)
+    if schema is None:
+        schema = metadata.pop("schema", None)
     if "data_columns" in metadata:
         metadata["data_columns"] = _normalize_column_specs(
             metadata["data_columns"]  # type: ignore[arg-type]
