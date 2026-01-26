@@ -553,6 +553,50 @@ def test_join_numeric_increases_for_each_insert():
     assert inserted["join_numeric_key"].tolist() == [2, 3, 4]
 
 
+def test_nullable_data_column_allows_null_staging():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dimension (
+                    surrogate_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                    join_key TEXT NOT NULL,
+                    join_numeric_key INTEGER NOT NULL,
+                    data_column TEXT,
+                    row_hash TEXT NOT NULL,
+                    Insert_Date TEXT NOT NULL,
+                    Update_Date TEXT,
+                    Current_Ind INTEGER NOT NULL,
+                    Deleted_Ind INTEGER NOT NULL
+                )
+                """
+            )
+        )
+
+    incoming = pd.DataFrame(
+        [
+            {"join_key": "a", "data_column": None},
+        ]
+    )
+
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=incoming,
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+        nullable_columns=["data_column"],
+    )
+
+    result = pd.read_sql_table("dimension", con=engine)
+    assert result.shape[0] == 1
+    assert pd.isna(result.iloc[0]["data_column"])
+
+
 def test_insert_snapshot_rows_sanitizes_nan():
     engine = create_engine("sqlite:///:memory:")
     staging_table = "stage_nan"
