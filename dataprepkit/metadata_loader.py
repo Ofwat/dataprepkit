@@ -194,6 +194,7 @@ def run_dimension(
         len(incoming),
         list(incoming.columns),
     )
+    incoming = _cast_data_columns(incoming, metadata)
     _ensure_target_table(engine, metadata)
     if metadata.column_renames:
         incoming = incoming.rename(columns=metadata.column_renames)
@@ -494,6 +495,14 @@ def _apply_dependency_joins(
                 raise RuntimeError(f"Dependency join {dep.table} produced missing values.")
 
     return incoming
+
+
+def _cast_data_columns(incoming: pd.DataFrame, metadata: DimensionMetadata) -> pd.DataFrame:
+    df = incoming.copy()
+    for name, spec in metadata.data_columns.items():
+        if spec.type and "DATETIME" in spec.type.upper():
+            df[name] = pd.to_datetime(df[name], errors="coerce")
+    return df
 
 
 def _handle_schema_drift(

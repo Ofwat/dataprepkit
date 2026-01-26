@@ -89,3 +89,26 @@ def test_dependency_where_clause_filters_join():
     assert metadata_loader.pd.isna(
         joined.loc[joined.Service_Type_Cd == "S2", "Policy_Flag"]
     ).iloc[0]
+
+
+def test_cast_data_columns_parses_datetime():
+    metadata_loader.METADATA_REGISTRY.pop("cast_test", None)
+    metadata_loader.register_metadata(
+        "cast_test",
+        {
+            "target_table": "dimtable",
+            "natural_key_cols": ["id"],
+            "data_columns": {
+                "value": {"type": "DATETIME2(3)", "nullable": True}
+            },
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+    )
+
+    metadata = metadata_loader.get_metadata("cast_test")
+    incoming = metadata_loader.pd.DataFrame({"value": ["2026-01-01T12:00:00.000Z"]})
+    casted = metadata_loader._cast_data_columns(incoming, metadata)
+    assert metadata_loader.pd.api.types.is_datetime64_any_dtype(casted["value"])
+    metadata_loader.METADATA_REGISTRY.pop("cast_test", None)
