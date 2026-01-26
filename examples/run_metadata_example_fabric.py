@@ -4,6 +4,7 @@ from pathlib import Path
 
 from dataprepkit.helpers.connectors.fabric import create_engine_for_fabric, validate
 from dataprepkit.metadata_loader import register_metadata, run_dimension
+from dataprepkit.storage import get_sql_db_endpoint
 
 
 def _resolve_base_dir() -> Path:
@@ -13,8 +14,8 @@ def _resolve_base_dir() -> Path:
         return Path.cwd()
 
 
-FABRIC_ENDPOINT = "byx2sqtktgzedbish3jdpk4dcm-qybek6cxp2yulbokgc3c6aie5u.database.fabric.microsoft.com"
-FABRIC_DATABASE = "mydb-8be33c12-255a-43ff-bead-2fbe027bf1ed"
+FABRIC_WORKSPACE = "Ocean_Data_PROD"
+FABRIC_SQL_DB = "mydb-8be33c12-255a-43ff-bead-2fbe027bf1ed"
 FABRIC_LAKEHOUSE_PATH = "/lakehouse/data/dimensions.csv"
 
 
@@ -58,9 +59,12 @@ METADATA_MAP = [
 
 
 def _build_engine():
+    endpoint = get_sql_db_endpoint(FABRIC_WORKSPACE, FABRIC_SQL_DB)
+    if not endpoint.server_fqdn or not endpoint.database_name:
+        raise RuntimeError("Failed to resolve Fabric SQL endpoint.")
     engine = create_engine_for_fabric(
-        FABRIC_ENDPOINT,
-        FABRIC_DATABASE,
+        endpoint.server_fqdn,
+        endpoint.database_name,
         preferred_driver="ODBC Driver 18 for SQL Server",
     )
     if not validate(engine):

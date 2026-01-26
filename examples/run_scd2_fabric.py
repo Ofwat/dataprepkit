@@ -8,7 +8,7 @@ from sqlalchemy import text
 
 from dataprepkit.helpers.connectors.fabric import create_engine_for_fabric, validate
 from dataprepkit.metadata_loader import register_metadata, run_dimension
-from dataprepkit.storage import mount_lakehouse
+from dataprepkit.storage import get_sql_db_endpoint, mount_lakehouse
 
 
 def _resolve_base_dir() -> Path:
@@ -18,20 +18,22 @@ def _resolve_base_dir() -> Path:
         return Path.cwd()
 
 
-FABRIC_ENDPOINT = "byx2sqtktgzedbish3jdpk4dcm-qybek6cxp2yulbokgc3c6aie5u.database.fabric.microsoft.com"
-FABRIC_DATABASE = "mydb-8be33c12-255a-43ff-bead-2fbe027bf1ed"
 FABRIC_TARGET_TABLE = "blah4"
 FABRIC_METADATA_NAME = "fabric_demo_dimension"
 FABRIC_FILEPATH = _resolve_base_dir() / "examples" / "dummy_dimension.csv"
 FABRIC_WORKSPACE = "Ocean_Data_PROD"
 FABRIC_LAKEHOUSE = "Dimension_Source_Data"
 FABRIC_MOUNT_POINT: Path | None = None
+FABRIC_SQL_DB = "mydb-8be33c12-255a-43ff-bead-2fbe027bf1ed"
 
 
 def _build_engine():
+    endpoint = get_sql_db_endpoint(FABRIC_WORKSPACE, FABRIC_SQL_DB)
+    if not endpoint.server_fqdn or not endpoint.database_name:
+        raise RuntimeError("Failed to resolve Fabric SQL endpoint.")
     engine = create_engine_for_fabric(
-        FABRIC_ENDPOINT,
-        FABRIC_DATABASE,
+        endpoint.server_fqdn,
+        endpoint.database_name,
         preferred_driver="ODBC Driver 18 for SQL Server",
     )
     if not validate(engine):
