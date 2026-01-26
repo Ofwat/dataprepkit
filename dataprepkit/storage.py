@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 
@@ -65,6 +66,7 @@ def mount_lakehouse(
     workspace_id, lakehouse_id = _resolve_ids(workspace_name, lakehouse_display_name)
     lakehouse_base_path = _format_base_path(workspace_id, lakehouse_id)
     mount_point = mount_point or str(Path.home() / "mounts" / lakehouse_display_name.replace(" ", "_"))
+    os.makedirs(os.path.dirname(mount_point), exist_ok=True)
 
     last_error: Exception | None = None
     for _ in range(max_retries):
