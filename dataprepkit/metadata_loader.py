@@ -502,8 +502,8 @@ def _apply_dependency_joins(
 def _cast_data_columns(incoming: pd.DataFrame, metadata: DimensionMetadata) -> pd.DataFrame:
     df = incoming.copy()
     for name, spec in metadata.data_columns.items():
-            if spec.type and "DATETIME" in spec.type.upper():
-                fmt = spec.parse_format
+        if spec.type and "DATETIME" in spec.type.upper():
+            fmt = spec.parse_format
             with warnings.catch_warnings():
                 warnings.filterwarnings(
                     "ignore",
