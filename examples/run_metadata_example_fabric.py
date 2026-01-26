@@ -15,7 +15,6 @@ def _resolve_base_dir() -> Path:
 
 
 FABRIC_WORKSPACE = "Ocean_Data_PROD"
-FABRIC_SQL_DB = "mydb-8be33c12-255a-43ff-bead-2fbe027bf1ed"
 FABRIC_LAKEHOUSE_PATH = "/lakehouse/data/dimensions.csv"
 
 
@@ -59,7 +58,7 @@ METADATA_MAP = [
 
 
 def _build_engine():
-    endpoint = get_sql_db_endpoint(FABRIC_WORKSPACE, FABRIC_SQL_DB)
+    endpoint = get_sql_db_endpoint(FABRIC_WORKSPACE, "mydb-8be33c12-255a-43ff-bead-2fbe027bf1ed")
     if not endpoint.server_fqdn or not endpoint.database_name:
         raise RuntimeError("Failed to resolve Fabric SQL endpoint.")
     engine = create_engine_for_fabric(
