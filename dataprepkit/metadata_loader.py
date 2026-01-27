@@ -15,6 +15,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 from dataprepkit.scd2 import DEFAULT_SYSTEM_COLUMNS, apply_changes
+from dataprepkit.storage import archive_dataframe_path
 
 
 logger = logging.getLogger(__name__)
@@ -106,6 +107,14 @@ def register_metadata(name: str, metadata: Dict[str, object]) -> None:
     """Register metadata using a JSON-like dictionary for familiarity with old_code.py."""
     metadata = metadata.copy()
     schema = metadata.pop("target_schema", None)
+    archive_config = metadata.pop("archive_config", None)
+    if archive_config:
+        path_info = archive_dataframe_path(
+            table_name=metadata.get("target_table", ""),
+            batch_id=archive_config.get("batch_id"),
+            base_dir=archive_config.get("base_dir", ""),
+        )
+        metadata["archive_path"] = path_info.file_path
     if schema is None:
         schema = metadata.pop("schema", None)
     if "data_columns" in metadata:
