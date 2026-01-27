@@ -28,6 +28,7 @@ setup(
         "pyodbc",
         "pydantic>=1.10.0",
         "pyarrow",
+        "openpyxl",
     ],
     extras_require={
         "dev": [
