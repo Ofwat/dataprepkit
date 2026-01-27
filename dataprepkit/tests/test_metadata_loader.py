@@ -139,3 +139,28 @@ def test_register_metadata_applies_archive_defaults(tmp_path):
     casted = metadata_loader._cast_data_columns(incoming, metadata)
     assert metadata_loader.pd.api.types.is_datetime64_any_dtype(casted["value"])
     metadata_loader.METADATA_REGISTRY.pop("cast_test", None)
+
+
+def test_default_csv_reader_handles_csv(tmp_path):
+    data = metadata_loader.pd.DataFrame({"col": ["a", "b"]})
+    src = tmp_path / "data.csv"
+    data.to_csv(src, index=False)
+
+    result = metadata_loader._default_csv_reader(str(src))
+    assert metadata_loader.pd.api.types.is_string_dtype(result["col"])
+    assert result["col"].tolist() == ["a", "b"]
+
+
+def test_default_csv_reader_handles_excel(tmp_path):
+    try:
+        import openpyxl  # noqa: F401
+    except ImportError:
+        pytest.skip("openpyxl is required to test Excel input")
+
+    data = metadata_loader.pd.DataFrame({"col": ["x", "y"], "num": [1, 2]})
+    src = tmp_path / "data.xlsx"
+    data.to_excel(src, index=False)
+
+    result = metadata_loader._default_csv_reader(str(src))
+    assert list(result["col"]) == ["x", "y"]
+    assert list(result["num"]) == [1, 2]

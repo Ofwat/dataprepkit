@@ -165,7 +165,26 @@ def _register_default_metadata() -> None:
     )
 
 
+def _read_excel_one_sheet_openpyxl(filepath: str) -> pd.DataFrame:
+    from openpyxl import load_workbook
+
+    wb = load_workbook(filepath, data_only=True, read_only=True)
+
+    if len(wb.sheetnames) != 1:
+        raise ValueError(f"Expected exactly one sheet, found {len(wb.sheetnames)}")
+
+    ws = wb[wb.sheetnames[0]]
+
+    rows = list(ws.iter_rows(values_only=True))
+    header, data = rows[0], rows[1:]
+
+    return pd.DataFrame(data, columns=header)
+
+
 def _default_csv_reader(filepath: str) -> pd.DataFrame:
+    if filepath.lower().endswith(".xlsx"):
+        return _read_excel_one_sheet_openpyxl(filepath)
+
     return pd.read_csv(
         filepath,
         header=0,
