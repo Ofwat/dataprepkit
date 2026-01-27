@@ -141,3 +141,26 @@ def get_sql_db_endpoint(workspace_name: str, sql_db_display_name: str) -> SQLDat
     raise ValueError(
         f"SQL database '{sql_db_display_name}' not found in workspace '{workspace_name}'"
     )
+
+
+def archive_dataframe_path(table_name: str, batch_id: str, base_dir: str) -> dict[str, str]:
+    """Build the archive path metadata and filename for a DataFrame."""
+    if not table_name:
+        raise ValueError("table_name must be provided")
+    if not batch_id:
+        raise ValueError("batch_id must be provided")
+    if not base_dir:
+        raise ValueError("base_dir must be provided")
+
+    table_dir = os.path.join(base_dir, table_name)
+    os.makedirs(table_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%dT%H%M%S%f")[:-3]
+    filename = f"{table_name}__{timestamp}__BATCH{batch_id}.parquet"
+    file_path = os.path.join(table_dir, filename)
+
+    return {
+        "table": table_name,
+        "batch_id": batch_id,
+        "timestamp": timestamp,
+        "file_path": file_path,
+    }
