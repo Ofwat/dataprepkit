@@ -16,6 +16,8 @@ def _resolve_base_dir() -> Path:
 
 FABRIC_WORKSPACE = "Ocean_Data_PROD"
 FABRIC_LAKEHOUSE_PATH = "/lakehouse/data/dimensions.csv"
+ARCHIVE_BASE_DIR = "/lakehouse/data/archives"
+ARCHIVE_BATCH_ID = "fabric-demo-batch"
 
 
 METADATA_MAP = [
@@ -72,12 +74,16 @@ def _build_engine():
 
 
 def _register_metadata():
+    cfg = {
+        "archive_base_dir": ARCHIVE_BASE_DIR,
+        "archive_batch_id": ARCHIVE_BATCH_ID,
+    }
     for entry in METADATA_MAP:
         schema = entry.get("schema")
         table = entry["table"]
         metadata = entry["metadata"].copy()
         metadata["target_table"] = f"{schema}.{table}" if schema else table
-        register_metadata(entry["name"], metadata)
+        register_metadata(entry["name"], metadata, **cfg)
 
 
 def _lake_csv_reader(filepath: str) -> pd.DataFrame:
