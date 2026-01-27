@@ -47,6 +47,7 @@ class ColumnSpec(BaseModel):
     unique: bool = False
     default: str | None = None
     parse_format: str | None = None
+    dayfirst: bool = False
 
 
 class DimensionMetadata(BaseModel):
@@ -561,6 +562,7 @@ def _cast_data_columns(incoming: pd.DataFrame, metadata: DimensionMetadata) -> p
                     df[name],
                     format=fmt,
                     errors="coerce",
+                    dayfirst=spec.dayfirst,
                 )
     return df
 
