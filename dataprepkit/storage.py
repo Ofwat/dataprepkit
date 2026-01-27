@@ -143,7 +143,15 @@ def get_sql_db_endpoint(workspace_name: str, sql_db_display_name: str) -> SQLDat
     )
 
 
-def archive_dataframe_path(table_name: str, batch_id: str, base_dir: str) -> dict[str, str]:
+@dataclass(frozen=True)
+class ArchivePath:
+    table: str
+    batch_id: str
+    timestamp: str
+    file_path: str
+
+
+def archive_dataframe_path(table_name: str, batch_id: str, base_dir: str) -> ArchivePath:
     """Build the archive path metadata and filename for a DataFrame."""
     if not table_name:
         raise ValueError("table_name must be provided")
@@ -158,9 +166,9 @@ def archive_dataframe_path(table_name: str, batch_id: str, base_dir: str) -> dic
     filename = f"{table_name}__{timestamp}__BATCH{batch_id}.parquet"
     file_path = os.path.join(table_dir, filename)
 
-    return {
-        "table": table_name,
-        "batch_id": batch_id,
-        "timestamp": timestamp,
-        "file_path": file_path,
-    }
+    return ArchivePath(
+        table=table_name,
+        batch_id=batch_id,
+        timestamp=timestamp,
+        file_path=file_path,
+    )
