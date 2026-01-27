@@ -164,3 +164,5 @@ def test_default_csv_reader_handles_excel(tmp_path):
     result = metadata_loader._default_csv_reader(str(src))
     assert list(result["col"]) == ["x", "y"]
     assert list(result["num"]) == [1, 2]
+    result_with_missing = metadata_loader._default_csv_reader(str(src))
+    assert metadata_loader.pd.isna(result_with_missing["col"]).sum() == 0

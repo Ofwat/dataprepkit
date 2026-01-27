@@ -178,7 +178,9 @@ def _read_excel_one_sheet_openpyxl(filepath: str) -> pd.DataFrame:
     rows = list(ws.iter_rows(values_only=True))
     header, data = rows[0], rows[1:]
 
-    return pd.DataFrame(data, columns=header)
+    df = pd.DataFrame(data, columns=header)
+    df = df.fillna("")
+    return df
 
 
 def _default_csv_reader(filepath: str) -> pd.DataFrame:
