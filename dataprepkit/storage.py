@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass
-import requests
+try:
+    import requests
+except ImportError:  # pragma: no cover - optional dependency
+    requests = None  # type: ignore[assignment]
 
 try:
     import sempy.fabric as fabric
@@ -110,6 +114,9 @@ def get_sql_db_endpoint(workspace_name: str, sql_db_display_name: str) -> SQLDat
 
     if fabric is None:
         raise ImportError("sempy.fabric is required to list workspaces.")
+
+    if requests is None:
+        raise ImportError("requests is required to call the Fabric SQL metadata API.")
 
     ws_df = fabric.list_workspaces()
     matches = ws_df[ws_df["Name"] == workspace_name]
