@@ -272,7 +272,7 @@ def _apply_snapshot_to_target(
           )
         """
     )
-    conn.execute(delete_sql, {"execution_time": execution_time})
+    delete_result = conn.execute(delete_sql, {"execution_time": execution_time})
 
     update_sql = text(
         f"""
@@ -288,7 +288,7 @@ def _apply_snapshot_to_target(
           )
         """
     )
-    conn.execute(update_sql, {"execution_time": execution_time})
+    update_result = conn.execute(update_sql, {"execution_time": execution_time})
 
     max_join_sql = text(f"SELECT COALESCE(MAX({join_numeric_key_col}), 0) FROM {target_table}")
     max_join_numeric = conn.execute(max_join_sql).scalar() or 0
@@ -336,11 +336,15 @@ def _apply_snapshot_to_target(
         """
     )
 
-    result = conn.execute(
+    insert_result = conn.execute(
         insert_sql,
         {"join_numeric_base": max_join_numeric, "execution_time": execution_time},
     )
-    return result.rowcount is not None and result.rowcount > 0
+    return (
+        (delete_result.rowcount or 0) > 0
+        or (update_result.rowcount or 0) > 0
+        or (insert_result.rowcount or 0) > 0
+    )
 
 
 def _count_rows(conn, target_table: str) -> int:

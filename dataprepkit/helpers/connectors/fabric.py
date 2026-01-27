@@ -4,8 +4,16 @@ from typing import Optional
 
 import pyodbc
 import sqlalchemy as sa
-from notebookutils import credentials
 from sqlalchemy import text
+try:
+    from notebookutils import credentials
+except ImportError:  # pragma: no cover - optional dependency for Fabric environments
+    class _MissingCredentials:
+        @staticmethod
+        def getToken(_):
+            raise RuntimeError("Notebook credentials are unavailable")
+
+    credentials = _MissingCredentials()
 
 LOG = logging.getLogger(__name__)
 
@@ -46,7 +54,11 @@ def create_engine_for_fabric(
     port: int | None = None,
 ) -> sa.engine.Engine:
     driver = _get_driver(preferred_driver) if preferred_driver else _get_driver()
-    token = credentials.getToken("https://database.windows.net/").encode("UTF-16-LE")
+    if credentials is None:
+        raise RuntimeError("notebookutils.credentials is unavailable in this environment")
+    token = credentials.getToken("https://database.windows.net/")
+    if isinstance(token, str):
+        token = token.encode("UTF-16-LE")
     attrs_before = struct.pack(f"<I{len(token)}s", len(token), token)
     host = endpoint
     if "," in endpoint:
