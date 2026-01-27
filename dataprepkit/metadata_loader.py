@@ -41,6 +41,9 @@ class RunPolicy(BaseModel):
     on_dependency_failure: Literal["skip_dependents", "abort"] = "skip_dependents"
 
 
+DEFAULT_DATETIME_INPUT_FORMAT = "%d/%m/%Y %H:%M"
+
+
 class ColumnSpec(BaseModel):
     type: str | None = None
     nullable: bool = True
@@ -552,7 +555,7 @@ def _cast_data_columns(incoming: pd.DataFrame, metadata: DimensionMetadata) -> p
     df = incoming.copy()
     for name, spec in metadata.data_columns.items():
         if spec.type and "DATETIME" in spec.type.upper():
-            fmt = spec.parse_format
+            fmt = spec.parse_format or DEFAULT_DATETIME_INPUT_FORMAT
             with warnings.catch_warnings():
                 warnings.filterwarnings(
                     "ignore",

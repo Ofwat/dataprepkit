@@ -166,3 +166,31 @@ def test_default_csv_reader_handles_excel(tmp_path):
     assert list(result["num"]) == [1, 2]
     result_with_missing = metadata_loader._default_csv_reader(str(src))
     assert metadata_loader.pd.isna(result_with_missing["col"]).sum() == 0
+
+
+def test_cast_data_columns_uses_default_format(tmp_path):
+    metadata_loader.METADATA_REGISTRY.pop("default_format_test", None)
+    metadata_loader.register_metadata(
+        "default_format_test",
+        {
+            "target_table": "dimtable",
+            "natural_key_cols": ["id"],
+            "data_columns": {
+                "started_at": {
+                    "type": "DATETIME2(3)",
+                    "nullable": True,
+                }
+            },
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+    )
+
+    metadata = metadata_loader.get_metadata("default_format_test")
+    incoming = metadata_loader.pd.DataFrame(
+        {"started_at": ["31/12/2023 14:35", None]}
+    )
+    casted = metadata_loader._cast_data_columns(incoming, metadata)
+    assert metadata_loader.pd.notna(casted["started_at"]).sum() == 1
+    metadata_loader.METADATA_REGISTRY.pop("default_format_test", None)
