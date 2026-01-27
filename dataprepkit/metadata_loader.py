@@ -277,47 +277,49 @@ def run_dimension(
         rows_processed,
         execution_time,
     )
-    start_ts = datetime.now(timezone.utc)
-    try:
-        apply_changes(
-            engine=engine,
-            target_table=metadata.target_table,
-            incoming=incoming,
-            natural_key_cols=list(metadata.natural_key_cols),
-            data_cols=safe_data_columns,
-            join_numeric_key_col=metadata.join_numeric_key,
-            surrogate_key_col=metadata.surrogate_key,
-            nullable_columns=[
-                name
-                for name, spec in metadata.data_columns.items()
-                if spec.nullable
-            ],
-            execution_time=execution_time,
-        )
-    except Exception as exc:
-        duration = (datetime.now(timezone.utc) - start_ts).total_seconds()
-        logger.error("SCD2 invocation failed for %s: %s", metadata.name, exc)
-        logger.info("Run policy on table failure: %s", metadata.run_policy.on_table_failure)
-        logger.info(
-            "Table %s failed after %.3fs (rows=%d)",
-            metadata.target_table,
-            duration,
-            rows_processed,
-        )
-        if metadata.run_policy.on_table_failure == "abort":
-            raise
-        logger.info("Continuing despite table failure per policy.")
-        return incoming
-    else:
-        duration = (datetime.now(timezone.utc) - start_ts).total_seconds()
-        logger.info("Run policy on success: %s", metadata.run_policy.on_table_failure)
-        logger.info(
-            "Table %s completed in %.3fs (rows=%d)",
-            metadata.target_table,
-            duration,
-            rows_processed,
-        )
-        _archive_snapshot(incoming, metadata, execution_time)
+      start_ts = datetime.now(timezone.utc)
+      changes_applied = False
+      try:
+          changes_applied = apply_changes(
+              engine=engine,
+              target_table=metadata.target_table,
+              incoming=incoming,
+              natural_key_cols=list(metadata.natural_key_cols),
+              data_cols=safe_data_columns,
+              join_numeric_key_col=metadata.join_numeric_key,
+              surrogate_key_col=metadata.surrogate_key,
+              nullable_columns=[
+                  name
+                  for name, spec in metadata.data_columns.items()
+                  if spec.nullable
+              ],
+              execution_time=execution_time,
+          )
+      except Exception as exc:
+          duration = (datetime.now(timezone.utc) - start_ts).total_seconds()
+          logger.error("SCD2 invocation failed for %s: %s", metadata.name, exc)
+          logger.info("Run policy on table failure: %s", metadata.run_policy.on_table_failure)
+          logger.info(
+              "Table %s failed after %.3fs (rows=%d)",
+              metadata.target_table,
+              duration,
+              rows_processed,
+          )
+          if metadata.run_policy.on_table_failure == "abort":
+              raise
+          logger.info("Continuing despite table failure per policy.")
+          return incoming
+      else:
+          duration = (datetime.now(timezone.utc) - start_ts).total_seconds()
+          logger.info("Run policy on success: %s", metadata.run_policy.on_table_failure)
+          logger.info(
+              "Table %s completed in %.3fs (rows=%d)",
+              metadata.target_table,
+              duration,
+              rows_processed,
+          )
+          if changes_applied:
+              _archive_snapshot(incoming, metadata, execution_time)
     logger.info("SCD2 classification counts: not available")
     _post_scd2_validation(engine, metadata.target_table, metadata.natural_key_cols)
     return incoming

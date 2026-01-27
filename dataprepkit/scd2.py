@@ -48,7 +48,7 @@ def apply_changes(
     system_columns: Mapping[str, str] | None = None,
     nullable_columns: Sequence[str] | None = None,
     execution_time: str | None = None,
-) -> None:
+) -> bool:
     """
     Apply SCD2 semantics to the target table using the incoming DataFrame.
 
@@ -107,6 +107,7 @@ def apply_changes(
             extra_columns=extra_columns,
             nullable_data_cols=nullable_columns,
         )
+        changes_applied = False
         try:
             _insert_snapshot_rows(
                 conn,
@@ -117,7 +118,7 @@ def apply_changes(
                 hash_col,
                 extra_columns=extra_columns,
             )
-            _apply_snapshot_to_target(
+            changes_applied = _apply_snapshot_to_target(
                 conn,
                 staging_table,
                 target_table,
@@ -131,6 +132,7 @@ def apply_changes(
         finally:
             conn.execute(text(f"DROP TABLE IF EXISTS {staging_table}"))
         _validate_row_growth(conn, target_table, pre_total)
+        return changes_applied
 
 
 def _execution_timestamp() -> str:
@@ -254,7 +256,7 @@ def _apply_snapshot_to_target(
     columns: Mapping[str, str],
     hash_col: str,
     execution_time: str,
-):
+) -> bool:
     join_condition = _build_join_condition(target_table, "s", natural_key_cols)
 
     delete_sql = text(
@@ -334,10 +336,11 @@ def _apply_snapshot_to_target(
         """
     )
 
-    conn.execute(
+    result = conn.execute(
         insert_sql,
         {"join_numeric_base": max_join_numeric, "execution_time": execution_time},
     )
+    return result.rowcount is not None and result.rowcount > 0
 
 
 def _count_rows(conn, target_table: str) -> int:

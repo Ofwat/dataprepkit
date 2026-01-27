@@ -460,6 +460,45 @@ def test_reinsert_after_delete_uses_new_join_numeric():
     assert current["join_numeric_key"] > max_join_after_update
 
 
+def test_apply_changes_returns_flag_for_no_delta():
+    engine = create_engine("sqlite:///:memory:")
+    _bootstrap_table(engine, [_build_initial_row("x1", 1, "a")])
+
+    incoming = pd.DataFrame([{"join_key": "x1", "data_column": "a"}])
+
+    changed = apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=incoming,
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    assert not changed
+
+
+def test_apply_changes_returns_true_when_data_changes():
+    engine = create_engine("sqlite:///:memory:")
+    _bootstrap_table(engine, [_build_initial_row("x1", 1, "a")])
+
+    incoming = pd.DataFrame([{"join_key": "x1", "data_column": "b"}])
+
+    changed = apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=incoming,
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    assert changed
+
 def test_reject_duplicate_natural_keys():
     engine = create_engine("sqlite:///:memory:")
     _bootstrap_table(engine, [])
