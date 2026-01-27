@@ -103,11 +103,19 @@ def _normalize_column_specs(
     }
 
 
-def register_metadata(name: str, metadata: Dict[str, object]) -> None:
+def register_metadata(
+    name: str,
+    metadata: Dict[str, object],
+    *,
+    archive_base_dir: str | None = None,
+    archive_batch_id: str | None = None,
+) -> None:
     """Register metadata using a JSON-like dictionary for familiarity with old_code.py."""
     metadata = metadata.copy()
     schema = metadata.pop("target_schema", None)
     archive_config = metadata.pop("archive_config", None)
+    if not archive_config and archive_base_dir and archive_batch_id:
+        archive_config = {"base_dir": archive_base_dir, "batch_id": archive_batch_id}
     if archive_config:
         path_info = archive_dataframe_path(
             table_name=metadata.get("target_table", ""),
@@ -130,6 +138,14 @@ def register_metadata(name: str, metadata: Dict[str, object]) -> None:
         if schema and table and "." not in table:
             metadata["target_table"] = f"{schema}.{table}"
         metadata["target_schema"] = schema
+    if archive_config:
+        target_table = metadata.get("target_table", "")
+        path_info = archive_dataframe_path(
+            table_name=target_table,
+            batch_id=archive_config.get("batch_id"),
+            base_dir=archive_config.get("base_dir", ""),
+        )
+        metadata["archive_path"] = path_info.file_path
     METADATA_REGISTRY[name] = DimensionMetadata(name=name, **metadata)
 
 

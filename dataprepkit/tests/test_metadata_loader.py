@@ -93,6 +93,29 @@ def test_dependency_where_clause_filters_join():
 
 def test_cast_data_columns_parses_datetime():
     metadata_loader.METADATA_REGISTRY.pop("cast_test", None)
+
+
+def test_register_metadata_applies_archive_defaults(tmp_path):
+    metadata_loader.METADATA_REGISTRY.pop("archive_default", None)
+    metadata_loader.register_metadata(
+        "archive_default",
+        {
+            "target_table": "dimtable",
+            "natural_key_cols": ["id"],
+            "data_columns": {"value": {"type": "TEXT"}},
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+        archive_base_dir=str(tmp_path / "archive"),
+        archive_batch_id="batch1",
+    )
+
+    entry = metadata_loader.get_metadata("archive_default")
+    assert entry.archive_path is not None
+    assert "dimtable__" in entry.archive_path
+    assert entry.archive_path.startswith(str(tmp_path / "archive"))
+    metadata_loader.METADATA_REGISTRY.pop("archive_default", None)
     metadata_loader.register_metadata(
         "cast_test",
         {
