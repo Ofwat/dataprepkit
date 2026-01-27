@@ -271,12 +271,12 @@ def run_dimension(
         )
 
     rows_processed = len(incoming)
-    logger.info(
-        "Starting table %s: rows=%d, execution_time=%s",
-        metadata.target_table,
-        rows_processed,
-        execution_time,
-    )
+      logger.info(
+          "Starting table %s: rows=%d, execution_time=%s",
+          metadata.target_table,
+          rows_processed,
+          execution_time,
+      )
       start_ts = datetime.now(timezone.utc)
       changes_applied = False
       try:
@@ -320,9 +320,9 @@ def run_dimension(
           )
           if changes_applied:
               _archive_snapshot(incoming, metadata, execution_time)
-    logger.info("SCD2 classification counts: not available")
-    _post_scd2_validation(engine, metadata.target_table, metadata.natural_key_cols)
-    return incoming
+      logger.info("SCD2 classification counts: not available")
+      _post_scd2_validation(engine, metadata.target_table, metadata.natural_key_cols)
+      return incoming
 
 
 def _get_target_columns(engine: Engine, table_name: str) -> set[str]:
