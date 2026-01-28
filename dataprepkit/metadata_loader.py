@@ -482,8 +482,8 @@ def _expected_column_names(metadata: DimensionMetadata) -> set[str]:
     return names
 
 
-def _system_column_comments() -> dict[str, str]:
-    return {
+def _system_column_comments(metadata: DimensionMetadata | None = None) -> dict[str, str]:
+    comments = {
         DEFAULT_SYSTEM_COLUMNS["batch_id"]: "Batch identifier for this run",
         DEFAULT_SYSTEM_COLUMNS["archive_filename"]: "Archive file name for the snapshot",
         DEFAULT_SYSTEM_COLUMNS["row_hash"]: "Hash of all data columns",
@@ -492,6 +492,14 @@ def _system_column_comments() -> dict[str, str]:
         DEFAULT_SYSTEM_COLUMNS["insert_date"]: "Insert timestamp",
         DEFAULT_SYSTEM_COLUMNS["update_date"]: "Last update timestamp",
     }
+    if metadata:
+        comments.setdefault(
+            metadata.surrogate_key, "Surrogate key for the dimension table"
+        )
+        comments.setdefault(
+            metadata.join_numeric_key, "Increasing numeric key used for joins"
+        )
+    return comments
 
 
 def _apply_table_description(engine: Engine, metadata: DimensionMetadata) -> None:
@@ -502,7 +510,7 @@ def _apply_table_description(engine: Engine, metadata: DimensionMetadata) -> Non
     schema = schema or "dbo"
     params = {"description": metadata.description, "schema": schema, "table": table}
     has_description = bool(metadata.description)
-    column_comments = _system_column_comments()
+    column_comments = _system_column_comments(metadata)
     with engine.begin() as conn:
         if has_description:
             update_sql = text(
