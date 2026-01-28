@@ -536,9 +536,21 @@ def _apply_table_description(engine: Engine, metadata: DimensionMetadata) -> Non
             )
             try:
                 conn.execute(col_update, column_params)
+                logger.debug(
+                    "Updated comment for %s.%s.%s",
+                    schema,
+                    table,
+                    column,
+                )
             except Exception:
                 try:
                     conn.execute(col_add, column_params)
+                    logger.debug(
+                        "Created comment for %s.%s.%s",
+                        schema,
+                        table,
+                        column,
+                    )
                 except Exception as exc:
                     logger.warning(
                         "Failed to set column description for %s.%s.%s: %s",
