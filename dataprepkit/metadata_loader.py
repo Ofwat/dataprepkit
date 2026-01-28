@@ -537,7 +537,17 @@ def _apply_table_description(engine: Engine, metadata: DimensionMetadata) -> Non
             try:
                 conn.execute(col_update, column_params)
             except Exception:
-                conn.execute(col_add, column_params)
+                try:
+                    conn.execute(col_add, column_params)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to set column description for %s.%s.%s: %s",
+                        schema,
+                        table,
+                        column,
+                        exc,
+                    )
+                    continue
 
 def _column_spec_for_missing(name: str, metadata: DimensionMetadata) -> ColumnSpec | None:
     if name in metadata.natural_key_specs:
