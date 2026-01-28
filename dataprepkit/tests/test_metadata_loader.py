@@ -1,5 +1,10 @@
 from dataprepkit import metadata_loader
-from dataprepkit.metadata_loader import DependencyJoin, DimensionMetadata
+from dataprepkit.metadata_loader import (
+    ColumnSpec,
+    DependencyJoin,
+    DimensionMetadata,
+    _apply_system_column_comments,
+)
 from sqlalchemy import create_engine, text
 
 
@@ -170,6 +175,51 @@ def test_default_csv_reader_handles_excel(tmp_path):
 
 def test_cast_data_columns_uses_default_format(tmp_path):
     metadata_loader.METADATA_REGISTRY.pop("default_format_test", None)
+
+
+def test_column_comments_include_data_column_comment():
+    metadata_loader.METADATA_REGISTRY.pop("comment_test", None)
+    metadata_loader.register_metadata(
+        "comment_test",
+        {
+            "target_table": "dimtable",
+            "natural_key_cols": ["id"],
+            "data_columns": {
+                "Asset_Class_Name": {
+                    "type": "NVARCHAR(4000)",
+                    "comment": "Name comment",
+                }
+            },
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+    )
+    metadata = metadata_loader.get_metadata("comment_test")
+    comments = metadata_loader._column_comments(metadata)
+    assert comments["Asset_Class_Name"] == "Name comment"
+    metadata_loader.METADATA_REGISTRY.pop("comment_test", None)
+
+
+def test_apply_system_column_comments_executes_script():
+    class DummyConn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, params=None):
+            self.calls.append((str(statement), dict(params or {})))
+
+    conn = DummyConn()
+    column_comments = {"Batch_Id": "B", "Asset_Class_Name": "A"}
+    _apply_system_column_comments(conn, "Dimensions", "tbl", column_comments)
+    assert len(conn.calls) == 1
+    script, params = conn.calls[0]
+    assert "MS_Description" in script
+    assert "Batch_Id" in script
+    assert params["schema"] == "Dimensions"
+    assert params["table"] == "tbl"
+    assert params.get("comment_0") == "B"
+    assert params.get("comment_1") == "A"
     metadata_loader.register_metadata(
         "default_format_test",
         {
