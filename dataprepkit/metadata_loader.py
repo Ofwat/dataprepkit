@@ -536,36 +536,6 @@ def _apply_table_description(engine: Engine, metadata: DimensionMetadata) -> Non
                 conn.execute(col_update, column_params)
             except Exception:
                 conn.execute(col_add, column_params)
-# End patch
-
-
-def _apply_table_description(engine: Engine, metadata: DimensionMetadata) -> None:
-    description = metadata.description
-    if not description:
-        return
-
-    if engine.dialect.name != "mssql":
-        return
-
-    schema, table = _split_table_name(metadata.target_table)
-    schema = schema or "dbo"
-    params = {"description": description, "schema": schema, "table": table}
-    update_sql = text(
-        "EXEC sys.sp_updateextendedproperty @name=N'MS_Description', @value=:description, "
-        "@level0type=N'SCHEMA', @level0name=:schema, "
-        "@level1type=N'TABLE', @level1name=:table"
-    )
-    add_sql = text(
-        "EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=:description, "
-        "@level0type=N'SCHEMA', @level0name=:schema, "
-        "@level1type=N'TABLE', @level1name=:table"
-    )
-    with engine.begin() as conn:
-        try:
-            conn.execute(update_sql, params)
-        except Exception:
-            conn.execute(add_sql, params)
-        logger.info("Applied table description to %s", metadata.target_table)
 
 def _column_spec_for_missing(name: str, metadata: DimensionMetadata) -> ColumnSpec | None:
     if name in metadata.natural_key_specs:
