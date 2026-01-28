@@ -501,20 +501,20 @@ def _apply_table_description(engine: Engine, metadata: DimensionMetadata) -> Non
     schema, table = _split_table_name(metadata.target_table)
     schema = schema or "dbo"
     params = {"description": metadata.description, "schema": schema, "table": table}
-    if metadata.description:
-        update_sql = text(
-            "EXEC sys.sp_updateextendedproperty @name=N'MS_Description', @value=:description, "
-            "@level0type=N'SCHEMA', @level0name=:schema, "
-            "@level1type=N'TABLE', @level1name=:table"
-        )
-        add_sql = text(
-            "EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=:description, "
-            "@level0type=N'SCHEMA', @level0name=:schema, "
-            "@level1type=N'TABLE', @level1name=:table"
-        )
+    has_description = bool(metadata.description)
     column_comments = _system_column_comments()
     with engine.begin() as conn:
-        if metadata.description:
+        if has_description:
+            update_sql = text(
+                "EXEC sys.sp_updateextendedproperty @name=N'MS_Description', @value=:description, "
+                "@level0type=N'SCHEMA', @level0name=:schema, "
+                "@level1type=N'TABLE', @level1name=:table"
+            )
+            add_sql = text(
+                "EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=:description, "
+                "@level0type=N'SCHEMA', @level0name=:schema, "
+                "@level1type=N'TABLE', @level1name=:table"
+            )
             try:
                 conn.execute(update_sql, params)
             except Exception:
