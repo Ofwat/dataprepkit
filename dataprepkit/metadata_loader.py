@@ -72,6 +72,7 @@ class DimensionMetadata(BaseModel):
     processing_class: Callable[[pd.DataFrame], pd.DataFrame] | None = None
     archive_path: str | None = None
     target_schema: str | None = None
+    archive_batch_id: str | None = None
 
     @field_validator("natural_key_cols")
     def must_define_key_columns(cls, value: Sequence[str]) -> Sequence[str]:
@@ -122,13 +123,8 @@ def register_metadata(
     resolved_batch_id = archive_batch_id or batch_id
     if not archive_config and archive_base_dir and resolved_batch_id:
         archive_config = {"base_dir": archive_base_dir, "batch_id": resolved_batch_id}
-    if archive_config:
-        path_info = archive_dataframe_path(
-            table_name=metadata.get("target_table", ""),
-            batch_id=archive_config.get("batch_id"),
-            base_dir=archive_config.get("base_dir", ""),
-        )
-        metadata["archive_path"] = path_info.file_path
+    if resolved_batch_id:
+        metadata["archive_batch_id"] = resolved_batch_id
     if schema is None:
         schema = metadata.pop("schema", None)
     if "data_columns" in metadata:
@@ -277,7 +273,8 @@ def run_dimension(
     execution_time = _capture_execution_time()
     execution_time_iso = execution_time.isoformat(timespec="milliseconds")
     archive_dest = _resolve_archive_destination(metadata, execution_time)
-    archive_filename = archive_dest.name if archive_dest else None
+    archive_filename = archive_dest.name if archive_dest else Path(metadata.filepath).name
+    metadata_batch_id = metadata.archive_batch_id or metadata.name
     logger.info(
         "Loaded dimension '%s' from %s (%d rows)",
         metadata.name,
@@ -324,7 +321,7 @@ def run_dimension(
                 if spec.nullable
             ],
             execution_time=execution_time_iso,
-            batch_id=None,
+            batch_id=metadata_batch_id,
             archive_filename=archive_filename,
         )
     except Exception as exc:
