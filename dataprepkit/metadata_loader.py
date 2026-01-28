@@ -495,31 +495,33 @@ def _system_column_comments() -> dict[str, str]:
 
 
 def _apply_table_description(engine: Engine, metadata: DimensionMetadata) -> None:
-    description = metadata.description
-    if not description or engine.dialect.name != "mssql":
+    if engine.dialect.name != "mssql":
         return
 
     schema, table = _split_table_name(metadata.target_table)
     schema = schema or "dbo"
-    params = {"description": description, "schema": schema, "table": table}
-    update_sql = text(
-        "EXEC sys.sp_updateextendedproperty @name=N'MS_Description', @value=:description, "
-        "@level0type=N'SCHEMA', @level0name=:schema, "
-        "@level1type=N'TABLE', @level1name=:table"
-    )
-    add_sql = text(
-        "EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=:description, "
-        "@level0type=N'SCHEMA', @level0name=:schema, "
-        "@level1type=N'TABLE', @level1name=:table"
-    )
+    params = {"description": metadata.description, "schema": schema, "table": table}
+    if metadata.description:
+        update_sql = text(
+            "EXEC sys.sp_updateextendedproperty @name=N'MS_Description', @value=:description, "
+            "@level0type=N'SCHEMA', @level0name=:schema, "
+            "@level1type=N'TABLE', @level1name=:table"
+        )
+        add_sql = text(
+            "EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=:description, "
+            "@level0type=N'SCHEMA', @level0name=:schema, "
+            "@level1type=N'TABLE', @level1name=:table"
+        )
     column_comments = _system_column_comments()
     with engine.begin() as conn:
-        try:
-            conn.execute(update_sql, params)
-        except Exception:
-            conn.execute(add_sql, params)
+        if metadata.description:
+            try:
+                conn.execute(update_sql, params)
+            except Exception:
+                conn.execute(add_sql, params)
+            logger.info("Applied table description to %s", metadata.target_table)
         for column, comment in column_comments.items():
-            column_params = {**params, "column": column, "comment": comment}
+            column_params = {"comment": comment, "schema": schema, "table": table, "column": column}
             col_update = text(
                 "EXEC sys.sp_updateextendedproperty @name=N'MS_Description', @value=:comment, "
                 "@level0type=N'SCHEMA', @level0name=:schema, "
