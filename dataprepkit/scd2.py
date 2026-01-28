@@ -312,6 +312,8 @@ def _apply_snapshot_to_target(
     insert_columns = list(natural_key_cols) + list(data_cols) + [join_numeric_key_col]
     if has_batch_id:
         insert_columns.append(columns["batch_id"])
+    if has_archive_filename:
+        insert_columns.append(columns["archive_filename"])
     insert_columns.extend(
         [
             hash_col,
@@ -328,6 +330,25 @@ def _apply_snapshot_to_target(
         else f"t.{columns['current_ind']} = 1"
     )
 
+    select_parts = [
+        *[f"s.{col}" for col in natural_key_cols],
+        *[f"s.{col}" for col in data_cols],
+        "COALESCE(s.existing_join_numeric, :join_numeric_base + rn)",
+    ]
+    if has_batch_id:
+        select_parts.append(":batch_id")
+    if has_archive_filename:
+        select_parts.append(":archive_filename")
+    select_parts.extend(
+        [
+            f"s.{hash_col}",
+            ":execution_time",
+            "NULL",
+            "1",
+            "0",
+        ]
+    )
+
     insert_sql = text(
         f"""
         WITH candidates AS (
@@ -341,16 +362,7 @@ def _apply_snapshot_to_target(
         )
         INSERT INTO {target_table} ({', '.join(insert_columns)})
         SELECT
-            {', '.join(f"s.{col}" for col in natural_key_cols)},
-            {', '.join(f"s.{col}" for col in data_cols)},
-            COALESCE(s.existing_join_numeric, :join_numeric_base + rn),
-            s.{hash_col},
-            {':batch_id,' if has_batch_id else ''}
-            {':archive_filename,' if has_archive_filename else ''}
-            :execution_time,
-            NULL,
-            1,
-            0
+            {', '.join(select_parts)}
         FROM candidates s
         ORDER BY rn
         """
