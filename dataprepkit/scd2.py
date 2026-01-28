@@ -52,6 +52,8 @@ def apply_changes(
     execution_time: str | None = None,
     batch_id: str | None = None,
     archive_filename: str | None = None,
+    has_batch_id: bool = False,
+    has_archive_filename: bool = False,
 ) -> bool:
     """
     Apply SCD2 semantics to the target table using the incoming DataFrame.
@@ -134,6 +136,8 @@ def apply_changes(
                 execution_time,
                 batch_id=batch_id,
                 archive_filename=archive_filename,
+                has_batch_id=has_batch_id,
+                has_archive_filename=has_archive_filename,
             )
         finally:
             conn.execute(text(f"DROP TABLE IF EXISTS {staging_table}"))
@@ -264,6 +268,8 @@ def _apply_snapshot_to_target(
     execution_time: str,
     batch_id: str | None = None,
     archive_filename: str | None = None,
+    has_batch_id: bool = False,
+    has_archive_filename: bool = False,
 ) -> bool:
     join_condition = _build_join_condition(target_table, "s", natural_key_cols)
 
@@ -304,7 +310,7 @@ def _apply_snapshot_to_target(
     order_by = ", ".join(f"s.{col}" for col in natural_key_cols) or "1"
 
     insert_columns = list(natural_key_cols) + list(data_cols) + [join_numeric_key_col]
-    if columns.get("batch_id"):
+    if has_batch_id:
         insert_columns.append(columns["batch_id"])
     insert_columns.extend(
         [
@@ -339,8 +345,8 @@ def _apply_snapshot_to_target(
             {', '.join(f"s.{col}" for col in data_cols)},
             COALESCE(s.existing_join_numeric, :join_numeric_base + rn),
             s.{hash_col},
-            {(':batch_id,' if columns.get('batch_id') else '')}
-            {(':archive_filename,' if columns.get('archive_filename') else '')}
+            {':batch_id,' if has_batch_id else ''}
+            {':archive_filename,' if has_archive_filename else ''}
             :execution_time,
             NULL,
             1,
@@ -351,9 +357,9 @@ def _apply_snapshot_to_target(
     )
 
     params = {"join_numeric_base": max_join_numeric, "execution_time": execution_time}
-    if batch_id is not None or columns.get("batch_id"):
+    if has_batch_id and batch_id is not None:
         params["batch_id"] = batch_id
-    if archive_filename is not None:
+    if has_archive_filename and archive_filename is not None:
         params["archive_filename"] = archive_filename
     insert_result = conn.execute(insert_sql, params)
     return (

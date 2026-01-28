@@ -289,12 +289,9 @@ def run_dimension(
         available_columns,
         metadata.data_columns,
     )
-    available_columns = _get_target_columns(engine, metadata.target_table)
-    system_columns = {
-        key: value
-        for key, value in DEFAULT_SYSTEM_COLUMNS.items()
-        if value in available_columns
-    }
+    has_batch_id = DEFAULT_SYSTEM_COLUMNS["batch_id"] in available_columns
+    has_archive_filename = DEFAULT_SYSTEM_COLUMNS["archive_filename"] in available_columns
+    system_columns = DEFAULT_SYSTEM_COLUMNS
     if missing:
         logger.warning(
             "Schema drift for target %s: missing columns %s; using safe write set %s",
@@ -313,24 +310,26 @@ def run_dimension(
     start_ts = datetime.now(timezone.utc)
     changes_applied = False
     try:
-        changes_applied = apply_changes(
-            engine=engine,
-            target_table=metadata.target_table,
-            incoming=incoming,
-            natural_key_cols=list(metadata.natural_key_cols),
-            data_cols=safe_data_columns,
-            join_numeric_key_col=metadata.join_numeric_key,
-            surrogate_key_col=metadata.surrogate_key,
-            system_columns=system_columns,
-            nullable_columns=[
-                name
-                for name, spec in metadata.data_columns.items()
-                if spec.nullable
-            ],
-            execution_time=execution_time_iso,
-            batch_id=metadata_batch_id,
-            archive_filename=archive_filename,
-        )
+            changes_applied = apply_changes(
+                engine=engine,
+                target_table=metadata.target_table,
+                incoming=incoming,
+                natural_key_cols=list(metadata.natural_key_cols),
+                data_cols=safe_data_columns,
+                join_numeric_key_col=metadata.join_numeric_key,
+                surrogate_key_col=metadata.surrogate_key,
+                system_columns=system_columns,
+                nullable_columns=[
+                    name
+                    for name, spec in metadata.data_columns.items()
+                    if spec.nullable
+                ],
+                execution_time=execution_time_iso,
+                batch_id=metadata_batch_id,
+                archive_filename=archive_filename,
+                has_batch_id=has_batch_id,
+                has_archive_filename=has_archive_filename,
+            )
     except Exception as exc:
         duration = (datetime.now(timezone.utc) - start_ts).total_seconds()
         logger.error("SCD2 invocation failed for %s: %s", metadata.name, exc)

@@ -471,5 +471,100 @@ def test_archive_snapshot(tmp_path, caplog):
     if files:
         assert files, "Parquet snapshot written"
     else:
-        assert "Failed to archive snapshot" in caplog.text
+        assert "Existing table 'dimension' is missing metadata columns" in caplog.text
+    METADATA_REGISTRY.pop(metadata_name, None)
+
+
+def _create_dimension_table_with_archive(engine, table_name: str):
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"""
+                CREATE TABLE {table_name} (
+                    surrogate_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                    natural_key TEXT NOT NULL,
+                    join_numeric_key INTEGER NOT NULL,
+                    data_column TEXT,
+                    row_hash TEXT NOT NULL,
+                    Insert_Date TEXT NOT NULL,
+                    Update_Date TEXT,
+                    Current_Ind INTEGER NOT NULL,
+                    Deleted_Ind INTEGER NOT NULL,
+                    Batch_Id TEXT NOT NULL,
+                    Archive_Filename TEXT NOT NULL
+                )
+                """
+            )
+        )
+
+
+def _register_archive_metadata(metadata_name, table_name, archive_path):
+    register_metadata(
+        metadata_name,
+        {
+            "target_table": table_name,
+            "natural_key_cols": ["natural_key"],
+            "data_columns": ["data_column"],
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+            "archive_path": str(archive_path),
+        },
+    )
+
+
+def test_archive_snapshot_skips_when_no_changes(monkeypatch, tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    table = "dimension_archive_skip"
+    metadata_name = "archive_skip"
+    _create_dimension_table_with_archive(engine, table)
+    _register_archive_metadata(metadata_name, table, tmp_path / "snapshots_skip")
+
+    archive_calls = []
+    monkeypatch.setattr(
+        "dataprepkit.metadata_loader._archive_snapshot",
+        lambda *args, **kwargs: archive_calls.append(True),
+    )
+
+    monkeypatch.setattr(
+        "dataprepkit.metadata_loader.apply_changes",
+        lambda *args, **kwargs: False,
+    )
+
+    run_dimension(
+        engine,
+        metadata_name,
+        override_df=pd.DataFrame([{"natural_key": "x", "data_column": "v"}]),
+    )
+
+    assert not archive_calls
+    METADATA_REGISTRY.pop(metadata_name, None)
+
+
+def test_archive_snapshot_runs_only_on_changes(monkeypatch, tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    table = "dimension_archive_apply"
+    metadata_name = "archive_apply"
+    _create_dimension_table_with_archive(engine, table)
+    _register_archive_metadata(metadata_name, table, tmp_path / "snapshots_apply")
+
+    archive_paths = []
+    monkeypatch.setattr(
+        "dataprepkit.metadata_loader._archive_snapshot",
+        lambda *args, **_kwargs: archive_paths.append(args[2]),
+    )
+
+    monkeypatch.setattr(
+        "dataprepkit.metadata_loader.apply_changes",
+        lambda *args, **kwargs: True,
+    )
+
+    run_dimension(
+        engine,
+        metadata_name,
+        override_df=pd.DataFrame([{"natural_key": "x", "data_column": "v"}]),
+    )
+
+    assert len(archive_paths) == 1
+    assert metadata_name in archive_paths[0].name
     METADATA_REGISTRY.pop(metadata_name, None)
