@@ -51,6 +51,7 @@ class ColumnSpec(BaseModel):
     default: str | None = None
     parse_format: str | None = None
     dayfirst: bool = False
+    comment: str | None = None
 
 
 class DimensionMetadata(BaseModel):
@@ -502,6 +503,15 @@ def _system_column_comments(metadata: DimensionMetadata | None = None) -> dict[s
     return comments
 
 
+def _column_comments(metadata: DimensionMetadata) -> dict[str, str]:
+    comments = _system_column_comments(metadata)
+    for spec_map in (metadata.natural_key_specs, metadata.data_columns):
+        for name, spec in spec_map.items():
+            if spec.comment:
+                comments[name] = spec.comment
+    return comments
+
+
 def _apply_table_description(engine: Engine, metadata: DimensionMetadata) -> None:
     if engine.dialect.name != "mssql":
         return
@@ -510,7 +520,7 @@ def _apply_table_description(engine: Engine, metadata: DimensionMetadata) -> Non
     schema = schema or "dbo"
     params = {"description": metadata.description, "schema": schema, "table": table}
     has_description = bool(metadata.description)
-    column_comments = _system_column_comments(metadata)
+    column_comments = _column_comments(metadata)
     with engine.begin() as conn:
         if has_description:
             update_sql = text(
