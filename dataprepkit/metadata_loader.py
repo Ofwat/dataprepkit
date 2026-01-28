@@ -113,13 +113,15 @@ def register_metadata(
     *,
     archive_base_dir: str | None = None,
     archive_batch_id: str | None = None,
+    batch_id: str | None = None,
 ) -> None:
     """Register metadata using a JSON-like dictionary for familiarity with old_code.py."""
     metadata = metadata.copy()
     schema = metadata.pop("target_schema", None)
     archive_config = metadata.pop("archive_config", None)
-    if not archive_config and archive_base_dir and archive_batch_id:
-        archive_config = {"base_dir": archive_base_dir, "batch_id": archive_batch_id}
+    resolved_batch_id = archive_batch_id or batch_id
+    if not archive_config and archive_base_dir and resolved_batch_id:
+        archive_config = {"base_dir": archive_base_dir, "batch_id": resolved_batch_id}
     if archive_config:
         path_info = archive_dataframe_path(
             table_name=metadata.get("target_table", ""),
@@ -273,13 +275,16 @@ def run_dimension(
         list(incoming.columns),
     )
     execution_time = _capture_execution_time()
+    execution_time_iso = execution_time.isoformat(timespec="milliseconds")
+    archive_dest = _resolve_archive_destination(metadata, execution_time)
+    archive_filename = archive_dest.name if archive_dest else None
     logger.info(
         "Loaded dimension '%s' from %s (%d rows)",
         metadata.name,
         metadata.filepath,
         len(incoming),
     )
-    logger.info("Execution timestamp: %s", execution_time)
+    logger.info("Execution timestamp: %s", execution_time_iso)
     available_columns = _get_target_columns(engine, metadata.target_table)
     safe_data_columns, missing = _handle_schema_drift(
         engine,
@@ -318,7 +323,9 @@ def run_dimension(
                 for name, spec in metadata.data_columns.items()
                 if spec.nullable
             ],
-            execution_time=execution_time,
+            execution_time=execution_time_iso,
+            batch_id=None,
+            archive_filename=archive_filename,
         )
     except Exception as exc:
         duration = (datetime.now(timezone.utc) - start_ts).total_seconds()
@@ -343,8 +350,8 @@ def run_dimension(
             duration,
             rows_processed,
         )
-        if changes_applied:
-            _archive_snapshot(incoming, metadata, execution_time)
+        if changes_applied and archive_dest:
+            _archive_snapshot(incoming, metadata, archive_dest)
     logger.info("SCD2 classification counts: not available")
     _post_scd2_validation(engine, metadata.target_table, metadata.natural_key_cols)
     return incoming
@@ -634,11 +641,10 @@ def _evolve_schema(engine: Engine, table_name: str, missing: Mapping[str, Column
             )
 
 
-def _capture_execution_time() -> str:
+def _capture_execution_time() -> datetime:
     now = datetime.now(timezone.utc)
     milliseconds = (now.microsecond // 1000) * 1000
-    truncated = now.replace(microsecond=milliseconds)
-    return truncated.isoformat(timespec="milliseconds")
+    return now.replace(microsecond=milliseconds)
 
 
 def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence[str]) -> None:
@@ -685,18 +691,31 @@ def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence
                 raise RuntimeError(f"Post-SCD2 validation failed: {message}")
 
 
-def _archive_snapshot(incoming: pd.DataFrame, metadata: DimensionMetadata, execution_time: str) -> None:
+def _resolve_archive_destination(
+    metadata: DimensionMetadata, execution_time: datetime
+) -> Path | None:
     if not metadata.archive_path:
-        return
-    base = Path(metadata.archive_path)
-    if base.suffix != ".parquet":
-        dest = base / f"{metadata.name}_{execution_time}.parquet"
-    else:
-        dest = base
+        return None
 
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    base = Path(metadata.archive_path)
+    if base.suffix:
+        return base
+
+    suffix = ".parquet"
+    return base / f"{metadata.name}_{execution_time.strftime('%Y%m%d%H%M%S')}{suffix}"
+
+
+def _archive_snapshot(
+    incoming: pd.DataFrame,
+    metadata: DimensionMetadata,
+    archive_path: Path | None,
+) -> None:
+    if not archive_path:
+        return
+
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        incoming.to_parquet(dest, index=False)
-        logger.info("Archived snapshot to %s", dest)
+        incoming.to_parquet(archive_path, index=False)
+        logger.info("Archived snapshot to %s", archive_path)
     except Exception as exc:
-        logger.warning("Failed to archive snapshot to %s: %s", dest, exc)
+        logger.warning("Failed to archive snapshot to %s: %s", archive_path, exc)
