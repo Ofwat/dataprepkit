@@ -482,6 +482,63 @@ def _expected_column_names(metadata: DimensionMetadata) -> set[str]:
     return names
 
 
+def _system_column_comments() -> dict[str, str]:
+    return {
+        DEFAULT_SYSTEM_COLUMNS["batch_id"]: "Batch identifier for this run",
+        DEFAULT_SYSTEM_COLUMNS["archive_filename"]: "Archive file name for the snapshot",
+        DEFAULT_SYSTEM_COLUMNS["row_hash"]: "Hash of all data columns",
+        DEFAULT_SYSTEM_COLUMNS["current_ind"]: "Indicates whether row is current",
+        DEFAULT_SYSTEM_COLUMNS["deleted_ind"]: "Indicates whether row is marked deleted",
+        DEFAULT_SYSTEM_COLUMNS["insert_date"]: "Insert timestamp",
+        DEFAULT_SYSTEM_COLUMNS["update_date"]: "Last update timestamp",
+    }
+
+
+def _apply_table_description(engine: Engine, metadata: DimensionMetadata) -> None:
+    description = metadata.description
+    if not description or engine.dialect.name != "mssql":
+        return
+
+    schema, table = _split_table_name(metadata.target_table)
+    schema = schema or "dbo"
+    params = {"description": description, "schema": schema, "table": table}
+    update_sql = text(
+        "EXEC sys.sp_updateextendedproperty @name=N'MS_Description', @value=:description, "
+        "@level0type=N'SCHEMA', @level0name=:schema, "
+        "@level1type=N'TABLE', @level1name=:table"
+    )
+    add_sql = text(
+        "EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=:description, "
+        "@level0type=N'SCHEMA', @level0name=:schema, "
+        "@level1type=N'TABLE', @level1name=:table"
+    )
+    column_comments = _system_column_comments()
+    with engine.begin() as conn:
+        try:
+            conn.execute(update_sql, params)
+        except Exception:
+            conn.execute(add_sql, params)
+        for column, comment in column_comments.items():
+            column_params = {**params, "column": column, "comment": comment}
+            col_update = text(
+                "EXEC sys.sp_updateextendedproperty @name=N'MS_Description', @value=:comment, "
+                "@level0type=N'SCHEMA', @level0name=:schema, "
+                "@level1type=N'TABLE', @level1name=:table, "
+                "@level2type=N'COLUMN', @level2name=:column"
+            )
+            col_add = text(
+                "EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=:comment, "
+                "@level0type=N'SCHEMA', @level0name=:schema, "
+                "@level1type=N'TABLE', @level1name=:table, "
+                "@level2type=N'COLUMN', @level2name=:column"
+            )
+            try:
+                conn.execute(col_update, column_params)
+            except Exception:
+                conn.execute(col_add, column_params)
+# End patch
+
+
 def _apply_table_description(engine: Engine, metadata: DimensionMetadata) -> None:
     description = metadata.description
     if not description:
