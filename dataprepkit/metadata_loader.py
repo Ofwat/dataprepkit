@@ -409,13 +409,15 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
         _column_spec_clause(name, spec, engine)
         for name, spec in metadata.data_columns.items()
     ]
-    system_columns = [
-        f"{DEFAULT_SYSTEM_COLUMNS['row_hash']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['row_hash'], engine)} NOT NULL",
-        f"{DEFAULT_SYSTEM_COLUMNS['insert_date']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['insert_date'], engine)} NOT NULL",
-        f"{DEFAULT_SYSTEM_COLUMNS['update_date']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['update_date'], engine)}",
-        f"{DEFAULT_SYSTEM_COLUMNS['current_ind']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['current_ind'], engine)} NOT NULL",
-        f"{DEFAULT_SYSTEM_COLUMNS['deleted_ind']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['deleted_ind'], engine)} NOT NULL",
-    ]
+        system_columns = [
+            f"{DEFAULT_SYSTEM_COLUMNS['row_hash']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['row_hash'], engine)} NOT NULL",
+            f"{DEFAULT_SYSTEM_COLUMNS['insert_date']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['insert_date'], engine)} NOT NULL",
+            f"{DEFAULT_SYSTEM_COLUMNS['update_date']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['update_date'], engine)}",
+            f"{DEFAULT_SYSTEM_COLUMNS['current_ind']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['current_ind'], engine)} NOT NULL",
+            f"{DEFAULT_SYSTEM_COLUMNS['deleted_ind']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['deleted_ind'], engine)} NOT NULL",
+            f"{DEFAULT_SYSTEM_COLUMNS['batch_id']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['batch_id'], engine)} NOT NULL",
+            f"{DEFAULT_SYSTEM_COLUMNS['archive_filename']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['archive_filename'], engine)} NOT NULL",
+        ]
     surrogate_clause = _surrogate_column_clause(engine, metadata.surrogate_key)
     join_numeric_clause = _join_numeric_clause(engine, metadata.join_numeric_key)
     create_sql = f"""
@@ -612,6 +614,10 @@ def _system_column_type(column: str, engine: Engine) -> str:
             return "BIT"
         return "BOOLEAN"
     if column == DEFAULT_SYSTEM_COLUMNS["row_hash"]:
+        if dialect == "mssql":
+            return "NVARCHAR(4000)"
+        return "TEXT"
+    if column in {DEFAULT_SYSTEM_COLUMNS["batch_id"], DEFAULT_SYSTEM_COLUMNS["archive_filename"]}:
         if dialect == "mssql":
             return "NVARCHAR(4000)"
         return "TEXT"
