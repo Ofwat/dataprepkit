@@ -51,6 +51,7 @@ def apply_changes(
     nullable_columns: Sequence[str] | None = None,
     execution_time: str | None = None,
     batch_id: str | None = None,
+    archive_filename: str | None = None,
 ) -> bool:
     """
     Apply SCD2 semantics to the target table using the incoming DataFrame.
@@ -121,19 +122,19 @@ def apply_changes(
                 hash_col,
                 extra_columns=extra_columns,
             )
-        changes_applied = _apply_snapshot_to_target(
-            conn,
-            staging_table,
-            target_table,
-            natural_key_cols,
-            data_cols,
-            join_numeric_key_col,
-            cols,
-            hash_col,
-            execution_time,
-            batch_id=batch_id,
-            archive_filename=archive_filename,
-        )
+            changes_applied = _apply_snapshot_to_target(
+                conn,
+                staging_table,
+                target_table,
+                natural_key_cols,
+                data_cols,
+                join_numeric_key_col,
+                cols,
+                hash_col,
+                execution_time,
+                batch_id=batch_id,
+                archive_filename=archive_filename,
+            )
         finally:
             conn.execute(text(f"DROP TABLE IF EXISTS {staging_table}"))
         _validate_row_growth(conn, target_table, pre_total)

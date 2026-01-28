@@ -289,6 +289,12 @@ def run_dimension(
         available_columns,
         metadata.data_columns,
     )
+    available_columns = _get_target_columns(engine, metadata.target_table)
+    system_columns = {
+        key: value
+        for key, value in DEFAULT_SYSTEM_COLUMNS.items()
+        if value in available_columns
+    }
     if missing:
         logger.warning(
             "Schema drift for target %s: missing columns %s; using safe write set %s",
@@ -315,6 +321,7 @@ def run_dimension(
             data_cols=safe_data_columns,
             join_numeric_key_col=metadata.join_numeric_key,
             surrogate_key_col=metadata.surrogate_key,
+            system_columns=system_columns,
             nullable_columns=[
                 name
                 for name, spec in metadata.data_columns.items()
@@ -347,8 +354,17 @@ def run_dimension(
             duration,
             rows_processed,
         )
-        if changes_applied and archive_dest:
-            _archive_snapshot(incoming, metadata, archive_dest)
+        if archive_dest:
+            if {"batch_id", "archive_filename"} <= system_columns.keys():
+                if changes_applied:
+                    _archive_snapshot(incoming, metadata, archive_dest)
+            else:
+                missing_cols = {"batch_id", "archive_filename"} - set(system_columns.keys())
+                logger.warning(
+                    "Failed to archive snapshot to %s: missing system columns %s",
+                    archive_dest,
+                    missing_cols,
+                )
     logger.info("SCD2 classification counts: not available")
     _post_scd2_validation(engine, metadata.target_table, metadata.natural_key_cols)
     return incoming
@@ -409,15 +425,15 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
         _column_spec_clause(name, spec, engine)
         for name, spec in metadata.data_columns.items()
     ]
-        system_columns = [
-            f"{DEFAULT_SYSTEM_COLUMNS['row_hash']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['row_hash'], engine)} NOT NULL",
-            f"{DEFAULT_SYSTEM_COLUMNS['insert_date']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['insert_date'], engine)} NOT NULL",
-            f"{DEFAULT_SYSTEM_COLUMNS['update_date']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['update_date'], engine)}",
-            f"{DEFAULT_SYSTEM_COLUMNS['current_ind']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['current_ind'], engine)} NOT NULL",
-            f"{DEFAULT_SYSTEM_COLUMNS['deleted_ind']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['deleted_ind'], engine)} NOT NULL",
-            f"{DEFAULT_SYSTEM_COLUMNS['batch_id']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['batch_id'], engine)} NOT NULL",
-            f"{DEFAULT_SYSTEM_COLUMNS['archive_filename']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['archive_filename'], engine)} NOT NULL",
-        ]
+    system_columns = [
+        f"{DEFAULT_SYSTEM_COLUMNS['row_hash']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['row_hash'], engine)} NOT NULL",
+        f"{DEFAULT_SYSTEM_COLUMNS['insert_date']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['insert_date'], engine)} NOT NULL",
+        f"{DEFAULT_SYSTEM_COLUMNS['update_date']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['update_date'], engine)}",
+        f"{DEFAULT_SYSTEM_COLUMNS['current_ind']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['current_ind'], engine)} NOT NULL",
+        f"{DEFAULT_SYSTEM_COLUMNS['deleted_ind']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['deleted_ind'], engine)} NOT NULL",
+        f"{DEFAULT_SYSTEM_COLUMNS['batch_id']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['batch_id'], engine)} NOT NULL",
+        f"{DEFAULT_SYSTEM_COLUMNS['archive_filename']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['archive_filename'], engine)} NOT NULL",
+    ]
     surrogate_clause = _surrogate_column_clause(engine, metadata.surrogate_key)
     join_numeric_clause = _join_numeric_clause(engine, metadata.join_numeric_key)
     create_sql = f"""
