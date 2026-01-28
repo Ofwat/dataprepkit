@@ -3,6 +3,7 @@ from dataprepkit.metadata_loader import (
     ColumnSpec,
     DependencyJoin,
     DimensionMetadata,
+    _apply_table_and_column_comments,
     _apply_system_column_comments,
 )
 from sqlalchemy import create_engine, text
@@ -220,6 +221,28 @@ def test_apply_system_column_comments_executes_script():
     assert params["table"] == "tbl"
     assert params.get("comment_0") == "B"
     assert params.get("comment_1") == "A"
+
+
+def test_apply_table_comments_includes_description():
+    class DummyConn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, params=None):
+            self.calls.append((str(statement), dict(params or {})))
+
+    conn = DummyConn()
+    _apply_table_and_column_comments(
+        conn,
+        "Dimensions",
+        "tbl",
+        "Table desc",
+        {"Batch_Id": "B"},
+    )
+    assert len(conn.calls) == 1
+    script, params = conn.calls[0]
+    assert "Table desc" in script
+    assert params["description"] == "Table desc"
     metadata_loader.register_metadata(
         "default_format_test",
         {

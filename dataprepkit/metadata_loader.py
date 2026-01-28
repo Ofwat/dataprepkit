@@ -495,7 +495,7 @@ def _system_column_comments(metadata: DimensionMetadata | None = None) -> dict[s
     }
     if metadata:
         comments.setdefault(
-            metadata.surrogate_key, "Surrogate key for the dimension table"
+            metadata.surrogate_key, "Surrogate key, unique identifier within the table"
         )
         comments.setdefault(
             metadata.join_numeric_key, "Increasing numeric key used for joins"
@@ -518,43 +518,33 @@ def _apply_table_description(engine: Engine, metadata: DimensionMetadata) -> Non
 
     schema, table = _split_table_name(metadata.target_table)
     schema = schema or "dbo"
-    params = {"description": metadata.description, "schema": schema, "table": table}
-    has_description = bool(metadata.description)
     column_comments = _column_comments(metadata)
     with engine.begin() as conn:
-        if has_description:
-            update_sql = text(
-                "EXEC sys.sp_updateextendedproperty @name=N'MS_Description', @value=:description, "
-                "@level0type=N'SCHEMA', @level0name=:schema, "
-                "@level1type=N'TABLE', @level1name=:table"
-            )
-            add_sql = text(
-                "EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=:description, "
-                "@level0type=N'SCHEMA', @level0name=:schema, "
-                "@level1type=N'TABLE', @level1name=:table"
-            )
-            try:
-                conn.execute(update_sql, params)
-            except Exception:
-                conn.execute(add_sql, params)
-            logger.info("Applied table description to %s", metadata.target_table)
-        _apply_system_column_comments(conn, schema, table, column_comments)
+        _apply_table_and_column_comments(
+            conn, schema, table, metadata.description, column_comments
+        )
 
 
-def _apply_system_column_comments(
+def _apply_table_and_column_comments(
     conn: Connection,
     schema: str,
     table: str,
+    description: str | None,
     column_comments: dict[str, str],
 ) -> None:
-    if not column_comments:
-        return
     statements = [
         "DECLARE @schema SYSNAME = :schema;",
         "DECLARE @table SYSNAME = :table;",
-        "DECLARE @columns TABLE (ColumnName SYSNAME, Comment NVARCHAR(4000));",
     ]
     params = {"schema": schema, "table": table}
+    if description:
+        statements.append(
+            "DECLARE @description NVARCHAR(4000) = :description;"
+        )
+        params["description"] = description
+    statements.append(
+        "DECLARE @columns TABLE (ColumnName SYSNAME, Comment NVARCHAR(4000));"
+    )
     for idx, (column, comment) in enumerate(column_comments.items()):
         key_col = f"column_{idx}"
         key_comment = f"comment_{idx}"
@@ -563,6 +553,23 @@ def _apply_system_column_comments(
         )
         params[key_col] = column
         params[key_comment] = comment
+    if description:
+        statements.append(
+            """
+BEGIN TRY
+  EXEC sys.sp_updateextendedproperty
+    @name=N'MS_Description', @value=@description,
+    @level0type=N'SCHEMA', @level0name=@schema,
+    @level1type=N'TABLE', @level1name=@table;
+END TRY
+BEGIN CATCH
+  EXEC sys.sp_addextendedproperty
+    @name=N'MS_Description', @value=@description,
+    @level0type=N'SCHEMA', @level0name=@schema,
+    @level1type=N'TABLE', @level1name=@table;
+END CATCH;
+"""
+        )
     statements.append(
         """
 DECLARE @col SYSNAME, @comment NVARCHAR(4000);
@@ -576,7 +583,7 @@ BEGIN
       @level1type=N'TABLE', @level1name=@table,
       @level2type=N'COLUMN', @level2name=@col;
   END TRY
-  BEGIN CATCH
+      BEGIN CATCH
     EXEC sys.sp_addextendedproperty
       @name=N'MS_Description', @value=@comment,
       @level0type=N'SCHEMA', @level0name=@schema,
@@ -589,7 +596,7 @@ END
     )
     script = "\n".join(statements)
     conn.execute(text(script), params)
-    logger.info("Applied system column descriptions to %s.%s", schema, table)
+    logger.info("Applied comments to %s.%s", schema, table)
 
 def _column_spec_for_missing(name: str, metadata: DimensionMetadata) -> ColumnSpec | None:
     if name in metadata.natural_key_specs:
