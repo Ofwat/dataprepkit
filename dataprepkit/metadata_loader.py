@@ -12,7 +12,7 @@ import uuid
 import warnings
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import inspect, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 from dataprepkit.scd2 import DEFAULT_SYSTEM_COLUMNS, apply_changes
 from dataprepkit.storage import archive_dataframe_path
@@ -520,46 +520,58 @@ def _apply_table_description(engine: Engine, metadata: DimensionMetadata) -> Non
             except Exception:
                 conn.execute(add_sql, params)
             logger.info("Applied table description to %s", metadata.target_table)
-        for column, comment in column_comments.items():
-            column_params = {"comment": comment, "schema": schema, "table": table, "column": column}
-            col_update = text(
-                "EXEC sys.sp_updateextendedproperty @name=N'MS_Description', @value=:comment, "
-                "@level0type=N'SCHEMA', @level0name=:schema, "
-                "@level1type=N'TABLE', @level1name=:table, "
-                "@level2type=N'COLUMN', @level2name=:column"
-            )
-            col_add = text(
-                "EXEC sys.sp_addextendedproperty @name=N'MS_Description', @value=:comment, "
-                "@level0type=N'SCHEMA', @level0name=:schema, "
-                "@level1type=N'TABLE', @level1name=:table, "
-                "@level2type=N'COLUMN', @level2name=:column"
-            )
-            try:
-                conn.execute(col_update, column_params)
-                logger.debug(
-                    "Updated comment for %s.%s.%s",
-                    schema,
-                    table,
-                    column,
-                )
-            except Exception:
-                try:
-                    conn.execute(col_add, column_params)
-                    logger.debug(
-                        "Created comment for %s.%s.%s",
-                        schema,
-                        table,
-                        column,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to set column description for %s.%s.%s: %s",
-                        schema,
-                        table,
-                        column,
-                        exc,
-                    )
-                    continue
+        _apply_system_column_comments(conn, schema, table, column_comments)
+
+
+def _apply_system_column_comments(
+    conn: Connection,
+    schema: str,
+    table: str,
+    column_comments: dict[str, str],
+) -> None:
+    if not column_comments:
+        return
+    statements = [
+        "DECLARE @schema SYSNAME = :schema;",
+        "DECLARE @table SYSNAME = :table;",
+        "DECLARE @columns TABLE (ColumnName SYSNAME, Comment NVARCHAR(4000));",
+    ]
+    params = {"schema": schema, "table": table}
+    for idx, (column, comment) in enumerate(column_comments.items()):
+        key_col = f"column_{idx}"
+        key_comment = f"comment_{idx}"
+        statements.append(
+            f"INSERT INTO @columns (ColumnName, Comment) VALUES (:{key_col}, :{key_comment});"
+        )
+        params[key_col] = column
+        params[key_comment] = comment
+    statements.append(
+        """
+DECLARE @col SYSNAME, @comment NVARCHAR(4000);
+WHILE EXISTS (SELECT 1 FROM @columns)
+BEGIN
+  SELECT TOP 1 @col = ColumnName, @comment = Comment FROM @columns;
+  BEGIN TRY
+    EXEC sys.sp_updateextendedproperty
+      @name=N'MS_Description', @value=@comment,
+      @level0type=N'SCHEMA', @level0name=@schema,
+      @level1type=N'TABLE', @level1name=@table,
+      @level2type=N'COLUMN', @level2name=@col;
+  END TRY
+  BEGIN CATCH
+    EXEC sys.sp_addextendedproperty
+      @name=N'MS_Description', @value=@comment,
+      @level0type=N'SCHEMA', @level0name=@schema,
+      @level1type=N'TABLE', @level1name=@table,
+      @level2type=N'COLUMN', @level2name=@col;
+  END CATCH;
+  DELETE FROM @columns WHERE ColumnName = @col;
+END
+"""
+    )
+    script = "\n".join(statements)
+    conn.execute(text(script), params)
+    logger.info("Applied system column descriptions to %s.%s", schema, table)
 
 def _column_spec_for_missing(name: str, metadata: DimensionMetadata) -> ColumnSpec | None:
     if name in metadata.natural_key_specs:
