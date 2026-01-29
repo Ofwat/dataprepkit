@@ -161,9 +161,9 @@ def verify_stage_file_hashes(
 
 def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") -> None:
     _ensure_temp_table(engine, config.temp_table, config.temp_columns)
-    cols_list = list(config.temp_columns.keys())
-    if cols_list:
-        cols = ", ".join(cols_list)
+    base_cols = [name for name, dtype in config.temp_columns.items() if dtype is None]
+    if base_cols:
+        cols = ", ".join(base_cols)
         insert_temp = text(
             f"""
             INSERT INTO {config.temp_table} ({cols})
