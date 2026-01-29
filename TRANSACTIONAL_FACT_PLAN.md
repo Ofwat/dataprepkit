@@ -41,7 +41,10 @@
    - Build a dedicated `fact_loader` module that exposes `FactConfig`, surrogate join specs, hash validation, and the transactional insert logic so the workflow is implemented in one place.
    - Keep it independent of the metadata loader so it can be reused in other pipelines, but have it consume shared helpers (e.g., `stage_dataframe`, `ensure_schema_exists`) to minimize duplication.
 
-**Production considerations**
+- **Progress update**
+  - Step 0 ("Validate source files") now has a working implementation: `verify_stage_file_hashes` enumerates each staging row, resolves the file (with configurable partition columns), and raises `HashMismatchError` or `MissingStageFileError` if anything is wrong. An example script lives in `examples/fact_hash_example.py`.
+
+- **Production considerations**
 - Log the raw file hash comparison result along with the business keys when validation fails so you can trace which file caused the rejection.
 - Make the staging-to-dimension mapping metadata expressive enough to declare composite key joins, extra columns to pull, and multiple dimension lookups per fact column.
 - Wrap the transactional insert in retry/backoff logic (or use the database’s built-in retry policies) to survive transient locks, and persist batch audit metadata (batch_id, timestamp, row counts) for reconciliation.
