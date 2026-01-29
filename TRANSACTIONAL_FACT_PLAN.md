@@ -10,7 +10,7 @@
    - Include natural keys for each referenced dimension plus the fact-level measures/time attributes.
    - Treat that mapping as metadata-driven: declare in a config which staging column maps to each SCD2 dimension natural key so step 2 can iterate over that metadata instead of hard-coded SQL.
 
-2. **Resolve surrogate keys**
+2. **Build temporary fact table via lookups**
   - For every dimension referenced by the fact, update `fact_stage` by joining on the natural key and pulling the current surrogate key:
     ```sql
      UPDATE fact_stage
@@ -20,8 +20,8 @@
        ON fs.dim_natural_key = d.natural_key
      WHERE d.current_ind = 1;
      ```
-   - Repeat for each dimension, logging or capturing rows that don’t resolve.
-   - As part of these lookups you can bring extra columns from the dimension (e.g., geography or metadata attributes) even if they were not in the staging table, and multiple dimensions can be joined to enrich the stage before the fact insert.
+  - Repeat for each dimension, logging or capturing rows that don’t resolve.
+  - As part of these lookups you can bring extra columns from the dimension (e.g., geography or metadata attributes) even if they were not in the staging table, and multiple dimensions can be joined to enrich the stage before the fact insert.
 
 3. **Insert into fact table transactionally**
    - Wrap the following inside a single transaction:
