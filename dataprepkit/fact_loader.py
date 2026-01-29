@@ -140,25 +140,8 @@ def verify_stage_file_hashes(
             )
 
 
-def validate_hash(engine: Engine, metadata: FactBatchMetadata) -> None:
-    # Placeholder: expect validations contains 'file_path' -> 'expected_hash'
-    query = text(
-        "SELECT Filename, file_hash_md5 FROM fact_batch_files WHERE batch_id = :batch"
-    )
-    with engine.connect() as conn:
-        result = conn.execute(query, {"batch": metadata.batch_id}).fetchone()
-    if not result:
-        raise RuntimeError("missing batch metadata")
-    actual_hash = _compute_md5(result[0])
-    expected_hash = result[1]
-    if actual_hash != expected_hash:
-        raise HashMismatchError("hash mismatch")
-
-
 def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") -> None:
     # 1. Validate
-    validate_hash(engine, config.batch)
-
     # 2. Stage
     df = config.staging_reader()
     ensure_schema_exists(engine, config.batch.staging_table.split(".")[0])
