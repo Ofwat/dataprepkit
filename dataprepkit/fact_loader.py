@@ -45,6 +45,8 @@ class FactConfig:
     dimensions: Sequence[DimensionJoinSpec]
     fact_columns: Sequence[str]
     staging_reader: Callable[[], pd.DataFrame]
+    staging_table: str
+    staging_columns: Mapping[str, str]
 
 
 @dataclass
@@ -90,6 +92,22 @@ def _list_stage_files(
                 row.get(spec.hash_column),
                 extra,
             )
+
+
+def _render_column_defs(columns: Mapping[str, str]) -> str:
+    return ", ".join(f"{name} {dtype}" for name, dtype in columns.items())
+
+
+def _ensure_staging_table(
+    engine: Engine, table_name: str, columns: Mapping[str, str]
+) -> None:
+    schema = table_name.split(".")[0] if "." in table_name else None
+    if schema:
+        ensure_schema_exists(engine, schema)
+    with engine.begin() as conn:
+        conn.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
+        create_sql = f"CREATE TABLE {table_name} ({_render_column_defs(columns)})"
+        conn.execute(text(create_sql))
 
 
 def verify_stage_file_hashes(
@@ -141,13 +159,11 @@ def verify_stage_file_hashes(
 
 
 def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") -> None:
-    # 1. Validate
-    # 2. Stage
     df = config.staging_reader()
-    ensure_schema_exists(engine, config.batch.staging_table.split(".")[0])
-    stage_dataframe(engine, config.batch.staging_table, df, if_exists="replace")
+    _ensure_staging_table(engine, config.batch.staging_table, config.staging_columns)
+    stage_dataframe(engine, config.batch.staging_table, df, if_exists="append")
 
-    # 3. Resolve surrogates
+    # 2. Resolve surrogates
     for dimension in config.dimensions:
         join_clause = " AND ".join(
             f"fs.{s} = d.{dcol}"
@@ -165,7 +181,7 @@ def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") ->
         )
         engine.execute(update_stmt)
 
-    # 4. Insert facts
+    # 3. Insert facts
     try:
         with engine.begin() as conn:
             insert_cols = ", ".join(config.fact_columns)
