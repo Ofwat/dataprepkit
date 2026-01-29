@@ -194,8 +194,8 @@ def verify_stage_file_hashes(
 
 
 def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") -> None:
+    base_cols = list(config.temp_columns.keys())
     temp_columns = dict(config.temp_columns)
-    base_cols = [name for name, dtype in config.temp_columns.items() if dtype is None]
     for dimension in config.dimensions:
         surrogate_col = dimension.surrogate_column or _default_surrogate_column_name(
             dimension.dim_table
@@ -204,21 +204,15 @@ def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") ->
         for col in dimension.add_columns:
             temp_columns.setdefault(col, "BIGINT")
     _ensure_temp_table(engine, config.temp_table, temp_columns)
-    if base_cols:
-        cols = ", ".join(base_cols)
-        insert_temp = text(
-            f"""
-            INSERT INTO {config.temp_table} ({cols})
-            SELECT {cols} FROM {config.source_table}
-            """
-        )
-    else:
-        insert_temp = text(
-            f"""
-            INSERT INTO {config.temp_table}
-            SELECT * FROM {config.source_table}
-            """
-        )
+    if not base_cols:
+        raise RuntimeError("No base columns defined for temp table copy")
+    cols = ", ".join(base_cols)
+    insert_temp = text(
+        f"""
+        INSERT INTO {config.temp_table} ({cols})
+        SELECT {cols} FROM {config.source_table}
+        """
+    )
     with engine.begin() as conn:
         conn.execute(insert_temp)
 

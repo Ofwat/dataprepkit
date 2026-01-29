@@ -7,9 +7,13 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from dataprepkit.fact_loader import (
+    DimensionJoinSpec,
+    FactBatchMetadata,
+    FactConfig,
     HashMismatchError,
     MissingStageFileError,
     StageFileSpec,
+    ingest_fact,
     verify_stage_file_hashes,
 )
 
@@ -98,3 +102,145 @@ def test_missing_target_file(tmp_path, sample_engine):
             spec,
             base_path=str(tmp_path),
         )
+
+
+def _create_fact_tables(engine):
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS staging (
+                    batch_id TEXT,
+                    Organisation_Cd TEXT,
+                    measure_value REAL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS fact (
+                    batch_id TEXT,
+                    company_sk INTEGER,
+                    measure_value REAL,
+                    Company_Instance_Id INTEGER,
+                    Company_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS Dimensions_tbl_d_company (
+                    surrogate_key INTEGER PRIMARY KEY,
+                    join_numeric_key INTEGER,
+                    Organisation_Cd TEXT,
+                    Company_Instance_Id INTEGER,
+                    Company_Id INTEGER,
+                    current_ind INTEGER
+                )
+                """
+            )
+        )
+
+
+@pytest.fixture
+def fact_engine(tmp_path):
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    _create_fact_tables(engine)
+    yield engine
+    engine.dispose()
+
+
+def test_ingest_fact_populates_company_ids(fact_engine):
+    with fact_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B1','REGION1', 1.5)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO Dimensions_tbl_d_company (surrogate_key, join_numeric_key, Organisation_Cd, Company_Instance_Id, Company_Id) VALUES (1, 10, 'REGION1', 100, 200)"
+            )
+        )
+    config = FactConfig(
+        batch=FactBatchMetadata(
+            fact_table="fact",
+            batch_id="B1",
+            audit_columns={"batch_id": "batch_id"},
+            validations={},
+        ),
+        dimensions=[
+            DimensionJoinSpec(
+                dim_table="Dimensions_tbl_d_company",
+                staging_columns=["Organisation_Cd"],
+                dim_columns=["Organisation_Cd"],
+                add_columns={"Company_Instance_Id": "Company_Instance_Id", "Company_Id": "Company_Id"},
+                require_not_null=["Company_Instance_Id", "Company_Id"],
+            )
+        ],
+        fact_columns=[
+            "batch_id",
+            "company_sk",
+            "measure_value",
+            "Company_Instance_Id",
+            "Company_Id",
+        ],
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={
+            "batch_id": None,
+            "Organisation_Cd": None,
+            "measure_value": None,
+        },
+    )
+    ingest_fact(fact_engine, config)
+    with fact_engine.connect() as conn:
+        result = conn.execute(text("SELECT batch_id, Company_Instance_Id, Company_Id FROM fact")).fetchone()
+    assert result == ("B1", 100, 200)
+
+
+def test_ingest_fact_missing_dimension(fact_engine):
+    with fact_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B2','UNKNOWN', 2.5)"
+            )
+        )
+    config = FactConfig(
+        batch=FactBatchMetadata(
+            fact_table="fact",
+            batch_id="B2",
+            audit_columns={"batch_id": "batch_id"},
+            validations={},
+        ),
+        dimensions=[
+            DimensionJoinSpec(
+                dim_table="Dimensions_tbl_d_company",
+                staging_columns=["Organisation_Cd"],
+                dim_columns=["Organisation_Cd"],
+                add_columns={"Company_Instance_Id": "Company_Instance_Id", "Company_Id": "Company_Id"},
+                require_not_null=["Company_Instance_Id", "Company_Id"],
+            )
+        ],
+        fact_columns=[
+            "batch_id",
+            "company_sk",
+            "measure_value",
+            "Company_Instance_Id",
+            "Company_Id",
+        ],
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={
+            "batch_id": None,
+            "Organisation_Cd": None,
+            "measure_value": None,
+        },
+    )
+    with pytest.raises(RuntimeError):
+        ingest_fact(fact_engine, config)
+
