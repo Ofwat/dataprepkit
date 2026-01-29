@@ -75,7 +75,7 @@ def _list_stage_files(
         spec.hash_column,
         *spec.path_columns,
     ]
-    query = f"SELECT {', '.join(select_cols)} FROM {table_name}"
+    query = f"SELECT DISTINCT {', '.join(select_cols)} FROM {table_name}"
     params = {}
     if filters:
         where_clause = " AND ".join(f"{col} = :{col}" for col in filters)
