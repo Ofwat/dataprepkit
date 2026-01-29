@@ -72,7 +72,9 @@ fact_config = FactConfig(
         ),
     ],
     fact_columns=["batch_id", "company_sk", "measure_value"],
+    # Input staging table holding the raw snapshot; this is passed directly.
     source_table="Staging.qd_stg",
+    # Temporary fact table where surrogate lookups happen before the final insert.
     temp_table="Staging.qd_tmp_fact",
     temp_columns={
         "batch_id": None,
