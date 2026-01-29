@@ -3,7 +3,7 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from dataprepkit.metadata_loader import DimensionMetadata, get_metadata, run_dimension
-from dataprepkit.helpers.staging import stage_dataframe
+from dataprepkit.helpers import staging
 
 
 def _create_scd2_table(engine):
@@ -105,3 +105,17 @@ def test_stage_dataframe_append():
     with engine.connect() as conn:
         result = conn.execute(text("SELECT COUNT(*) FROM stage_table")).scalar()
     assert result == 4
+
+
+def test_stage_dataframe_ensures_schema(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    df = pd.DataFrame({"col": [1]})
+    calls = []
+
+    def fake_ensure(engine_arg, schema_arg):
+        calls.append((engine_arg, schema_arg))
+
+    monkeypatch.setattr(staging, "_ensure_schema", fake_ensure)
+    staging.stage_dataframe(engine, "stage_table", df, schema="custom")
+
+    assert calls == [(engine, "custom")]
