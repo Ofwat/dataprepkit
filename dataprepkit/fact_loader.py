@@ -26,6 +26,8 @@ class DimensionJoinSpec:
     staging_columns: Sequence[str]
     dim_columns: Sequence[str]
     extra_columns: Sequence[str] = field(default_factory=list[str])
+    add_columns: Mapping[str, str] = field(default_factory=dict[str, str])
+    require_not_null: Sequence[str] = field(default_factory=list[str])
 
 
 @dataclass
@@ -183,10 +185,16 @@ def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") ->
             f"fs.{s} = d.{dcol}"
             for s, dcol in zip(dimension.staging_columns, dimension.dim_columns)
         )
+        extra_sets = ", ".join(
+            f"{col} = d.{field}" for col, field in dimension.add_columns.items()
+        )
+        set_clause = f"{dimension.dim_table}_sk = d.surrogate_key"
+        if extra_sets:
+            set_clause = f"{set_clause}, {extra_sets}"
         update_stmt = text(
             f"""
             UPDATE {config.temp_table} fs
-            SET {dimension.dim_table}_sk = d.surrogate_key
+            SET {set_clause}
             FROM {config.temp_table} fs
             JOIN {dimension.dim_table} d
               ON {join_clause}
@@ -195,6 +203,16 @@ def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") ->
         )
         with engine.begin() as conn:
             conn.execute(update_stmt)
+        if dimension.require_not_null:
+            cond = " OR ".join(f"{col} IS NULL" for col in dimension.require_not_null)
+            with engine.connect() as conn:
+                result = conn.execute(
+                    text(f"SELECT COUNT(1) FROM {config.temp_table} WHERE {cond}")
+                ).scalar()
+            if result:
+                raise RuntimeError(
+                    f"Null values found for required columns {dimension.require_not_null}"
+                )
 
     try:
         with engine.begin() as conn:

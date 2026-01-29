@@ -69,6 +69,11 @@ fact_config = FactConfig(
             dim_table="Dimensions.tbl_d_company",
             staging_columns=["Organisation_Cd"],
             dim_columns=["Organisation_Cd"],
+            add_columns={
+                "Company_Instance_Id": "Company_Instance_Id",
+                "Company_Id": "Company_Id",
+            },
+            require_not_null=["Company_Instance_Id", "Company_Id"],
         ),
     ],
     fact_columns=["batch_id", "company_sk", "measure_value"],
@@ -80,6 +85,8 @@ fact_config = FactConfig(
         "batch_id": None,
         "Organisation_Cd": None,
         "measure_value": None,
+        "Company_Instance_Id": "BIGINT",
+        "Company_Id": "BIGINT",
     },
 )
 
