@@ -2,7 +2,7 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
 
-from dataprepkit.metadata_loader import DimensionMetadata, get_metadata, run_dimension
+from dataprepkit.metadata_loader import DimensionMetadata, get_metadata, run_dimension, stage_dataframe
 
 
 def _create_scd2_table(engine):
@@ -82,3 +82,25 @@ def test_schema_mismatch_raises(engine=None):
 
     with pytest.raises(RuntimeError):
         run_dimension(engine, "dummy_dimension", override_df=pd.DataFrame([{"natural_key": "x", "data_column": "v"}]))
+
+
+def test_stage_dataframe_creates_table():
+    engine = create_engine("sqlite:///:memory:")
+    df = pd.DataFrame({"col": [1, 2]})
+
+    stage_dataframe(engine, "stage_table", df, if_exists="replace")
+
+    with engine.connect() as conn:
+        result = conn.execute(text("SELECT COUNT(*) FROM stage_table")).scalar()
+    assert result == 2
+
+
+def test_stage_dataframe_append():
+    engine = create_engine("sqlite:///:memory:")
+    df = pd.DataFrame({"col": [1, 2]})
+    stage_dataframe(engine, "stage_table", df, if_exists="replace")
+    stage_dataframe(engine, "stage_table", df, if_exists="append")
+
+    with engine.connect() as conn:
+        result = conn.execute(text("SELECT COUNT(*) FROM stage_table")).scalar()
+    assert result == 4
