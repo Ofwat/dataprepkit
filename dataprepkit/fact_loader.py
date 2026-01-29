@@ -6,12 +6,10 @@ from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, 
 
 import hashlib
 
-import pandas as pd
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from dataprepkit.helpers.schema import ensure_schema_exists
-from dataprepkit.helpers.staging import stage_dataframe
 
 
 class HashMismatchError(RuntimeError):
@@ -33,7 +31,6 @@ class DimensionJoinSpec:
 @dataclass
 class FactBatchMetadata:
     fact_table: str
-    staging_table: str
     batch_id: str
     audit_columns: Dict[str, str]
     validations: Dict[str, str]  # {filename_col: hash_col}
@@ -44,9 +41,9 @@ class FactConfig:
     batch: FactBatchMetadata
     dimensions: Sequence[DimensionJoinSpec]
     fact_columns: Sequence[str]
-    staging_reader: Callable[[], pd.DataFrame]
-    staging_table: str
-    staging_columns: Mapping[str, str]
+    source_table: str
+    temp_table: str
+    temp_columns: Mapping[str, Optional[str]]
 
 
 @dataclass
@@ -94,13 +91,15 @@ def _list_stage_files(
             )
 
 
-def _render_column_defs(columns: Mapping[str, str]) -> str:
-    return ", ".join(f"{name} {dtype}" for name, dtype in columns.items())
+def _render_column_defs(columns: Mapping[str, Optional[str]]) -> str:
+    return ", ".join(f"{name} {dtype}" for name, dtype in columns.items() if dtype)
 
 
-def _ensure_staging_table(
-    engine: Engine, table_name: str, columns: Mapping[str, str]
+def _ensure_temp_table(
+    engine: Engine, table_name: str, columns: Mapping[str, Optional[str]]
 ) -> None:
+    if not any(dtype for dtype in columns.values()):
+        return
     schema = table_name.split(".")[0] if "." in table_name else None
     if schema:
         ensure_schema_exists(engine, schema)
@@ -159,11 +158,26 @@ def verify_stage_file_hashes(
 
 
 def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") -> None:
-    df = config.staging_reader()
-    _ensure_staging_table(engine, config.batch.staging_table, config.staging_columns)
-    stage_dataframe(engine, config.batch.staging_table, df, if_exists="append")
+    _ensure_temp_table(engine, config.temp_table, config.temp_columns)
+    cols_list = list(config.temp_columns.keys())
+    if cols_list:
+        cols = ", ".join(cols_list)
+        insert_temp = text(
+            f"""
+            INSERT INTO {config.temp_table} ({cols})
+            SELECT {cols} FROM {config.source_table}
+            """
+        )
+    else:
+        insert_temp = text(
+            f"""
+            INSERT INTO {config.temp_table}
+            SELECT * FROM {config.source_table}
+            """
+        )
+    with engine.begin() as conn:
+        conn.execute(insert_temp)
 
-    # 2. Resolve surrogates
     for dimension in config.dimensions:
         join_clause = " AND ".join(
             f"fs.{s} = d.{dcol}"
@@ -171,17 +185,17 @@ def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") ->
         )
         update_stmt = text(
             f"""
-            UPDATE {config.batch.staging_table} fs
+            UPDATE {config.temp_table} fs
             SET {dimension.dim_table}_sk = d.surrogate_key
-            FROM {config.batch.staging_table} fs
+            FROM {config.temp_table} fs
             JOIN {dimension.dim_table} d
               ON {join_clause}
             WHERE d.current_ind = 1
             """
         )
-        engine.execute(update_stmt)
+        with engine.begin() as conn:
+            conn.execute(update_stmt)
 
-    # 3. Insert facts
     try:
         with engine.begin() as conn:
             insert_cols = ", ".join(config.fact_columns)
@@ -189,7 +203,7 @@ def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") ->
             insert_sql = text(
                 f"""
                 INSERT INTO {config.batch.fact_table} ({insert_cols})
-                SELECT {select_cols} FROM {config.batch.staging_table}
+                SELECT {select_cols} FROM {config.temp_table}
                 """
             )
             conn.execute(insert_sql)
