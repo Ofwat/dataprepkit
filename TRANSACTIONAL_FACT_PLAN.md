@@ -38,6 +38,7 @@
 
 6. **Automation**
    - Package these steps behind a config-driven helper API that takes the engine, stage/fact tables, batch metadata, and the dimension-column mapping described earlier.
+   - Build a dedicated `fact_loader` module that exposes `FactConfig`, surrogate join specs, hash validation, and the transactional insert logic so the workflow is implemented in one place.
    - Keep it independent of the metadata loader so it can be reused in other pipelines, but have it consume shared helpers (e.g., `stage_dataframe`, `ensure_schema_exists`) to minimize duplication.
 
 **Production considerations**
