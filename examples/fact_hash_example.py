@@ -57,6 +57,9 @@ verify_stage_file_hashes(
     path_resolver=find_stage_file,
 )
 
+# Build temporary fact dataframe from the staging table.
+df = pd.read_sql_table("Staging.qd_stg", con=engine)
+
 # After verification we can stage and load the batch using `FactConfig`.
 fact_config = FactConfig(
     batch=FactBatchMetadata(
