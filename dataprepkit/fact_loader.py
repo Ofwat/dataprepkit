@@ -7,7 +7,7 @@ from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, 
 import hashlib
 
 import pandas as pd
-from sqlalchemy import Engine, inspect, text
+from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from dataprepkit.helpers.schema import ensure_schema_exists
@@ -55,7 +55,7 @@ class StageFileSpec:
     path_columns: Sequence[str] = field(default_factory=list[str])
 
 
-def compute_md5(path: str) -> str:
+def _compute_md5(path: str) -> str:
     h = hashlib.md5()
     with open(path, "rb") as f:
         while chunk := f.read(8192):
@@ -63,30 +63,7 @@ def compute_md5(path: str) -> str:
     return h.hexdigest()
 
 
-def _split_table_name(name: str) -> tuple[str | None, str]:
-    if "." in name:
-        schema, tbl = name.split(".", 1)
-        return schema.strip("[]\""), tbl.strip("[]\"")
-    return None, name
-
-
-def discover_stage_file_spec(
-    engine: Engine, table_name: str, spec: StageFileSpec
-) -> StageFileSpec:
-    schema, table = _split_table_name(table_name)
-    inspector = inspect(engine)
-    columns = {col["name"] for col in inspector.get_columns(table, schema=schema)}
-    for attr in ("organisation_column", "filename_column", "hash_column"):
-        col = getattr(spec, attr)
-        if col not in columns:
-            raise ValueError(f"Missing column {col} in staging table {table_name}")
-    for col in spec.path_columns:
-        if col not in columns:
-            raise ValueError(f"Missing column {col} required for path resolution")
-    return spec
-
-
-def list_stage_files(
+def _list_stage_files(
     engine: Engine,
     table_name: str,
     spec: StageFileSpec,
@@ -145,7 +122,7 @@ def verify_stage_file_hashes(
         resolver = _base_resolver
     if resolver is None:
         raise ValueError("Either path_resolver or base_path must be provided.")
-    for organisation, filename, expected_hash, row_meta in list_stage_files(
+    for organisation, filename, expected_hash, row_meta in _list_stage_files(
         engine, table_name, spec
     ):
         if expected_hash is None:
@@ -156,7 +133,7 @@ def verify_stage_file_hashes(
             actual_path = resolver(organisation, filename, row_meta)
         except FileNotFoundError as exc:
             raise MissingStageFileError(str(exc)) from exc
-        actual_hash = compute_md5(actual_path)
+        actual_hash = _compute_md5(actual_path)
         if actual_hash != expected_hash:
             raise HashMismatchError(
                 f"{filename} hash mismatch (expected {expected_hash}, got {actual_hash})"
@@ -172,7 +149,7 @@ def validate_hash(engine: Engine, metadata: FactBatchMetadata) -> None:
         result = conn.execute(query, {"batch": metadata.batch_id}).fetchone()
     if not result:
         raise RuntimeError("missing batch metadata")
-    actual_hash = compute_md5(result[0])
+    actual_hash = _compute_md5(result[0])
     expected_hash = result[1]
     if actual_hash != expected_hash:
         raise HashMismatchError("hash mismatch")
