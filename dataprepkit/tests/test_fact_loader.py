@@ -6,7 +6,12 @@ import textwrap
 import pytest
 from sqlalchemy import create_engine, text
 
-from dataprepkit.fact_loader import HashMismatchError, StageFileSpec, verify_stage_file_hashes
+from dataprepkit.fact_loader import (
+    HashMismatchError,
+    MissingStageFileError,
+    StageFileSpec,
+    verify_stage_file_hashes,
+)
 
 
 def _create_file(path: Path, *, content: bytes) -> None:
@@ -75,6 +80,18 @@ def test_verify_stage_file_hashes_mismatch(tmp_path, sample_engine):
 
     spec = StageFileSpec("Organisation_Cd", "Filename", "file_hash_md5")
     with pytest.raises(HashMismatchError):
+        verify_stage_file_hashes(
+            sample_engine,
+            "staging",
+            spec,
+            base_path=str(tmp_path),
+        )
+
+
+def test_missing_target_file(tmp_path, sample_engine):
+    _insert_record(sample_engine, "REGION1", "unmatched.csv", "abc123")
+    spec = StageFileSpec("Organisation_Cd", "Filename", "file_hash_md5")
+    with pytest.raises(MissingStageFileError):
         verify_stage_file_hashes(
             sample_engine,
             "staging",

@@ -18,6 +18,10 @@ class HashMismatchError(RuntimeError):
     pass
 
 
+class MissingStageFileError(RuntimeError):
+    pass
+
+
 @dataclass
 class DimensionJoinSpec:
     dim_table: str
@@ -132,7 +136,13 @@ def verify_stage_file_hashes(
     """
     resolver = path_resolver
     if resolver is None and base_path is not None:
-        resolver = lambda svc, fname, extra=None: str(Path(base_path) / svc / fname)
+        def _base_resolver(svc, fname, extra=None):
+            full = Path(base_path) / svc / fname
+            if not full.exists():
+                raise FileNotFoundError(f"{full} not found")
+            return str(full)
+
+        resolver = _base_resolver
     if resolver is None:
         raise ValueError("Either path_resolver or base_path must be provided.")
     for organisation, filename, expected_hash, row_meta in list_stage_files(
@@ -142,7 +152,10 @@ def verify_stage_file_hashes(
             raise HashMismatchError(
                 f"Missing expected hash for {filename} (org={organisation})"
             )
-        actual_path = resolver(organisation, filename, row_meta)
+        try:
+            actual_path = resolver(organisation, filename, row_meta)
+        except FileNotFoundError as exc:
+            raise MissingStageFileError(str(exc)) from exc
         actual_hash = compute_md5(actual_path)
         if actual_hash != expected_hash:
             raise HashMismatchError(
