@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import hashlib
 
@@ -48,6 +48,7 @@ class StageFileSpec:
     organisation_column: str
     filename_column: str
     hash_column: str
+    path_columns: Sequence[str] = field(default_factory=list[str])
 
 
 def compute_md5(path: str) -> str:
@@ -75,6 +76,9 @@ def discover_stage_file_spec(
         col = getattr(spec, attr)
         if col not in columns:
             raise ValueError(f"Missing column {col} in staging table {table_name}")
+    for col in spec.path_columns:
+        if col not in columns:
+            raise ValueError(f"Missing column {col} required for path resolution")
     return spec
 
 
@@ -83,8 +87,13 @@ def list_stage_files(
     table_name: str,
     spec: StageFileSpec,
     filters: Optional[Dict[str, str]] = None,
-) -> Iterable[Tuple[str, str, Optional[str]]]:
-    select_cols = [spec.organisation_column, spec.filename_column, spec.hash_column]
+) -> Iterable[Tuple[str, str, Optional[str], Mapping[str, str]]]:
+    select_cols = [
+        spec.organisation_column,
+        spec.filename_column,
+        spec.hash_column,
+        *spec.path_columns,
+    ]
     query = f"SELECT {', '.join(select_cols)} FROM {table_name}"
     params = {}
     if filters:
@@ -92,8 +101,14 @@ def list_stage_files(
         query += f" WHERE {where_clause}"
         params.update(filters)
     with engine.connect() as conn:
-        for row in conn.execute(text(query), params):
-            yield row
+        for row in conn.execute(text(query), params).mappings():
+            extra = {col: row[col] for col in spec.path_columns}
+            yield (
+                row[spec.organisation_column],
+                row[spec.filename_column],
+                row.get(spec.hash_column),
+                extra,
+            )
 
 
 def verify_stage_file_hashes(
@@ -101,7 +116,9 @@ def verify_stage_file_hashes(
     table_name: str,
     spec: StageFileSpec,
     *,
-    path_resolver: Optional[Callable[[str, str], str]] = None,
+    path_resolver: Optional[
+        Callable[[str, str, Mapping[str, str]], str]
+    ] = None,
     base_path: Optional[str] = None,
 ) -> None:
     """
@@ -115,17 +132,17 @@ def verify_stage_file_hashes(
     """
     resolver = path_resolver
     if resolver is None and base_path is not None:
-        resolver = lambda org, filename: str(Path(base_path) / org / filename)
+        resolver = lambda svc, fname, extra=None: str(Path(base_path) / svc / fname)
     if resolver is None:
         raise ValueError("Either path_resolver or base_path must be provided.")
-    for organisation, filename, expected_hash in list_stage_files(
+    for organisation, filename, expected_hash, row_meta in list_stage_files(
         engine, table_name, spec
     ):
         if expected_hash is None:
             raise HashMismatchError(
                 f"Missing expected hash for {filename} (org={organisation})"
             )
-        actual_path = resolver(organisation, filename)
+        actual_path = resolver(organisation, filename, row_meta)
         actual_hash = compute_md5(actual_path)
         if actual_hash != expected_hash:
             raise HashMismatchError(
