@@ -5,12 +5,7 @@
    - Use `Organisation_Cd`, `Submission_Period_Cd`, and `Observation_Period_Cd` to locate the raw file being processed.
    - Compute the file’s MD5 hash and compare it to `file_hash_md5`. If the hashes don’t match, halt the pipeline and surface an alert so incorrect files never hit the fact table.
 
-1. **Stage raw data**
-   - Use the existing `stage_dataframe` helper to write each batch into a staging table (e.g., `fact_stage`).
-   - Include natural keys for each referenced dimension plus the fact-level measures/time attributes.
-   - Treat that mapping as metadata-driven: declare in a config which staging column maps to each SCD2 dimension natural key so step 2 can iterate over that metadata instead of hard-coded SQL.
-
-2. **Build temporary fact table via lookups**
+1. **Build temporary fact table via lookups**
   - For every dimension referenced by the fact, update `fact_stage` by joining on the natural key and pulling the current surrogate key:
     ```sql
      UPDATE fact_stage
