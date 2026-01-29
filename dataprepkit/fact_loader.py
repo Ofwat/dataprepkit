@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import hashlib
@@ -99,7 +100,9 @@ def verify_stage_file_hashes(
     engine: Engine,
     table_name: str,
     spec: StageFileSpec,
-    path_resolver: Callable[[str, str], str] = lambda org, filename: filename,
+    *,
+    path_resolver: Optional[Callable[[str, str], str]] = None,
+    base_path: Optional[str] = None,
 ) -> None:
     """
     Ensure each staging row file hash matches the checksum of the referenced file.
@@ -110,6 +113,11 @@ def verify_stage_file_hashes(
         spec: Columns describing organisation, filename, and hash.
         path_resolver: Callable mapping (organisation, filename) -> path to actual file.
     """
+    resolver = path_resolver
+    if resolver is None and base_path is not None:
+        resolver = lambda org, filename: str(Path(base_path) / org / filename)
+    if resolver is None:
+        raise ValueError("Either path_resolver or base_path must be provided.")
     for organisation, filename, expected_hash in list_stage_files(
         engine, table_name, spec
     ):
@@ -117,7 +125,7 @@ def verify_stage_file_hashes(
             raise HashMismatchError(
                 f"Missing expected hash for {filename} (org={organisation})"
             )
-        actual_path = path_resolver(organisation, filename)
+        actual_path = resolver(organisation, filename)
         actual_hash = compute_md5(actual_path)
         if actual_hash != expected_hash:
             raise HashMismatchError(

@@ -6,11 +6,7 @@ import textwrap
 import pytest
 from sqlalchemy import create_engine, text
 
-from dataprepkit.fact_loader import (
-    HashMismatchError,
-    StageFileSpec,
-    verify_stage_file_hashes,
-)
+from dataprepkit.fact_loader import HashMismatchError, StageFileSpec, verify_stage_file_hashes
 
 
 def _create_file(path: Path, *, content: bytes) -> None:
@@ -67,7 +63,7 @@ def test_verify_stage_file_hashes_success(tmp_path, sample_engine):
         sample_engine,
         "staging",
         spec,
-        path_resolver=lambda org, filename: filename,
+        base_path=str(tmp_path),
     )
 
 
@@ -83,5 +79,5 @@ def test_verify_stage_file_hashes_mismatch(tmp_path, sample_engine):
             sample_engine,
             "staging",
             spec,
-            path_resolver=lambda org, filename: filename,
+            base_path=str(tmp_path),
         )
