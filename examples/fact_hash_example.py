@@ -72,11 +72,12 @@ fact_config = FactConfig(
             dim_table="Dimensions.tbl_d_company",
             staging_columns=["Organisation_Cd"],
             dim_columns=["Organisation_Cd"],
+            surrogate_column="company_sk",
             add_columns={
                 "Company_Instance_Id": "Company_Instance_Id",
                 "Company_Id": "Company_Id",
             },
-            require_not_null=["Company_Instance_Id", "Company_Id"],
+            require_not_null=["company_sk"],
         ),
     ],
     fact_columns=[

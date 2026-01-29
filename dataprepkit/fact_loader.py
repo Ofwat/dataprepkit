@@ -229,6 +229,8 @@ def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") ->
             f"{surrogate_col} = (SELECT d.surrogate_key FROM {dimension.dim_table} d WHERE {predicate}{current_clause})"
         ]
         for col, field in dimension.add_columns.items():
+            if col == surrogate_col:
+                continue
             set_clauses.append(
                 f"{col} = (SELECT d.{field} FROM {dimension.dim_table} d WHERE {predicate}{current_clause})"
             )
