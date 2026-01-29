@@ -111,10 +111,21 @@ def _list_stage_files(
 _DEFAULT_COL_TYPE = "TEXT"
 
 
-def _render_column_defs(columns: Mapping[str, Optional[str]]) -> str:
+def _column_type_for_engine(engine: Engine) -> str:
+    dialect = engine.dialect.name
+    if dialect == "mssql":
+        return "NVARCHAR(4000)"
+    if dialect == "sqlite":
+        return "TEXT"
+    return "TEXT"
+
+
+def _render_column_defs(
+    columns: Mapping[str, Optional[str]], engine: Engine
+) -> str:
     defs = []
     for name, dtype in columns.items():
-        col_type = dtype if dtype else _DEFAULT_COL_TYPE
+        col_type = dtype if dtype else _column_type_for_engine(engine)
         defs.append(f"{name} {col_type}")
     return ", ".join(defs)
 
@@ -129,7 +140,8 @@ def _ensure_temp_table(
         ensure_schema_exists(engine, schema)
     with engine.begin() as conn:
         conn.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
-        create_sql = f"CREATE TABLE {table_name} ({_render_column_defs(columns)})"
+        column_defs = _render_column_defs(columns, engine)
+        create_sql = f"CREATE TABLE {table_name} ({column_defs})"
         conn.execute(text(create_sql))
 
 
