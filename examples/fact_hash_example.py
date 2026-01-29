@@ -61,7 +61,10 @@ fact_config = FactConfig(
     batch=FactBatchMetadata(
         fact_table="Dimensions.fact",
         batch_id="BATCH123",
-        audit_columns={"batch_id": "batch_id"},
+        audit_columns={
+            # staging_col : fact_col
+            "batch_id": "batch_id"
+        },
         validations={},
     ),
     dimensions=[
