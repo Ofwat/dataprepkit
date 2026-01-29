@@ -73,6 +73,7 @@ fact_config = FactConfig(
             staging_columns=["Organisation_Cd"],
             dim_columns=["Organisation_Cd"],
             surrogate_column="company_sk",
+            filter_target_current=True,
             add_columns={
                 "Company_Instance_Id": "Company_Instance_Id",
                 "Company_Id": "Company_Id",

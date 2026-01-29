@@ -30,6 +30,8 @@ class DimensionJoinSpec:
     add_columns: Mapping[str, str] = field(default_factory=dict[str, str])
     require_not_null: Sequence[str] = field(default_factory=list[str])
     surrogate_column: str | None = None
+    filter_target_current: bool = True
+    surrogate_column: str | None = None
 
 
 @dataclass
@@ -224,7 +226,9 @@ def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") ->
         surrogate_col = dimension.surrogate_column or _default_surrogate_column_name(
             dimension.dim_table
         )
-        current_clause = " AND (d.current_ind = 1 OR d.current_ind IS NULL)"
+        current_clause = ""
+        if dimension.filter_target_current:
+            current_clause = " AND (d.current_ind = 1 OR d.current_ind IS NULL)"
         set_clauses = [
             f"{surrogate_col} = (SELECT d.surrogate_key FROM {dimension.dim_table} d WHERE {predicate}{current_clause})"
         ]
