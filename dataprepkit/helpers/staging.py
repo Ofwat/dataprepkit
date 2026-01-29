@@ -2,6 +2,7 @@ from typing import Literal
 
 import pandas as pd
 from sqlalchemy import Engine, text
+from dataprepkit.helpers.schema import ensure_schema_exists
 
 
 def stage_dataframe(
@@ -31,7 +32,7 @@ def stage_dataframe(
     schema
         Optional schema name.
     """
-    _ensure_schema(engine, schema)
+    ensure_schema_exists(engine, schema)
     schema_for_sql = schema if engine.dialect.name == "mssql" else None
 
     df.to_sql(
@@ -41,16 +42,3 @@ def stage_dataframe(
         index=index,
         schema=schema_for_sql,
     )
-
-
-def _ensure_schema(engine: Engine, schema: str | None) -> None:
-    if not schema or engine.dialect.name != "mssql":
-        return
-    schema_safe = schema.replace("]", "]]")
-    sql = text(
-        f"""
-        IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = :schema)
-            EXEC('CREATE SCHEMA [{schema_safe}]')
-        """
-    )
-    engine.execute(sql, {"schema": schema})

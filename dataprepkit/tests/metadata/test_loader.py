@@ -3,7 +3,8 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from dataprepkit.metadata_loader import DimensionMetadata, get_metadata, run_dimension
-from dataprepkit.helpers import staging
+from dataprepkit.helpers.staging import stage_dataframe
+from dataprepkit.helpers.schema import ensure_schema_exists
 
 
 def _create_scd2_table(engine):
@@ -115,7 +116,7 @@ def test_stage_dataframe_ensures_schema(monkeypatch):
     def fake_ensure(engine_arg, schema_arg):
         calls.append((engine_arg, schema_arg))
 
-    monkeypatch.setattr(staging, "_ensure_schema", fake_ensure)
-    staging.stage_dataframe(engine, "stage_table", df, schema="custom")
+    monkeypatch.setattr("dataprepkit.helpers.staging.ensure_schema_exists", fake_ensure)
+    stage_dataframe(engine, "stage_table", df, schema="custom")
 
     assert calls == [(engine, "custom")]
