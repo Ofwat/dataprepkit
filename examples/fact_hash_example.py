@@ -76,7 +76,13 @@ fact_config = FactConfig(
             require_not_null=["Company_Instance_Id", "Company_Id"],
         ),
     ],
-    fact_columns=["batch_id", "company_sk", "measure_value"],
+    fact_columns=[
+        "batch_id",
+        "company_sk",
+        "measure_value",
+        "Company_Instance_Id",
+        "Company_Id",
+    ],
     # Input staging table holding the raw snapshot; this is passed directly.
     source_table="Staging.qd_stg",
     # Temporary fact table where surrogate lookups happen before the final insert.
