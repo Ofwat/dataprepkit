@@ -3,9 +3,14 @@
 import glob
 from pathlib import Path
 
+import pandas as pd
 from dataprepkit.fact_loader import (
+    DimensionJoinSpec,
+    FactBatchMetadata,
+    FactConfig,
     MissingStageFileError,
     StageFileSpec,
+    ingest_fact,
     verify_stage_file_hashes,
 )
 from dataprepkit.helpers.connectors.fabric import create_engine_for_fabric, validate
@@ -51,3 +56,39 @@ verify_stage_file_hashes(
     spec,
     path_resolver=find_stage_file,
 )
+
+# After verification we can stage and load the batch using `FactConfig`.
+fact_config = FactConfig(
+    batch=FactBatchMetadata(
+        fact_table="Dimensions.fact",
+        staging_table="Dimensions.fact_stage",
+        batch_id="BATCH123",
+        audit_columns={"batch_id": "batch_id"},
+        validations={},
+    ),
+    dimensions=[
+        DimensionJoinSpec(
+            dim_table="Dimensions.tbl_d_company",
+            staging_columns=["Organisation_Cd"],
+            dim_columns=["Organisation_Cd"],
+        ),
+    ],
+    fact_columns=["batch_id", "company_sk", "measure_value"],
+    staging_reader=lambda: pd.DataFrame(
+        [
+            {
+                "batch_id": "BATCH123",
+                "Organisation_Cd": "REGION1",
+                "measure_value": 123.45,
+            },
+        ]
+    ),
+    staging_table="Dimensions.fact_stage",
+    staging_columns={
+        "batch_id": "NVARCHAR(100)",
+        "Organisation_Cd": "NVARCHAR(4000)",
+        "measure_value": "DECIMAL(18, 2)",
+    },
+)
+
+ingest_fact(engine, fact_config)
