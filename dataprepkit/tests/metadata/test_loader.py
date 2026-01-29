@@ -2,7 +2,8 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
 
-from dataprepkit.metadata_loader import DimensionMetadata, get_metadata, run_dimension, stage_dataframe
+from dataprepkit.metadata_loader import DimensionMetadata, get_metadata, run_dimension
+from dataprepkit.helpers.staging import stage_dataframe
 
 
 def _create_scd2_table(engine):

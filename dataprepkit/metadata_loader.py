@@ -200,41 +200,6 @@ def _default_csv_reader(filepath: str) -> pd.DataFrame:
 )
 
 
-def stage_dataframe(
-    engine: Engine,
-    table_name: str,
-    df: pd.DataFrame,
-    *,
-    if_exists: Literal["fail", "replace", "append"] = "replace",
-    index: bool = False,
-    schema: str | None = None,
-) -> None:
-    """
-    Drop/create a staging table from a DataFrame (generic helper).
-
-    Parameters
-    ----------
-    engine
-        SQLAlchemy engine.
-    table_name
-        Name of the staging table (can include schema).
-    df
-        DataFrame to write.
-    if_exists
-        pandas if_exists strategy.
-    index
-        Whether to write the DataFrame index.
-    schema
-        Optional schema for databases that support it.
-    """
-    df.to_sql(
-        table_name,
-        engine,
-        if_exists=if_exists,
-        index=index,
-        schema=schema,
-    )
-
 
 _register_default_metadata()
 
