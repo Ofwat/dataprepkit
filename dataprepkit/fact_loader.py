@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import hashlib
+import re
 
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -28,6 +29,7 @@ class DimensionJoinSpec:
     extra_columns: Sequence[str] = field(default_factory=list[str])
     add_columns: Mapping[str, str] = field(default_factory=dict[str, str])
     require_not_null: Sequence[str] = field(default_factory=list[str])
+    surrogate_column: str | None = None
 
 
 @dataclass
@@ -54,6 +56,19 @@ class StageFileSpec:
     filename_column: str
     hash_column: str
     path_columns: Sequence[str] = field(default_factory=list[str])
+
+
+def _default_surrogate_column_name(dim_table: str) -> str:
+    table = dim_table.split(".")[-1]
+    match = re.search(r"tbl_[^_]*_(.+)$", table, re.IGNORECASE)
+    if match:
+        base = match.group(1)
+    elif table.lower().startswith("tbl_"):
+        base = table[len("tbl_") :]
+    else:
+        base = table
+    base = base.lstrip("d_")
+    return f"{base}_sk"
 
 
 def _compute_md5(path: str) -> str:
@@ -93,8 +108,15 @@ def _list_stage_files(
             )
 
 
+_DEFAULT_COL_TYPE = "TEXT"
+
+
 def _render_column_defs(columns: Mapping[str, Optional[str]]) -> str:
-    return ", ".join(f"{name} {dtype}" for name, dtype in columns.items() if dtype)
+    defs = []
+    for name, dtype in columns.items():
+        col_type = dtype if dtype else _DEFAULT_COL_TYPE
+        defs.append(f"{name} {col_type}")
+    return ", ".join(defs)
 
 
 def _ensure_temp_table(
@@ -160,8 +182,16 @@ def verify_stage_file_hashes(
 
 
 def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") -> None:
-    _ensure_temp_table(engine, config.temp_table, config.temp_columns)
+    temp_columns = dict(config.temp_columns)
     base_cols = [name for name, dtype in config.temp_columns.items() if dtype is None]
+    for dimension in config.dimensions:
+        surrogate_col = dimension.surrogate_column or _default_surrogate_column_name(
+            dimension.dim_table
+        )
+        temp_columns.setdefault(surrogate_col, "BIGINT")
+        for col in dimension.add_columns:
+            temp_columns.setdefault(col, "BIGINT")
+    _ensure_temp_table(engine, config.temp_table, temp_columns)
     if base_cols:
         cols = ", ".join(base_cols)
         insert_temp = text(
@@ -181,24 +211,29 @@ def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") ->
         conn.execute(insert_temp)
 
     for dimension in config.dimensions:
-        join_clause = " AND ".join(
-            f"fs.{s} = d.{dcol}"
+        predicate = " AND ".join(
+            f"{config.temp_table}.{s} = d.{dcol}"
             for s, dcol in zip(dimension.staging_columns, dimension.dim_columns)
         )
-        extra_sets = ", ".join(
-            f"{col} = d.{field}" for col, field in dimension.add_columns.items()
+        surrogate_col = dimension.surrogate_column or _default_surrogate_column_name(
+            dimension.dim_table
         )
-        set_clause = f"{dimension.dim_table}_sk = d.surrogate_key"
-        if extra_sets:
-            set_clause = f"{set_clause}, {extra_sets}"
+        current_clause = " AND (d.current_ind = 1 OR d.current_ind IS NULL)"
+        set_clauses = [
+            f"{surrogate_col} = (SELECT d.surrogate_key FROM {dimension.dim_table} d WHERE {predicate}{current_clause})"
+        ]
+        for col, field in dimension.add_columns.items():
+            set_clauses.append(
+                f"{col} = (SELECT d.{field} FROM {dimension.dim_table} d WHERE {predicate}{current_clause})"
+            )
         update_stmt = text(
             f"""
-            UPDATE {config.temp_table} fs
-            SET {set_clause}
-            FROM {config.temp_table} fs
-            JOIN {dimension.dim_table} d
-              ON {join_clause}
-            WHERE d.current_ind = 1
+            UPDATE {config.temp_table}
+            SET {', '.join(set_clauses)}
+            WHERE EXISTS (
+                SELECT 1 FROM {dimension.dim_table} d
+                WHERE {predicate}{current_clause}
+            )
             """
         )
         with engine.begin() as conn:

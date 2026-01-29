@@ -525,8 +525,12 @@ def _apply_table_and_column_comments(
     ]
     params = {"schema": schema, "table": table}
     if description:
+        safe_desc = description.replace("'", "''")
         statements.append(
             "DECLARE @description NVARCHAR(4000) = :description;"
+        )
+        statements.append(
+            f"-- description: {safe_desc}"
         )
         params["description"] = description
     statements.append(
@@ -535,6 +539,7 @@ def _apply_table_and_column_comments(
     for idx, (column, comment) in enumerate(column_comments.items()):
         key_col = f"column_{idx}"
         key_comment = f"comment_{idx}"
+        statements.append(f"-- column: {column}")
         statements.append(
             f"INSERT INTO @columns (ColumnName, Comment) VALUES (:{key_col}, :{key_comment});"
         )
@@ -584,6 +589,16 @@ END
     script = "\n".join(statements)
     conn.execute(text(script), params)
     logger.info("Applied comments to %s.%s", schema, table)
+
+
+def _apply_system_column_comments(
+    conn: Connection,
+    schema: str,
+    table: str,
+    column_comments: dict[str, str],
+) -> None:
+    """Apply column comments without a table-level description."""
+    _apply_table_and_column_comments(conn, schema, table, None, column_comments)
 
 def _column_spec_for_missing(name: str, metadata: DimensionMetadata) -> ColumnSpec | None:
     if name in metadata.natural_key_specs:
