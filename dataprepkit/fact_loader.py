@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Iterable, List, Sequence
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import hashlib
 
 import pandas as pd
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from dataprepkit.helpers.schema import ensure_schema_exists
@@ -42,12 +42,56 @@ class FactConfig:
     staging_reader: Callable[[], pd.DataFrame]
 
 
+@dataclass
+class StageFileSpec:
+    organisation_column: str
+    filename_column: str
+    hash_column: str
+
+
 def compute_md5(path: str) -> str:
     h = hashlib.md5()
     with open(path, "rb") as f:
         while chunk := f.read(8192):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _split_table_name(name: str) -> tuple[str | None, str]:
+    if "." in name:
+        schema, tbl = name.split(".", 1)
+        return schema.strip("[]\""), tbl.strip("[]\"")
+    return None, name
+
+
+def discover_stage_file_spec(
+    engine: Engine, table_name: str, spec: StageFileSpec
+) -> StageFileSpec:
+    schema, table = _split_table_name(table_name)
+    inspector = inspect(engine)
+    columns = {col["name"] for col in inspector.get_columns(table, schema=schema)}
+    for attr in ("organisation_column", "filename_column", "hash_column"):
+        col = getattr(spec, attr)
+        if col not in columns:
+            raise ValueError(f"Missing column {col} in staging table {table_name}")
+    return spec
+
+
+def list_stage_files(
+    engine: Engine,
+    table_name: str,
+    spec: StageFileSpec,
+    filters: Optional[Dict[str, str]] = None,
+) -> Iterable[Tuple[str, str, Optional[str]]]:
+    select_cols = [spec.organisation_column, spec.filename_column, spec.hash_column]
+    query = f"SELECT {', '.join(select_cols)} FROM {table_name}"
+    params = {}
+    if filters:
+        where_clause = " AND ".join(f"{col} = :{col}" for col in filters)
+        query += f" WHERE {where_clause}"
+        params.update(filters)
+    for row in engine.execute(text(query), params):
+        yield row
 
 
 def validate_hash(engine: Engine, metadata: FactBatchMetadata) -> None:
