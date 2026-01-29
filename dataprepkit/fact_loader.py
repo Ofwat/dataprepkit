@@ -90,8 +90,39 @@ def list_stage_files(
         where_clause = " AND ".join(f"{col} = :{col}" for col in filters)
         query += f" WHERE {where_clause}"
         params.update(filters)
-    for row in engine.execute(text(query), params):
-        yield row
+    with engine.connect() as conn:
+        for row in conn.execute(text(query), params):
+            yield row
+
+
+def verify_stage_file_hashes(
+    engine: Engine,
+    table_name: str,
+    spec: StageFileSpec,
+    path_resolver: Callable[[str, str], str] = lambda org, filename: filename,
+) -> None:
+    """
+    Ensure each staging row file hash matches the checksum of the referenced file.
+
+    Parameters:
+        engine: SQLAlchemy engine bound to the staging database.
+        table_name: Fully qualified staging table name (schema.table).
+        spec: Columns describing organisation, filename, and hash.
+        path_resolver: Callable mapping (organisation, filename) -> path to actual file.
+    """
+    for organisation, filename, expected_hash in list_stage_files(
+        engine, table_name, spec
+    ):
+        if expected_hash is None:
+            raise HashMismatchError(
+                f"Missing expected hash for {filename} (org={organisation})"
+            )
+        actual_path = path_resolver(organisation, filename)
+        actual_hash = compute_md5(actual_path)
+        if actual_hash != expected_hash:
+            raise HashMismatchError(
+                f"{filename} hash mismatch (expected {expected_hash}, got {actual_hash})"
+            )
 
 
 def validate_hash(engine: Engine, metadata: FactBatchMetadata) -> None:
@@ -99,7 +130,8 @@ def validate_hash(engine: Engine, metadata: FactBatchMetadata) -> None:
     query = text(
         "SELECT Filename, file_hash_md5 FROM fact_batch_files WHERE batch_id = :batch"
     )
-    result = engine.execute(query, {"batch": metadata.batch_id}).fetchone()
+    with engine.connect() as conn:
+        result = conn.execute(query, {"batch": metadata.batch_id}).fetchone()
     if not result:
         raise RuntimeError("missing batch metadata")
     actual_hash = compute_md5(result[0])
