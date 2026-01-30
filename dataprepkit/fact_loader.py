@@ -50,10 +50,7 @@ class FactConfig:
     source_table: str
     temp_table: str
     temp_columns: Mapping[str, Optional[str]]
-    system_columns: Mapping[str, str] = field(default_factory=dict[str, str])
-    system_column_types: Mapping[str, Optional[str]] = field(
-        default_factory=dict[str, Optional[str]]
-    )
+    current_ind_keys: Sequence[str] = field(default_factory=list[str])
 
 
 @dataclass
@@ -302,19 +299,34 @@ def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") ->
     fact_columns_types = {
         col: temp_columns.get(col) for col in config.fact_columns
     }
-    for name, dtype in config.system_column_types.items():
-        fact_columns_types.setdefault(name, dtype)
+    fact_columns_types.setdefault("Insert_Date", "DATETIME2(3)")
+    fact_columns_types.setdefault("Current_Ind", "BIT")
     _ensure_fact_table(engine, config.batch.fact_table, fact_columns_types)
+
+    if config.current_ind_keys:
+        predicates = " AND ".join(
+            f"{config.batch.fact_table}.{key} = tmp.{key}"
+            for key in config.current_ind_keys
+        )
+        update_current_sql = text(
+            f"""
+            UPDATE {config.batch.fact_table}
+            SET Current_Ind = 0
+            WHERE EXISTS (
+                SELECT 1 FROM {config.temp_table} tmp
+                WHERE {predicates}
+            )
+            """
+        )
+        with engine.begin() as conn:
+            conn.execute(update_current_sql)
     try:
         with engine.begin() as conn:
-            all_columns = list(config.fact_columns) + list(config.system_columns.keys())
-            insert_cols = ", ".join(all_columns)
+            insert_cols = ", ".join(config.fact_columns + ["Insert_Date", "Current_Ind"])
             select_cols = ", ".join(config.fact_columns)
-            system_exprs = ", ".join(config.system_columns.values())
-            select_clause = f"SELECT {select_cols}"
-            if system_exprs:
-                select_clause += f", {system_exprs}"
-            select_clause += f" FROM {config.temp_table}"
+            select_clause = (
+                f"SELECT {select_cols}, CURRENT_TIMESTAMP, 1 FROM {config.temp_table}"
+            )
             insert_sql = text(
                 f"""
                 INSERT INTO {config.batch.fact_table} ({insert_cols})

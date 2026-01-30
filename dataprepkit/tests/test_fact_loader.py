@@ -326,6 +326,62 @@ def test_ingest_fact_allows_non_current_rows_when_disabled(fact_engine):
     assert result == (2, 400)
 
 
+def test_ingest_fact_updates_current_indicator(fact_engine):
+    with fact_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B6','REGION6', 6.5)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B7','REGION6', 7.5)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO Dimensions_tbl_d_company (surrogate_key, join_numeric_key, Organisation_Cd, Company_Instance_Id, Company_Id, current_ind) VALUES (6, 60, 'REGION6', 6000, 7000, 1)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO fact (batch_id, company_sk, measure_value, Company_Instance_Id, Company_Id, Current_Ind, Insert_Date) VALUES ('B0', 6, 0.0, 6000, 7000, 1, CURRENT_TIMESTAMP)"
+            )
+        )
+    config = FactConfig(
+        batch=FactBatchMetadata(
+            fact_table="fact",
+            batch_id="B6",
+            audit_columns={"batch_id": "batch_id"},
+            validations={},
+        ),
+        dimensions=[
+            DimensionJoinSpec(
+                dim_table="Dimensions_tbl_d_company",
+                staging_columns=["Organisation_Cd"],
+                dim_columns=["Organisation_Cd"],
+                add_columns={"Company_Instance_Id": "Company_Instance_Id"},
+                require_not_null=["Company_Instance_Id"],
+            )
+        ],
+        fact_columns=["batch_id", "company_sk", "measure_value", "Company_Instance_Id"],
+        current_ind_keys=["company_sk"],
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={
+            "batch_id": None,
+            "Organisation_Cd": None,
+            "measure_value": None,
+        },
+    )
+    ingest_fact(fact_engine, config)
+    with fact_engine.connect() as conn:
+        rows = conn.execute(text("SELECT batch_id, Current_Ind FROM fact WHERE company_sk=6")).fetchall()
+    assert len(rows) == 2
+    assert any(r[0] == "B6" and r[1] == 1 for r in rows)
+    assert any(r[0] == "B0" and r[1] == 0 for r in rows)
+
+
 def test_ingest_fact_sets_system_columns(fact_engine):
     with fact_engine.begin() as conn:
         conn.execute(
