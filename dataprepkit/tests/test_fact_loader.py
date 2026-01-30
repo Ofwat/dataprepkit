@@ -171,9 +171,7 @@ def test_ingest_fact_populates_company_ids(fact_engine):
     config = FactConfig(
         batch=FactBatchMetadata(
             fact_table="fact",
-        batch_id="B1",
-        audit_columns={"batch_id": "'B1'"},
-        audit_column_types={"batch_id": "TEXT"},
+            batch_id="B1",
             validations={},
         ),
         dimensions=[
@@ -199,7 +197,7 @@ def test_ingest_fact_populates_company_ids(fact_engine):
             "measure_value": None,
         },
     )
-    ingest_fact(fact_engine, config)
+    ingest_fact(fact_engine, config, batch_id="B1")
     with fact_engine.connect() as conn:
         result = conn.execute(text("SELECT batch_id, Company_Instance_Id, Company_Id FROM fact")).fetchone()
     assert result == ("B1", 100, 200)
@@ -214,12 +212,10 @@ def test_ingest_fact_missing_dimension(fact_engine):
         )
     config = FactConfig(
         batch=FactBatchMetadata(
-        fact_table="fact",
-        batch_id="B2",
-        audit_columns={"batch_id": "'B2'"},
-        audit_column_types={"batch_id": "TEXT"},
-        validations={},
-    ),
+            fact_table="fact",
+            batch_id="B2",
+            validations={},
+        ),
         dimensions=[
             DimensionJoinSpec(
                 dim_table="Dimensions_tbl_d_company",
@@ -244,7 +240,7 @@ def test_ingest_fact_missing_dimension(fact_engine):
         },
     )
     with pytest.raises(RuntimeError):
-        ingest_fact(fact_engine, config)
+        ingest_fact(fact_engine, config, batch_id="B2")
 
 
 def test_ingest_fact_creates_fact_table_when_missing(fact_engine):
@@ -252,12 +248,10 @@ def test_ingest_fact_creates_fact_table_when_missing(fact_engine):
         conn.execute(text("DROP TABLE IF EXISTS fact"))
     config = FactConfig(
         batch=FactBatchMetadata(
-        fact_table="fact",
-        batch_id="B3",
-        audit_columns={"batch_id": "'B3'"},
-        audit_column_types={"batch_id": "TEXT"},
-        validations={},
-    ),
+            fact_table="fact",
+            batch_id="B3",
+            validations={},
+        ),
         dimensions=[
             DimensionJoinSpec(
                 dim_table="Dimensions_tbl_d_company",
@@ -276,7 +270,7 @@ def test_ingest_fact_creates_fact_table_when_missing(fact_engine):
             "measure_value": None,
         },
     )
-    ingest_fact(fact_engine, config)
+    ingest_fact(fact_engine, config, batch_id="B2")
     with fact_engine.connect() as conn:
         count = conn.execute(text("SELECT COUNT(1) FROM fact")).scalar()
     assert count == 1
@@ -296,12 +290,10 @@ def test_ingest_fact_allows_non_current_rows_when_disabled(fact_engine):
         )
     config = FactConfig(
         batch=FactBatchMetadata(
-        fact_table="fact",
-        batch_id="B4",
-        audit_columns={"batch_id": "'B4'"},
-        audit_column_types={"batch_id": "TEXT"},
-        validations={},
-    ),
+            fact_table="fact",
+            batch_id="B4",
+            validations={},
+        ),
         dimensions=[
             DimensionJoinSpec(
                 dim_table="Dimensions_tbl_d_company",
@@ -322,7 +314,7 @@ def test_ingest_fact_allows_non_current_rows_when_disabled(fact_engine):
             "measure_value": None,
         },
     )
-    ingest_fact(fact_engine, config)
+    ingest_fact(fact_engine, config, batch_id="B4")
     with fact_engine.connect() as conn:
         result = conn.execute(text("SELECT company_sk, Company_Instance_Id FROM fact WHERE batch_id='B4'")).fetchone()
     assert result == (2, 400)
@@ -352,11 +344,9 @@ def test_ingest_fact_updates_current_indicator(fact_engine):
         )
     config = FactConfig(
         batch=FactBatchMetadata(
-        fact_table="fact",
-        batch_id="B6",
-        audit_columns={"batch_id": "'B6'"},
-        audit_column_types={"batch_id": "TEXT"},
-        validations={},
+            fact_table="fact",
+            batch_id="B6",
+            validations={},
         ),
         dimensions=[
             DimensionJoinSpec(
@@ -377,7 +367,7 @@ def test_ingest_fact_updates_current_indicator(fact_engine):
             "measure_value": None,
         },
     )
-    ingest_fact(fact_engine, config)
+    ingest_fact(fact_engine, config, batch_id="B6")
     with fact_engine.connect() as conn:
         rows = conn.execute(text("SELECT batch_id, Current_Ind FROM fact WHERE company_sk=6")).fetchall()
     assert len(rows) == 2
@@ -400,8 +390,7 @@ def test_ingest_fact_sets_system_columns(fact_engine):
     config = FactConfig(
         batch=FactBatchMetadata(
             fact_table="fact",
-            batch_id="B5",
-            audit_columns={"batch_id": "batch_id"},
+        batch_id="B5",
             validations={},
         ),
         dimensions=[
@@ -424,7 +413,7 @@ def test_ingest_fact_sets_system_columns(fact_engine):
             "measure_value": None,
         },
     )
-    ingest_fact(fact_engine, config)
+    ingest_fact(fact_engine, config, batch_id="B5")
     with fact_engine.connect() as conn:
         row = conn.execute(
             text("SELECT Current_Ind, Insert_Date FROM fact WHERE batch_id='B5'")
@@ -443,12 +432,10 @@ def test_ingest_fact_adds_missing_fact_column(fact_engine):
         )
     config = FactConfig(
         batch=FactBatchMetadata(
-        fact_table="fact",
-        batch_id="B10",
-        audit_columns={"batch_id": "'B10'"},
-        audit_column_types={"batch_id": "TEXT"},
-        validations={},
-    ),
+            fact_table="fact",
+            batch_id="B10",
+            validations={},
+        ),
         dimensions=[
             DimensionJoinSpec(
                 dim_table="Dimensions_tbl_d_company",
@@ -468,7 +455,7 @@ def test_ingest_fact_adds_missing_fact_column(fact_engine):
             "extra_col": "INTEGER",
         },
     )
-    ingest_fact(fact_engine, config)
+    ingest_fact(fact_engine, config, batch_id="B10")
     with fact_engine.connect() as conn:
         result = conn.execute(text("PRAGMA table_info(fact)")).fetchall()
     assert any(r[1] == "extra_col" for r in result)

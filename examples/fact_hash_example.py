@@ -103,4 +103,4 @@ fact_config = FactConfig(
     },
 )
 
-ingest_fact(engine, fact_config)
+ingest_fact(engine, fact_config, batch_id="BATCH123")

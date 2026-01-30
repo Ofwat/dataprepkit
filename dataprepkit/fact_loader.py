@@ -51,10 +51,8 @@ class FactConfig:
     temp_table: str
     temp_columns: Mapping[str, Optional[str]]
     current_ind_keys: Sequence[str] = field(default_factory=list[str])
-    audit_columns: Mapping[str, str] = field(default_factory=dict[str, str])
-    audit_column_types: Mapping[str, Optional[str]] = field(
-        default_factory=dict[str, Optional[str]]
-    )
+    batch_id_column_name: str = "batch_id"
+    batch_id_column_type: Optional[str] = "NVARCHAR(4000)"
 
 
 @dataclass
@@ -234,7 +232,7 @@ def verify_stage_file_hashes(
             )
 
 
-def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") -> None:
+def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str = "replace") -> None:
     base_cols = list(config.temp_columns.keys())
     temp_columns = dict(config.temp_columns)
     for dimension in config.dimensions:
@@ -303,8 +301,9 @@ def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") ->
     fact_columns_types = {
         col: temp_columns.get(col) for col in config.fact_columns
     }
-    for name, dtype in config.audit_column_types.items():
-        fact_columns_types.setdefault(name, dtype)
+    fact_columns_types.setdefault(
+        config.batch_id_column_name, config.batch_id_column_type
+    )
     fact_columns_types.setdefault("Insert_Date", "DATETIME2(3)")
     fact_columns_types.setdefault("Current_Ind", "BIT")
     _ensure_fact_table(engine, config.batch.fact_table, fact_columns_types)
@@ -328,23 +327,19 @@ def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") ->
             conn.execute(update_current_sql)
     try:
         with engine.begin() as conn:
-            audit_cols = list(config.audit_columns.keys())
-            all_columns = config.fact_columns + ["Insert_Date", "Current_Ind"] + audit_cols
-            insert_cols = ", ".join(all_columns)
-            select_cols = ", ".join(config.fact_columns)
-            select_clause = (
-                f"SELECT {select_cols}, CURRENT_TIMESTAMP, 1"
+            insert_cols = ", ".join(
+                [config.batch_id_column_name]
+                + config.fact_columns
+                + ["Insert_Date", "Current_Ind"]
             )
-            if audit_cols:
-                audit_exprs = ", ".join(config.audit_columns.values())
-                select_clause += f", {audit_exprs}"
-            select_clause += f" FROM {config.temp_table}"
+            select_cols = ", ".join(config.fact_columns)
+            select_clause = f"SELECT :batch_id, {select_cols}, CURRENT_TIMESTAMP, 1 FROM {config.temp_table}"
             insert_sql = text(
                 f"""
                 INSERT INTO {config.batch.fact_table} ({insert_cols})
                 {select_clause}
                 """
             )
-            conn.execute(insert_sql)
+            conn.execute(insert_sql, {"batch_id": batch_id})
     except SQLAlchemyError as exc:
         raise RuntimeError("fact insert failed") from exc
