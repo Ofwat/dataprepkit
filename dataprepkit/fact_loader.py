@@ -7,7 +7,7 @@ from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, 
 import hashlib
 import re
 
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, Inspector, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from dataprepkit.helpers.schema import ensure_schema_exists
@@ -147,6 +147,13 @@ def _ensure_temp_table(
         conn.execute(text(create_sql))
 
 
+def _get_existing_columns(engine: Engine, table_name: str) -> set[str]:
+    inspector = Inspector.from_engine(engine)
+    schema = table_name.split(".")[0] if "." in table_name else None
+    table = table_name.split(".")[-1]
+    return {col["name"] for col in inspector.get_columns(table, schema)}
+
+
 def _ensure_fact_table(
     engine: Engine, table_name: str, columns: Mapping[str, Optional[str]]
 ) -> None:
@@ -155,24 +162,21 @@ def _ensure_fact_table(
     schema = table_name.split(".")[0] if "." in table_name else None
     if schema:
         ensure_schema_exists(engine, schema)
-    column_defs = _render_column_defs(columns, engine)
-    dialect = engine.dialect.name
-    if dialect == "sqlite":
-        create_sql = f"CREATE TABLE IF NOT EXISTS {table_name} ({column_defs})"
-    elif dialect == "mssql":
-        create_sql = f"""
-        IF NOT EXISTS (
-            SELECT * FROM sys.objects
-            WHERE object_id = OBJECT_ID(N'{table_name}') AND type = N'U'
-        )
-        BEGIN
-            CREATE TABLE {table_name} ({column_defs})
-        END
-        """
-    else:
-        create_sql = f"CREATE TABLE IF NOT EXISTS {table_name} ({column_defs})"
+    existing = _get_existing_columns(engine, table_name)
+    if not existing:
+        column_defs = _render_column_defs(columns, engine)
+        with engine.begin() as conn:
+            conn.execute(text(f"CREATE TABLE {table_name} ({column_defs})"))
+        return
+    new_columns = {
+        name: dtype for name, dtype in columns.items() if name not in existing
+    }
+    if not new_columns:
+        return
     with engine.begin() as conn:
-        conn.execute(text(create_sql))
+        for name, dtype in new_columns.items():
+            col_type = dtype if dtype else _column_type_for_engine(engine)
+            conn.execute(text(f"ALTER TABLE {table_name} ADD {name} {col_type}"))
 
 
 def verify_stage_file_hashes(
