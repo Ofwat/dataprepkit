@@ -50,6 +50,10 @@ class FactConfig:
     source_table: str
     temp_table: str
     temp_columns: Mapping[str, Optional[str]]
+    system_columns: Mapping[str, str] = field(default_factory=dict[str, str])
+    system_column_types: Mapping[str, Optional[str]] = field(
+        default_factory=dict[str, Optional[str]]
+    )
 
 
 @dataclass
@@ -298,15 +302,23 @@ def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") ->
     fact_columns_types = {
         col: temp_columns.get(col) for col in config.fact_columns
     }
+    for name, dtype in config.system_column_types.items():
+        fact_columns_types.setdefault(name, dtype)
     _ensure_fact_table(engine, config.batch.fact_table, fact_columns_types)
     try:
         with engine.begin() as conn:
-            insert_cols = ", ".join(config.fact_columns)
+            all_columns = list(config.fact_columns) + list(config.system_columns.keys())
+            insert_cols = ", ".join(all_columns)
             select_cols = ", ".join(config.fact_columns)
+            system_exprs = ", ".join(config.system_columns.values())
+            select_clause = f"SELECT {select_cols}"
+            if system_exprs:
+                select_clause += f", {system_exprs}"
+            select_clause += f" FROM {config.temp_table}"
             insert_sql = text(
                 f"""
                 INSERT INTO {config.batch.fact_table} ({insert_cols})
-                SELECT {select_cols} FROM {config.temp_table}
+                {select_clause}
                 """
             )
             conn.execute(insert_sql)

@@ -125,7 +125,9 @@ def _create_fact_tables(engine):
                     company_sk INTEGER,
                     measure_value REAL,
                     Company_Instance_Id INTEGER,
-                    Company_Id INTEGER
+                    Company_Id INTEGER,
+                    Insert_Date TEXT,
+                    Current_Ind INTEGER
                 )
                 """
             )
@@ -322,6 +324,54 @@ def test_ingest_fact_allows_non_current_rows_when_disabled(fact_engine):
     with fact_engine.connect() as conn:
         result = conn.execute(text("SELECT company_sk, Company_Instance_Id FROM fact WHERE batch_id='B4'")).fetchone()
     assert result == (2, 400)
+
+
+def test_ingest_fact_sets_system_columns(fact_engine):
+    with fact_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B5','REGION5', 5.5)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO Dimensions_tbl_d_company (surrogate_key, join_numeric_key, Organisation_Cd, Company_Instance_Id, Company_Id) VALUES (5, 50, 'REGION5', 600, 700)"
+            )
+        )
+    config = FactConfig(
+        batch=FactBatchMetadata(
+            fact_table="fact",
+            batch_id="B5",
+            audit_columns={"batch_id": "batch_id"},
+            validations={},
+        ),
+        dimensions=[
+            DimensionJoinSpec(
+                dim_table="Dimensions_tbl_d_company",
+                staging_columns=["Organisation_Cd"],
+                dim_columns=["Organisation_Cd"],
+                add_columns={"Company_Instance_Id": "Company_Instance_Id"},
+                require_not_null=["Company_Instance_Id"],
+            )
+        ],
+        fact_columns=["batch_id", "company_sk", "measure_value", "Company_Instance_Id"],
+        system_columns={"Insert_Date": "CURRENT_TIMESTAMP", "Current_Ind": "1"},
+        system_column_types={"Insert_Date": "TEXT", "Current_Ind": "INTEGER"},
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={
+            "batch_id": None,
+            "Organisation_Cd": None,
+            "measure_value": None,
+        },
+    )
+    ingest_fact(fact_engine, config)
+    with fact_engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT Current_Ind, Insert_Date FROM fact WHERE batch_id='B5'")
+        ).fetchone()
+    assert row[0] == 1
+    assert row[1] is not None
 
 
 def test_ingest_fact_adds_missing_fact_column(fact_engine):

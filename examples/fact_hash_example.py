@@ -88,6 +88,14 @@ fact_config = FactConfig(
         "measure_value",
         "Company_Id",
     ],
+    system_columns={
+        "Insert_Date": "CURRENT_TIMESTAMP",
+        "Current_Ind": "1",
+    },
+    system_column_types={
+        "Insert_Date": "DATETIME2(3)",
+        "Current_Ind": "BIT",
+    },
     # Input staging table holding the raw snapshot; this is passed directly.
     source_table="Staging.qd_stg",
     # Temporary fact table where surrogate lookups happen before the final insert.
