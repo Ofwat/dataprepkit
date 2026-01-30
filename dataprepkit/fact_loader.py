@@ -263,8 +263,9 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
         current_clause = ""
         if dimension.filter_target_current:
             current_clause = " AND (d.current_ind = 1 OR d.current_ind IS NULL)"
+        surrogate_dim_col = dimension.surrogate_column or "surrogate_key"
         set_clauses = [
-            f"{surrogate_col} = (SELECT d.surrogate_key FROM {dimension.dim_table} d WHERE {predicate}{current_clause})"
+            f"{surrogate_col} = (SELECT d.{surrogate_dim_col} FROM {dimension.dim_table} d WHERE {predicate}{current_clause})"
         ]
         for col, dim_col in dimension.add_columns.items():
             if col == surrogate_col:
