@@ -37,8 +37,6 @@ class DimensionJoinSpec:
 @dataclass
 class FactBatchMetadata:
     fact_table: str
-    batch_id: str
-    audit_columns: Dict[str, str]
     validations: Dict[str, str]  # {filename_col: hash_col}
 
 

@@ -60,7 +60,6 @@ verify_stage_file_hashes(
 fact_config = FactConfig(
     batch=FactBatchMetadata(
         fact_table="Dimensions.fact",
-        batch_id="BATCH123",
         validations={},
     ),
     dimensions=[
