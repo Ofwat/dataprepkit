@@ -48,7 +48,6 @@ class FactConfig:
     source_table: str
     temp_table: str
     temp_columns: Mapping[str, Optional[str]]
-    current_ind_keys: Sequence[str] = field(default_factory=list[str])
     batch_id_column_name: str = "batch_id"
     batch_id_column_type: Optional[str] = "NVARCHAR(4000)"
 
@@ -303,35 +302,15 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
         config.batch_id_column_name, config.batch_id_column_type
     )
     fact_columns_types.setdefault("Insert_Date", "DATETIME2(3)")
-    fact_columns_types.setdefault("Current_Ind", "BIT")
     _ensure_fact_table(engine, config.batch.fact_table, fact_columns_types)
 
-    if config.current_ind_keys:
-        predicates = " AND ".join(
-            f"{config.batch.fact_table}.{key} = tmp.{key}"
-            for key in config.current_ind_keys
-        )
-        update_current_sql = text(
-            f"""
-            UPDATE {config.batch.fact_table}
-            SET Current_Ind = 0
-            WHERE EXISTS (
-                SELECT 1 FROM {config.temp_table} tmp
-                WHERE {predicates}
-            )
-            """
-        )
-        with engine.begin() as conn:
-            conn.execute(update_current_sql)
     try:
         with engine.begin() as conn:
             insert_cols = ", ".join(
-                [config.batch_id_column_name]
-                + config.fact_columns
-                + ["Insert_Date", "Current_Ind"]
+                [config.batch_id_column_name] + config.fact_columns + ["Insert_Date"]
             )
             select_cols = ", ".join(config.fact_columns)
-            select_clause = f"SELECT :batch_id, {select_cols}, CURRENT_TIMESTAMP, 1 FROM {config.temp_table}"
+            select_clause = f"SELECT :batch_id, {select_cols}, CURRENT_TIMESTAMP FROM {config.temp_table}"
             insert_sql = text(
                 f"""
                 INSERT INTO {config.batch.fact_table} ({insert_cols})
