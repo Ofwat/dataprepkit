@@ -151,6 +151,8 @@ def _get_existing_columns(engine: Engine, table_name: str) -> set[str]:
     inspector = Inspector.from_engine(engine)
     schema = table_name.split(".")[0] if "." in table_name else None
     table = table_name.split(".")[-1]
+    if not inspector.has_table(table, schema):
+        return set()
     return {col["name"] for col in inspector.get_columns(table, schema)}
 
 
