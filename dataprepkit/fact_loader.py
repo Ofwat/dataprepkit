@@ -147,6 +147,34 @@ def _ensure_temp_table(
         conn.execute(text(create_sql))
 
 
+def _ensure_fact_table(
+    engine: Engine, table_name: str, columns: Mapping[str, Optional[str]]
+) -> None:
+    if not columns:
+        return
+    schema = table_name.split(".")[0] if "." in table_name else None
+    if schema:
+        ensure_schema_exists(engine, schema)
+    column_defs = _render_column_defs(columns, engine)
+    dialect = engine.dialect.name
+    if dialect == "sqlite":
+        create_sql = f"CREATE TABLE IF NOT EXISTS {table_name} ({column_defs})"
+    elif dialect == "mssql":
+        create_sql = f"""
+        IF NOT EXISTS (
+            SELECT * FROM sys.objects
+            WHERE object_id = OBJECT_ID(N'{table_name}') AND type = N'U'
+        )
+        BEGIN
+            CREATE TABLE {table_name} ({column_defs})
+        END
+        """
+    else:
+        create_sql = f"CREATE TABLE IF NOT EXISTS {table_name} ({column_defs})"
+    with engine.begin() as conn:
+        conn.execute(text(create_sql))
+
+
 def verify_stage_file_hashes(
     engine: Engine,
     table_name: str,
@@ -261,6 +289,10 @@ def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") ->
                     f"Null values found for required columns {dimension.require_not_null}"
                 )
 
+    fact_columns_types = {
+        col: temp_columns.get(col) for col in config.fact_columns
+    }
+    _ensure_fact_table(engine, config.batch.fact_table, fact_columns_types)
     try:
         with engine.begin() as conn:
             insert_cols = ", ".join(config.fact_columns)

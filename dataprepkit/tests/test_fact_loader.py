@@ -245,6 +245,40 @@ def test_ingest_fact_missing_dimension(fact_engine):
         ingest_fact(fact_engine, config)
 
 
+def test_ingest_fact_creates_fact_table_when_missing(fact_engine):
+    with fact_engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS fact"))
+    config = FactConfig(
+        batch=FactBatchMetadata(
+            fact_table="fact",
+            batch_id="B3",
+            audit_columns={"batch_id": "batch_id"},
+            validations={},
+        ),
+        dimensions=[
+            DimensionJoinSpec(
+                dim_table="Dimensions_tbl_d_company",
+                staging_columns=["Organisation_Cd"],
+                dim_columns=["Organisation_Cd"],
+                add_columns={"Company_Instance_Id": "Company_Instance_Id"},
+                require_not_null=["Company_Instance_Id"],
+            )
+        ],
+        fact_columns=["batch_id", "company_sk", "measure_value", "Company_Instance_Id"],
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={
+            "batch_id": None,
+            "Organisation_Cd": None,
+            "measure_value": None,
+        },
+    )
+    ingest_fact(fact_engine, config)
+    with fact_engine.connect() as conn:
+        count = conn.execute(text("SELECT COUNT(1) FROM fact")).scalar()
+    assert count == 1
+
+
 def test_ingest_fact_allows_non_current_rows_when_disabled(fact_engine):
     with fact_engine.begin() as conn:
         conn.execute(
