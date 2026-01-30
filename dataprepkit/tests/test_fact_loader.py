@@ -171,8 +171,9 @@ def test_ingest_fact_populates_company_ids(fact_engine):
     config = FactConfig(
         batch=FactBatchMetadata(
             fact_table="fact",
-            batch_id="B1",
-            audit_columns={"batch_id": "batch_id"},
+        batch_id="B1",
+        audit_columns={"batch_id": "'B1'"},
+        audit_column_types={"batch_id": "TEXT"},
             validations={},
         ),
         dimensions=[
@@ -185,7 +186,6 @@ def test_ingest_fact_populates_company_ids(fact_engine):
             )
         ],
         fact_columns=[
-            "batch_id",
             "company_sk",
             "measure_value",
             "Company_Instance_Id",
@@ -214,11 +214,12 @@ def test_ingest_fact_missing_dimension(fact_engine):
         )
     config = FactConfig(
         batch=FactBatchMetadata(
-            fact_table="fact",
-            batch_id="B2",
-            audit_columns={"batch_id": "batch_id"},
-            validations={},
-        ),
+        fact_table="fact",
+        batch_id="B2",
+        audit_columns={"batch_id": "'B2'"},
+        audit_column_types={"batch_id": "TEXT"},
+        validations={},
+    ),
         dimensions=[
             DimensionJoinSpec(
                 dim_table="Dimensions_tbl_d_company",
@@ -229,7 +230,6 @@ def test_ingest_fact_missing_dimension(fact_engine):
             )
         ],
         fact_columns=[
-            "batch_id",
             "company_sk",
             "measure_value",
             "Company_Instance_Id",
@@ -252,11 +252,12 @@ def test_ingest_fact_creates_fact_table_when_missing(fact_engine):
         conn.execute(text("DROP TABLE IF EXISTS fact"))
     config = FactConfig(
         batch=FactBatchMetadata(
-            fact_table="fact",
-            batch_id="B3",
-            audit_columns={"batch_id": "batch_id"},
-            validations={},
-        ),
+        fact_table="fact",
+        batch_id="B3",
+        audit_columns={"batch_id": "'B3'"},
+        audit_column_types={"batch_id": "TEXT"},
+        validations={},
+    ),
         dimensions=[
             DimensionJoinSpec(
                 dim_table="Dimensions_tbl_d_company",
@@ -266,7 +267,7 @@ def test_ingest_fact_creates_fact_table_when_missing(fact_engine):
                 require_not_null=["Company_Instance_Id"],
             )
         ],
-        fact_columns=["batch_id", "company_sk", "measure_value", "Company_Instance_Id"],
+        fact_columns=["company_sk", "measure_value", "Company_Instance_Id"],
         source_table="staging",
         temp_table="tmp_fact",
         temp_columns={
@@ -295,11 +296,12 @@ def test_ingest_fact_allows_non_current_rows_when_disabled(fact_engine):
         )
     config = FactConfig(
         batch=FactBatchMetadata(
-            fact_table="fact",
-            batch_id="B4",
-            audit_columns={"batch_id": "batch_id"},
-            validations={},
-        ),
+        fact_table="fact",
+        batch_id="B4",
+        audit_columns={"batch_id": "'B4'"},
+        audit_column_types={"batch_id": "TEXT"},
+        validations={},
+    ),
         dimensions=[
             DimensionJoinSpec(
                 dim_table="Dimensions_tbl_d_company",
@@ -311,7 +313,7 @@ def test_ingest_fact_allows_non_current_rows_when_disabled(fact_engine):
                 require_not_null=["company_sk"],
             )
         ],
-        fact_columns=["batch_id", "company_sk", "measure_value", "Company_Instance_Id"],
+        fact_columns=["company_sk", "measure_value", "Company_Instance_Id"],
         source_table="staging",
         temp_table="tmp_fact",
         temp_columns={
@@ -350,10 +352,11 @@ def test_ingest_fact_updates_current_indicator(fact_engine):
         )
     config = FactConfig(
         batch=FactBatchMetadata(
-            fact_table="fact",
-            batch_id="B6",
-            audit_columns={"batch_id": "batch_id"},
-            validations={},
+        fact_table="fact",
+        batch_id="B6",
+        audit_columns={"batch_id": "'B6'"},
+        audit_column_types={"batch_id": "TEXT"},
+        validations={},
         ),
         dimensions=[
             DimensionJoinSpec(
@@ -364,7 +367,7 @@ def test_ingest_fact_updates_current_indicator(fact_engine):
                 require_not_null=["Company_Instance_Id"],
             )
         ],
-        fact_columns=["batch_id", "company_sk", "measure_value", "Company_Instance_Id"],
+        fact_columns=["company_sk", "measure_value", "Company_Instance_Id"],
         current_ind_keys=["company_sk"],
         source_table="staging",
         temp_table="tmp_fact",
@@ -440,11 +443,12 @@ def test_ingest_fact_adds_missing_fact_column(fact_engine):
         )
     config = FactConfig(
         batch=FactBatchMetadata(
-            fact_table="fact",
-            batch_id="B10",
-            audit_columns={"batch_id": "batch_id"},
-            validations={},
-        ),
+        fact_table="fact",
+        batch_id="B10",
+        audit_columns={"batch_id": "'B10'"},
+        audit_column_types={"batch_id": "TEXT"},
+        validations={},
+    ),
         dimensions=[
             DimensionJoinSpec(
                 dim_table="Dimensions_tbl_d_company",
@@ -454,7 +458,7 @@ def test_ingest_fact_adds_missing_fact_column(fact_engine):
                 require_not_null=["Company_Instance_Id"],
             )
         ],
-        fact_columns=["batch_id", "company_sk", "measure_value", "Company_Instance_Id", "extra_col"],
+        fact_columns=["company_sk", "measure_value", "Company_Instance_Id", "extra_col"],
         source_table="staging",
         temp_table="tmp_fact",
         temp_columns={

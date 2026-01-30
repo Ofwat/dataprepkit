@@ -83,12 +83,13 @@ fact_config = FactConfig(
         ),
     ],
     fact_columns=[
-        "batch_id",
         "Company_Instance_Id",  # renamed alias of the surrogate
         "measure_value",
         "Company_Id",
     ],
     current_ind_keys=["Company_Instance_Id"],
+    audit_columns={"Batch_Id": "'BATCH123'"},
+    audit_column_types={"Batch_Id": "NVARCHAR(4000)"},
     # Input staging table holding the raw snapshot; this is passed directly.
     source_table="Staging.qd_stg",
     # Temporary fact table where surrogate lookups happen before the final insert.

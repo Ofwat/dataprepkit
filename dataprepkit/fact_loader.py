@@ -51,6 +51,10 @@ class FactConfig:
     temp_table: str
     temp_columns: Mapping[str, Optional[str]]
     current_ind_keys: Sequence[str] = field(default_factory=list[str])
+    audit_columns: Mapping[str, str] = field(default_factory=dict[str, str])
+    audit_column_types: Mapping[str, Optional[str]] = field(
+        default_factory=dict[str, Optional[str]]
+    )
 
 
 @dataclass
@@ -299,6 +303,8 @@ def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") ->
     fact_columns_types = {
         col: temp_columns.get(col) for col in config.fact_columns
     }
+    for name, dtype in config.audit_column_types.items():
+        fact_columns_types.setdefault(name, dtype)
     fact_columns_types.setdefault("Insert_Date", "DATETIME2(3)")
     fact_columns_types.setdefault("Current_Ind", "BIT")
     _ensure_fact_table(engine, config.batch.fact_table, fact_columns_types)
@@ -322,11 +328,17 @@ def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") ->
             conn.execute(update_current_sql)
     try:
         with engine.begin() as conn:
-            insert_cols = ", ".join(config.fact_columns + ["Insert_Date", "Current_Ind"])
+            audit_cols = list(config.audit_columns.keys())
+            all_columns = config.fact_columns + ["Insert_Date", "Current_Ind"] + audit_cols
+            insert_cols = ", ".join(all_columns)
             select_cols = ", ".join(config.fact_columns)
             select_clause = (
-                f"SELECT {select_cols}, CURRENT_TIMESTAMP, 1 FROM {config.temp_table}"
+                f"SELECT {select_cols}, CURRENT_TIMESTAMP, 1"
             )
+            if audit_cols:
+                audit_exprs = ", ".join(config.audit_columns.values())
+                select_clause += f", {audit_exprs}"
+            select_clause += f" FROM {config.temp_table}"
             insert_sql = text(
                 f"""
                 INSERT INTO {config.batch.fact_table} ({insert_cols})
