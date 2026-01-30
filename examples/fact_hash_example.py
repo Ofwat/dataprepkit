@@ -89,7 +89,6 @@ fact_config = FactConfig(
     # Temporary fact table where surrogate lookups happen before the final insert.
     temp_table="Staging.qd_tmp_fact",
     temp_columns={
-        "batch_id": "NVARCHAR(4000)",
         "Organisation_Cd": "NVARCHAR(4000)",
         "measure_value": "FLOAT",
         "Company_Instance_Id": "BIGINT",
