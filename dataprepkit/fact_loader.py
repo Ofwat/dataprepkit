@@ -31,7 +31,7 @@ class DimensionJoinSpec:
     require_not_null: Sequence[str] = field(default_factory=list[str])
     surrogate_column: str | None = None
     filter_target_current: bool = True
-    surrogate_column: str | None = None
+    internal_columns: Mapping[str, str] = field(default_factory=dict[str, str])
     join_chain: Sequence["DimensionJoinSpec"] = field(default_factory=list["DimensionJoinSpec"])
 
 
@@ -240,6 +240,8 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
         temp_columns.setdefault(surrogate_col, "BIGINT")
         for col in dimension.add_columns:
             temp_columns.setdefault(col, "BIGINT")
+        for col in dimension.internal_columns:
+            temp_columns.setdefault(col, "BIGINT")
     _ensure_temp_table(engine, config.temp_table, temp_columns)
     if not base_cols:
         raise RuntimeError("No base columns defined for temp table copy")
@@ -271,6 +273,10 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
         for col, dim_col in spec.add_columns.items():
             if col == surrogate_col:
                 continue
+            set_clauses.append(
+                f"{col} = (SELECT d.{dim_col} FROM {spec.dim_table} d WHERE {predicate}{current_clause})"
+            )
+        for col, dim_col in spec.internal_columns.items():
             set_clauses.append(
                 f"{col} = (SELECT d.{dim_col} FROM {spec.dim_table} d WHERE {predicate}{current_clause})"
             )

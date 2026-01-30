@@ -72,8 +72,8 @@ fact_config = FactConfig(
             add_columns={
                 # fact_column : dim_column
                 "Company_Instance_Id": "Company_Instance_Id",
-                "Company_Id": "Company_Id",
             },
+            internal_columns={"Company_Id": "Company_Id"},
             require_not_null=["Company_Instance_Id"],
             join_chain=[
                 DimensionJoinSpec(
@@ -89,7 +89,6 @@ fact_config = FactConfig(
     fact_columns=[
         "Company_Instance_Id",
         "measure_value",
-        "Company_Id",
         "Region_Id",
     ],
     # Input staging table holding the raw snapshot; this is passed directly.

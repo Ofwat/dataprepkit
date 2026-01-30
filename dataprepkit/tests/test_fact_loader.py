@@ -126,6 +126,7 @@ def _create_fact_tables(engine):
                     measure_value REAL,
                     Company_Instance_Id INTEGER,
                     Company_Id INTEGER,
+                    Region_Id INTEGER,
                     Insert_Date TEXT
                 )
                 """
@@ -152,6 +153,17 @@ def _create_fact_tables(engine):
                     surrogate_key INTEGER PRIMARY KEY,
                     Company_Type_Cd TEXT,
                     Company_Type_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS Dimensions_tbl_d_region (
+                    Region_Id INTEGER PRIMARY KEY,
+                    Company_Id INTEGER,
+                    current_ind INTEGER
                 )
                 """
             )
@@ -328,5 +340,63 @@ def test_ingest_fact_allows_non_current_rows_when_disabled(fact_engine):
     with fact_engine.connect() as conn:
         result = conn.execute(text("SELECT company_sk, Company_Instance_Id FROM fact WHERE batch_id='B4'")).fetchone()
     assert result == (2, 400)
+
+
+def test_ingest_fact_internal_columns_used_for_chain(fact_engine):
+    with fact_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B5','REGION5', 5.0)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO Dimensions_tbl_d_company (surrogate_key, join_numeric_key, Organisation_Cd, Company_Instance_Id, Company_Id) VALUES (3, 30, 'REGION5', 300, 400)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO Dimensions_tbl_d_region (Region_Id, Company_Id, current_ind) VALUES (55, 400, 1)"
+            )
+        )
+    config = FactConfig(
+        batch=FactBatchMetadata(
+            fact_table="fact",
+            batch_id="B5",
+            validations={},
+        ),
+        dimensions=[
+            DimensionJoinSpec(
+                dim_table="Dimensions_tbl_d_company",
+                staging_columns=["Organisation_Cd"],
+                dim_columns=["Organisation_Cd"],
+                surrogate_column="company_sk",
+                add_columns={"Company_Instance_Id": "Company_Instance_Id"},
+                internal_columns={"Company_Id": "Company_Id"},
+                require_not_null=["company_sk"],
+                join_chain=[
+                    DimensionJoinSpec(
+                        dim_table="Dimensions_tbl_d_region",
+                        staging_columns=["Company_Id"],
+                        dim_columns=["Company_Id"],
+                        add_columns={"Region_Id": "Region_Id"},
+                        require_not_null=["Region_Id"],
+                    )
+                ],
+            )
+        ],
+        fact_columns=["company_sk", "measure_value", "Company_Instance_Id", "Region_Id"],
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={
+            "batch_id": None,
+            "Organisation_Cd": None,
+            "measure_value": None,
+        },
+    )
+    ingest_fact(fact_engine, config, batch_id="B5")
+    with fact_engine.connect() as conn:
+        result = conn.execute(text("SELECT company_sk, Region_Id FROM fact WHERE batch_id='B5'")).fetchone()
+    assert result == (3, 55)
 
 
