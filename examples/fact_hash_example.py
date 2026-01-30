@@ -61,10 +61,10 @@ fact_config = FactConfig(
     batch=FactBatchMetadata(
         fact_table="Dimensions.fact",
         batch_id="BATCH123",
-        audit_columns={
-            # staging_col : fact_col
-            "batch_id": "batch_id"
-        },
+    audit_columns={
+        # staging_col : fact_col (source_column : target_column)
+        "batch_id": "batch_id"
+    },
         validations={},
     ),
     dimensions=[
@@ -75,7 +75,8 @@ fact_config = FactConfig(
             surrogate_column="company_sk",
             filter_target_current=True,
             add_columns={
-                "Company_Instance_Id": "Company_Instance_Id",
+                # fact_column : dim_column
+                "Company_Instance_Id": "company_sk",
                 "Company_Id": "Company_Id",
             },
             require_not_null=["company_sk"],
@@ -83,9 +84,8 @@ fact_config = FactConfig(
     ],
     fact_columns=[
         "batch_id",
-        "company_sk",
+        "Company_Instance_Id",  # renamed alias of the surrogate
         "measure_value",
-        "Company_Instance_Id",
         "Company_Id",
     ],
     # Input staging table holding the raw snapshot; this is passed directly.

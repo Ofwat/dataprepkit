@@ -244,3 +244,47 @@ def test_ingest_fact_missing_dimension(fact_engine):
     with pytest.raises(RuntimeError):
         ingest_fact(fact_engine, config)
 
+
+def test_ingest_fact_allows_non_current_rows_when_disabled(fact_engine):
+    with fact_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B4','REGION4', 4.5)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO Dimensions_tbl_d_company (surrogate_key, join_numeric_key, Organisation_Cd, Company_Instance_Id, Company_Id, current_ind) VALUES (2, 20, 'REGION4', 400, 500, 0)"
+            )
+        )
+    config = FactConfig(
+        batch=FactBatchMetadata(
+            fact_table="fact",
+            batch_id="B4",
+            audit_columns={"batch_id": "batch_id"},
+            validations={},
+        ),
+        dimensions=[
+            DimensionJoinSpec(
+                dim_table="Dimensions_tbl_d_company",
+                staging_columns=["Organisation_Cd"],
+                dim_columns=["Organisation_Cd"],
+                surrogate_column="company_sk",
+                filter_target_current=False,
+                add_columns={"Company_Instance_Id": "Company_Instance_Id"},
+                require_not_null=["company_sk"],
+            )
+        ],
+        fact_columns=["batch_id", "company_sk", "measure_value", "Company_Instance_Id"],
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={
+            "batch_id": None,
+            "Organisation_Cd": None,
+            "measure_value": None,
+        },
+    )
+    ingest_fact(fact_engine, config)
+    with fact_engine.connect() as conn:
+        result = conn.execute(text("SELECT company_sk, Company_Instance_Id FROM fact WHERE batch_id='B4'")).fetchone()
+    assert result == (2, 400)

@@ -232,11 +232,11 @@ def ingest_fact(engine: Engine, config: FactConfig, *, mode: str = "replace") ->
         set_clauses = [
             f"{surrogate_col} = (SELECT d.surrogate_key FROM {dimension.dim_table} d WHERE {predicate}{current_clause})"
         ]
-        for col, field in dimension.add_columns.items():
+        for col, dim_col in dimension.add_columns.items():
             if col == surrogate_col:
                 continue
             set_clauses.append(
-                f"{col} = (SELECT d.{field} FROM {dimension.dim_table} d WHERE {predicate}{current_clause})"
+                f"{col} = (SELECT d.{dim_col} FROM {dimension.dim_table} d WHERE {predicate}{current_clause})"
             )
         update_stmt = text(
             f"""
