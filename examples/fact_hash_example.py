@@ -61,10 +61,6 @@ fact_config = FactConfig(
     batch=FactBatchMetadata(
         fact_table="Dimensions.fact",
         batch_id="BATCH123",
-        audit_columns={
-            # staging_col : fact_col (source_column : target_column)
-            "batch_id": "batch_id"
-        },
         validations={},
     ),
     dimensions=[
@@ -88,8 +84,6 @@ fact_config = FactConfig(
         "Company_Id",
     ],
     current_ind_keys=["Company_Instance_Id"],
-    audit_columns={"Batch_Id": "'BATCH123'"},
-    audit_column_types={"Batch_Id": "NVARCHAR(4000)"},
     # Input staging table holding the raw snapshot; this is passed directly.
     source_table="Staging.qd_stg",
     # Temporary fact table where surrogate lookups happen before the final insert.
