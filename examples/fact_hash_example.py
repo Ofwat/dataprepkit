@@ -82,7 +82,6 @@ fact_config = FactConfig(
         "measure_value",
         "Company_Id",
     ],
-    current_ind_keys=["Company_Instance_Id"],
     # Input staging table holding the raw snapshot; this is passed directly.
     source_table="Staging.qd_stg",
     # Temporary fact table where surrogate lookups happen before the final insert.
