@@ -132,15 +132,26 @@ def _create_fact_tables(engine):
             )
         )
         conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS Dimensions_tbl_d_company (
+                        surrogate_key INTEGER PRIMARY KEY,
+                        join_numeric_key INTEGER,
+                        Organisation_Cd TEXT,
+                        Company_Instance_Id INTEGER,
+                        Company_Id INTEGER,
+                        Company_Type_Cd TEXT
+                    )
+                    """
+                )
+            )
+        conn.execute(
             text(
                 """
-                CREATE TABLE IF NOT EXISTS Dimensions_tbl_d_company (
+                CREATE TABLE IF NOT EXISTS Dimensions_tbl_d_company_type (
                     surrogate_key INTEGER PRIMARY KEY,
-                    join_numeric_key INTEGER,
-                    Organisation_Cd TEXT,
-                    Company_Instance_Id INTEGER,
-                    Company_Id INTEGER,
-                    current_ind INTEGER
+                    Company_Type_Cd TEXT,
+                    Company_Type_Id INTEGER
                 )
                 """
             )

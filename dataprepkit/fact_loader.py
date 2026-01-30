@@ -32,6 +32,7 @@ class DimensionJoinSpec:
     surrogate_column: str | None = None
     filter_target_current: bool = True
     surrogate_column: str | None = None
+    join_chain: Sequence["DimensionJoinSpec"] = field(default_factory=list["DimensionJoinSpec"])
 
 
 @dataclass
@@ -252,49 +253,54 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
     with engine.begin() as conn:
         conn.execute(insert_temp)
 
-    for dimension in config.dimensions:
+    def _apply_dimension(base_table: str, spec: DimensionJoinSpec) -> None:
         predicate = " AND ".join(
-            f"{config.temp_table}.{s} = d.{dcol}"
-            for s, dcol in zip(dimension.staging_columns, dimension.dim_columns)
+            f"{base_table}.{s} = d.{dcol}"
+            for s, dcol in zip(spec.staging_columns, spec.dim_columns)
         )
-        surrogate_col = dimension.surrogate_column or _default_surrogate_column_name(
-            dimension.dim_table
+        surrogate_col = spec.surrogate_column or _default_surrogate_column_name(
+            spec.dim_table
         )
+        surrogate_dim_col = spec.surrogate_column or "surrogate_key"
         current_clause = ""
-        if dimension.filter_target_current:
+        if spec.filter_target_current:
             current_clause = " AND (d.current_ind = 1 OR d.current_ind IS NULL)"
-        surrogate_dim_col = dimension.surrogate_column or "surrogate_key"
         set_clauses = [
-            f"{surrogate_col} = (SELECT d.{surrogate_dim_col} FROM {dimension.dim_table} d WHERE {predicate}{current_clause})"
+            f"{surrogate_col} = (SELECT d.{surrogate_dim_col} FROM {spec.dim_table} d WHERE {predicate}{current_clause})"
         ]
-        for col, dim_col in dimension.add_columns.items():
+        for col, dim_col in spec.add_columns.items():
             if col == surrogate_col:
                 continue
             set_clauses.append(
-                f"{col} = (SELECT d.{dim_col} FROM {dimension.dim_table} d WHERE {predicate}{current_clause})"
+                f"{col} = (SELECT d.{dim_col} FROM {spec.dim_table} d WHERE {predicate}{current_clause})"
             )
         update_stmt = text(
             f"""
-            UPDATE {config.temp_table}
+            UPDATE {base_table}
             SET {', '.join(set_clauses)}
             WHERE EXISTS (
-                SELECT 1 FROM {dimension.dim_table} d
+                SELECT 1 FROM {spec.dim_table} d
                 WHERE {predicate}{current_clause}
             )
             """
         )
         with engine.begin() as conn:
             conn.execute(update_stmt)
-        if dimension.require_not_null:
-            cond = " OR ".join(f"{col} IS NULL" for col in dimension.require_not_null)
+        if spec.require_not_null:
+            cond = " OR ".join(f"{col} IS NULL" for col in spec.require_not_null)
             with engine.connect() as conn:
                 result = conn.execute(
-                    text(f"SELECT COUNT(1) FROM {config.temp_table} WHERE {cond}")
+                    text(f"SELECT COUNT(1) FROM {base_table} WHERE {cond}")
                 ).scalar()
             if result:
                 raise RuntimeError(
-                    f"Null values found for required columns {dimension.require_not_null}"
+                    f"Null values found for required columns {spec.require_not_null}"
                 )
+
+    for dimension in config.dimensions:
+        _apply_dimension(config.temp_table, dimension)
+        for chained in dimension.join_chain:
+            _apply_dimension(config.temp_table, chained)
 
     fact_columns_types = {
         col: temp_columns.get(col) for col in config.fact_columns

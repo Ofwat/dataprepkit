@@ -75,12 +75,22 @@ fact_config = FactConfig(
                 "Company_Id": "Company_Id",
             },
             require_not_null=["Company_Instance_Id"],
+            join_chain=[
+                DimensionJoinSpec(
+                    dim_table="Dimensions.tbl_d_region",
+                    staging_columns=["Company_Id"],
+                    dim_columns=["Company_Id"],
+                    add_columns={"Region_Id": "Region_Id"},
+                    require_not_null=["Region_Id"],
+                )
+            ],
         ),
     ],
     fact_columns=[
-        "Company_Instance_Id",  # renamed alias of the surrogate
+        "Company_Instance_Id",
         "measure_value",
         "Company_Id",
+        "Region_Id",
     ],
     # Input staging table holding the raw snapshot; this is passed directly.
     source_table="Staging.qd_stg",
@@ -89,8 +99,6 @@ fact_config = FactConfig(
     temp_columns={
         "Organisation_Cd": "NVARCHAR(4000)",
         "measure_value": "FLOAT",
-        "Company_Instance_Id": "BIGINT",
-        "Company_Id": "BIGINT",
     },
 )
 
