@@ -5,6 +5,7 @@ from pathlib import Path
 
 from dataprepkit.fact_loader import (
     DimensionJoinSpec,
+    ExtraColumnSpec,
     FactBatchMetadata,
     FactConfig,
     MissingStageFileError,
@@ -62,6 +63,14 @@ fact_config = FactConfig(
         fact_table="Dimensions.fact",
         validations={},
     ),
+    extra_columns=[ExtraColumnSpec(
+        dim_table="Dimensions.tbl_d_company",
+        staging_columns=["Organisation_Cd"],
+        dim_columns=["Organisation_Cd"],
+        column="Company_Id",
+        dim_column="Company_Id",
+        require_not_null=True,
+    )],
     dimensions=[
         DimensionJoinSpec(
             dim_table="Dimensions.tbl_d_company",
@@ -73,7 +82,6 @@ fact_config = FactConfig(
                 # fact_column : dim_column
                 "Company_Instance_Id": "Company_Instance_Id",
             },
-            internal_columns={"Company_Id": "Company_Id"},
             require_not_null=["Company_Instance_Id"],
             join_chain=[
                 DimensionJoinSpec(

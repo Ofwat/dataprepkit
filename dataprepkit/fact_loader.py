@@ -31,8 +31,18 @@ class DimensionJoinSpec:
     require_not_null: Sequence[str] = field(default_factory=list[str])
     surrogate_column: str | None = None
     filter_target_current: bool = True
-    internal_columns: Mapping[str, str] = field(default_factory=dict[str, str])
     join_chain: Sequence["DimensionJoinSpec"] = field(default_factory=list["DimensionJoinSpec"])
+
+
+@dataclass
+class ExtraColumnSpec:
+    dim_table: str
+    staging_columns: Sequence[str]
+    dim_columns: Sequence[str]
+    column: str
+    dim_column: str
+    filter_target_current: bool = True
+    require_not_null: bool = False
 
 
 @dataclass
@@ -49,6 +59,7 @@ class FactConfig:
     source_table: str
     temp_table: str
     temp_columns: Mapping[str, Optional[str]]
+    extra_columns: Sequence[ExtraColumnSpec] = field(default_factory=list[ExtraColumnSpec])
     batch_id_column_name: str = "batch_id"
     batch_id_column_type: Optional[str] = "NVARCHAR(4000)"
 
@@ -233,13 +244,15 @@ def verify_stage_file_hashes(
 def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str = "replace") -> None:
     base_cols = list(config.temp_columns.keys())
     temp_columns = dict(config.temp_columns)
-    for dimension in config.dimensions:
-        surrogate_col = dimension.surrogate_column or _default_surrogate_column_name(
-            dimension.dim_table
-        )
-        temp_columns.setdefault(surrogate_col, "BIGINT")
-        for col in dimension.add_columns:
-            temp_columns.setdefault(col, "BIGINT")
+        for dimension in config.dimensions:
+            surrogate_col = dimension.surrogate_column or _default_surrogate_column_name(
+                dimension.dim_table
+            )
+            temp_columns.setdefault(surrogate_col, "BIGINT")
+            for col in dimension.add_columns:
+                temp_columns.setdefault(col, "BIGINT")
+        for extra in config.extra_columns:
+            temp_columns.setdefault(extra.column, "BIGINT")
         for col in dimension.internal_columns:
             temp_columns.setdefault(col, "BIGINT")
     _ensure_temp_table(engine, config.temp_table, temp_columns)
@@ -303,10 +316,49 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
                     f"Null values found for required columns {spec.require_not_null}"
                 )
 
+    def _apply_extra_column(base_table: str, spec: ExtraColumnSpec) -> None:
+        predicate = " AND ".join(
+            f"{base_table}.{s} = d.{dcol}"
+            for s, dcol in zip(spec.staging_columns, spec.dim_columns)
+        )
+        current_clause = ""
+        if spec.filter_target_current:
+            current_clause = " AND (d.current_ind = 1 OR d.current_ind IS NULL)"
+        set_clause = (
+            f"{spec.column} = (SELECT d.{spec.dim_column} FROM {spec.dim_table} d WHERE {predicate}{current_clause})"
+        )
+        update_stmt = text(
+            f"""
+            UPDATE {base_table}
+            SET {set_clause}
+            WHERE EXISTS (
+                SELECT 1 FROM {spec.dim_table} d
+                WHERE {predicate}{current_clause}
+            )
+            """
+        )
+        with engine.begin() as conn:
+            conn.execute(update_stmt)
+        if spec.require_not_null:
+            with engine.connect() as conn:
+                result = conn.execute(
+                    text(f"SELECT COUNT(1) FROM {base_table} WHERE {spec.column} IS NULL")
+                ).scalar()
+            if result:
+                raise RuntimeError(
+                    f"Null values found for required column {spec.column}"
+                )
+
     for dimension in config.dimensions:
         _apply_dimension(config.temp_table, dimension)
+        for extra in config.extra_columns:
+            if extra.dim_table == dimension.dim_table:
+                _apply_extra_column(config.temp_table, extra)
         for chained in dimension.join_chain:
             _apply_dimension(config.temp_table, chained)
+            for extra in config.extra_columns:
+                if extra.dim_table == chained.dim_table:
+                    _apply_extra_column(config.temp_table, extra)
 
     fact_columns_types = {
         col: temp_columns.get(col) for col in config.fact_columns

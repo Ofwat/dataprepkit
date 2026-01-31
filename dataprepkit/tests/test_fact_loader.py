@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, text
 
 from dataprepkit.fact_loader import (
     DimensionJoinSpec,
+    ExtraColumnSpec,
     FactBatchMetadata,
     FactConfig,
     HashMismatchError,
@@ -196,13 +197,23 @@ def test_ingest_fact_populates_company_ids(fact_engine):
             batch_id="B1",
             validations={},
         ),
+        extra_columns=[
+            ExtraColumnSpec(
+                dim_table="Dimensions_tbl_d_company",
+                staging_columns=["Organisation_Cd"],
+                dim_columns=["Organisation_Cd"],
+                column="Company_Id",
+                dim_column="Company_Id",
+                require_not_null=True,
+            )
+        ],
         dimensions=[
             DimensionJoinSpec(
                 dim_table="Dimensions_tbl_d_company",
                 staging_columns=["Organisation_Cd"],
                 dim_columns=["Organisation_Cd"],
-                add_columns={"Company_Instance_Id": "Company_Instance_Id", "Company_Id": "Company_Id"},
-                require_not_null=["Company_Instance_Id", "Company_Id"],
+                add_columns={"Company_Instance_Id": "Company_Instance_Id"},
+                require_not_null=["Company_Instance_Id"],
             )
         ],
         fact_columns=[
@@ -238,13 +249,23 @@ def test_ingest_fact_missing_dimension(fact_engine):
             batch_id="B2",
             validations={},
         ),
+        extra_columns=[
+            ExtraColumnSpec(
+                dim_table="Dimensions_tbl_d_company",
+                staging_columns=["Organisation_Cd"],
+                dim_columns=["Organisation_Cd"],
+                column="Company_Id",
+                dim_column="Company_Id",
+                require_not_null=True,
+            )
+        ],
         dimensions=[
             DimensionJoinSpec(
                 dim_table="Dimensions_tbl_d_company",
                 staging_columns=["Organisation_Cd"],
                 dim_columns=["Organisation_Cd"],
-                add_columns={"Company_Instance_Id": "Company_Instance_Id", "Company_Id": "Company_Id"},
-                require_not_null=["Company_Instance_Id", "Company_Id"],
+                add_columns={"Company_Instance_Id": "Company_Instance_Id"},
+                require_not_null=["Company_Instance_Id"],
             )
         ],
         fact_columns=[
@@ -365,6 +386,16 @@ def test_ingest_fact_internal_columns_used_for_chain(fact_engine):
             batch_id="B5",
             validations={},
         ),
+        extra_columns=[
+            ExtraColumnSpec(
+                dim_table="Dimensions_tbl_d_company",
+                staging_columns=["Organisation_Cd"],
+                dim_columns=["Organisation_Cd"],
+                column="Company_Id",
+                dim_column="Company_Id",
+                require_not_null=True,
+            )
+        ],
         dimensions=[
             DimensionJoinSpec(
                 dim_table="Dimensions_tbl_d_company",
@@ -372,7 +403,6 @@ def test_ingest_fact_internal_columns_used_for_chain(fact_engine):
                 dim_columns=["Organisation_Cd"],
                 surrogate_column="company_sk",
                 add_columns={"Company_Instance_Id": "Company_Instance_Id"},
-                internal_columns={"Company_Id": "Company_Id"},
                 require_not_null=["company_sk"],
                 join_chain=[
                     DimensionJoinSpec(
