@@ -670,10 +670,11 @@ def _apply_dependency_joins(
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
         logger.debug(
-            "Running dependency join against %s (filter_current=%s) for %d rows",
+            "Running dependency join against %s (filter_current=%s) for %d rows; natural keys=%s",
             table_ref,
             dep.filter_target_current,
             len(incoming),
+            incoming[on_source].drop_duplicates().head(5).to_dict(orient="records"),
         )
 
         query = text(f"SELECT {quoted_cols} FROM {table_ref} {where_sql}")
@@ -693,12 +694,12 @@ def _apply_dependency_joins(
 
         missing_mask = incoming[list(select_aliases.values())].isna().any(axis=1)
         if missing_mask.any():
-            missing_keys = incoming.loc[missing_mask, on_source].drop_duplicates()
+            missing_rows = incoming.loc[missing_mask, on_source + list(select_aliases.values())]
             logger.info(
-                "Dependency join %s produced %s missing rows; example keys: %s",
+                "Dependency join %s produced %s missing rows; sample outputs: %s",
                 table_ref,
                 missing_mask.sum(),
-                missing_keys.head(5).to_dict(orient="records"),
+                missing_rows.head(5).to_dict(orient="records"),
             )
             if dep.on_missing == "error":
                 raise RuntimeError(f"Dependency join {dep.table} produced missing values.")
