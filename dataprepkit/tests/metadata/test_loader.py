@@ -2,7 +2,13 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
 
-from dataprepkit.metadata_loader import DimensionMetadata, get_metadata, run_dimension
+from dataprepkit.metadata_loader import (
+    DimensionMetadata,
+    METADATA_REGISTRY,
+    get_metadata,
+    register_metadata,
+    run_dimension,
+)
 from dataprepkit.helpers.staging import stage_dataframe
 from dataprepkit.helpers.schema import ensure_schema_exists
 
@@ -120,3 +126,103 @@ def test_stage_dataframe_ensures_schema(monkeypatch):
     stage_dataframe(engine, "stage_table", df, schema="custom")
 
     assert calls == [(engine, "custom")]
+
+
+def test_dependency_null_value_does_not_rehash_other_rows():
+    engine = create_engine("sqlite:///:memory:")
+    metadata_name = "tbl_map_dmex_metric_null"
+    METADATA_REGISTRY.pop(metadata_name, None)
+    register_metadata(
+        metadata_name,
+        {
+            "target_table": "tbl_map_dmex_metric_null",
+            "natural_key_cols": ["Measure_Cd"],
+            "data_columns": {
+                "DMeX_Metric_Cd": {"type": "TEXT", "nullable": False},
+                "DMeX_Measure_Type": {"type": "TEXT", "nullable": True},
+                "DMeX_Metric_Type_Cd": {"type": "TEXT", "nullable": True},
+                "DMex_Metric_Instance_Id": {"type": "BIGINT", "nullable": True},
+            },
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "dummy.csv",
+            "schema_handling": {"mode": "evolve"},
+            "dependencies": [
+                {
+                    "table": "dep_dim",
+                    "on": [{"source": "DMeX_Metric_Cd", "target": "DMeX_Metric_Cd"}],
+                    "select": {"DMex_Metric_Instance_Id": "DMex_Metric_Instance_Id"},
+                    "how": "left",
+                    "on_missing": "null",
+                }
+            ],
+        },
+    )
+
+    stage_df = pd.DataFrame(
+        [
+            {
+                "Measure_Cd": "m1",
+                "DMeX_Metric_Cd": "A",
+                "DMeX_Measure_Type": "type1",
+                "DMeX_Metric_Type_Cd": "metric1",
+            },
+            {
+                "Measure_Cd": "m2",
+                "DMeX_Metric_Cd": "B",
+                "DMeX_Measure_Type": "type2",
+                "DMeX_Metric_Type_Cd": "metric2",
+            },
+        ]
+    )
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE dep_dim (
+                        DMeX_Metric_Cd TEXT PRIMARY KEY,
+                        DMex_Metric_Instance_Id INTEGER,
+                        Current_Ind INTEGER NOT NULL
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO dep_dim (DMeX_Metric_Cd, DMex_Metric_Instance_Id, Current_Ind) VALUES "
+                    "('A', 10, 1), ('B', 20, 1)"
+                )
+            )
+
+        run_dimension(engine, metadata_name, override_df=stage_df)
+        with engine.connect() as conn:
+            initial_hash = {
+                row["Measure_Cd"]: row["row_hash"]
+                for row in conn.execute(
+                    text(
+                        "SELECT Measure_Cd, row_hash FROM tbl_map_dmex_metric_null WHERE Current_Ind = 1"
+                    )
+                ).mappings()
+            }
+
+        with engine.begin() as conn:
+            conn.execute(
+                text("UPDATE dep_dim SET DMex_Metric_Instance_Id = NULL WHERE DMeX_Metric_Cd = 'A'")
+            )
+
+        run_dimension(engine, metadata_name, override_df=stage_df)
+        with engine.connect() as conn:
+            final_hash = {
+                row["Measure_Cd"]: row["row_hash"]
+                for row in conn.execute(
+                    text(
+                        "SELECT Measure_Cd, row_hash FROM tbl_map_dmex_metric_null WHERE Current_Ind = 1"
+                    )
+                ).mappings()
+            }
+
+        assert final_hash["m2"] == initial_hash["m2"]
+    finally:
+        METADATA_REGISTRY.pop(metadata_name, None)

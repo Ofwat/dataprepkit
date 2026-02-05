@@ -167,6 +167,8 @@ def _compute_row_hash(row: pd.Series, data_columns: Sequence[str]) -> str:
         value = row.get(column)
         if pd.isna(value):
             value = ""
+        elif isinstance(value, float) and value.is_integer():
+            value = int(value)
         tokens.append(f"{column}={value}")
     return hashlib.sha256("|".join(tokens).encode("utf-8")).hexdigest()
 
