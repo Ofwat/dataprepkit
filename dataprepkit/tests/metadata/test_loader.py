@@ -343,3 +343,226 @@ def test_dependency_change_generates_new_history_for_affected_row():
         assert row_counts["m2"] == 1
     finally:
         METADATA_REGISTRY.pop(metadata_name, None)
+
+
+def test_repeated_dependency_updates_append_history():
+    engine = create_engine("sqlite:///:memory:")
+    metadata_name = "tbl_map_dmex_metric_repeated"
+    METADATA_REGISTRY.pop(metadata_name, None)
+    register_metadata(
+        metadata_name,
+        {
+            "target_table": "tbl_map_dmex_metric_repeated",
+            "natural_key_cols": ["Measure_Cd"],
+            "data_columns": {
+                "DMeX_Metric_Cd": {"type": "TEXT", "nullable": False},
+                "DMeX_Measure_Type": {"type": "TEXT", "nullable": True},
+                "DMeX_Metric_Type_Cd": {"type": "TEXT", "nullable": True},
+                "DMex_Metric_Instance_Id": {"type": "BIGINT", "nullable": True},
+            },
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "dummy.csv",
+            "schema_handling": {"mode": "evolve"},
+            "dependencies": [
+                {
+                    "table": "dep_dim",
+                    "on": [{"source": "DMeX_Metric_Cd", "target": "DMeX_Metric_Cd"}],
+                    "select": {"DMex_Metric_Instance_Id": "DMex_Metric_Instance_Id"},
+                    "how": "left",
+                    "on_missing": "null",
+                }
+            ],
+        },
+    )
+
+    stage_df = pd.DataFrame(
+        [
+            {
+                "Measure_Cd": "m1",
+                "DMeX_Metric_Cd": "A",
+                "DMeX_Measure_Type": "type1",
+                "DMeX_Metric_Type_Cd": "metric1",
+            },
+            {
+                "Measure_Cd": "m2",
+                "DMeX_Metric_Cd": "B",
+                "DMeX_Measure_Type": "type2",
+                "DMeX_Metric_Type_Cd": "metric2",
+            },
+        ]
+    )
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE dep_dim (
+                        DMeX_Metric_Cd TEXT PRIMARY KEY,
+                        DMex_Metric_Instance_Id INTEGER,
+                        Current_Ind INTEGER NOT NULL
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO dep_dim (DMeX_Metric_Cd, DMex_Metric_Instance_Id, Current_Ind) VALUES "
+                    "('A', 10, 1), ('B', 20, 1)"
+                )
+            )
+
+        run_dimension(engine, metadata_name, override_df=stage_df)
+
+        for value in range(11, 16):
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "UPDATE dep_dim SET DMex_Metric_Instance_Id = :value WHERE DMeX_Metric_Cd = 'A'"
+                    ),
+                    {"value": value},
+                )
+            run_dimension(engine, metadata_name, override_df=stage_df)
+
+        with engine.connect() as conn:
+            m1_rows = list(
+                conn.execute(
+                    text(
+                        "SELECT Current_Ind, DMex_Metric_Instance_Id FROM tbl_map_dmex_metric_repeated WHERE Measure_Cd = 'm1'"
+                    )
+                )
+            )
+            m2_rows = list(
+                conn.execute(
+                    text(
+                        "SELECT Current_Ind FROM tbl_map_dmex_metric_repeated WHERE Measure_Cd = 'm2'"
+                    )
+                )
+            )
+            final_m1 = conn.execute(
+                text(
+                    "SELECT DMex_Metric_Instance_Id FROM tbl_map_dmex_metric_repeated WHERE Measure_Cd = 'm1' AND Current_Ind = 1"
+                )
+            ).scalar_one()
+            all_m1_values = {row[1] for row in m1_rows}
+
+        assert len(m1_rows) == 6
+        assert sum(1 for row in m1_rows if row[0] == 1) == 1
+        assert sum(1 for row in m1_rows if row[0] == 0) == 5
+        assert final_m1 == 15
+        assert all_m1_values == {10, 11, 12, 13, 14, 15}
+        assert len(m2_rows) == 1
+    finally:
+        METADATA_REGISTRY.pop(metadata_name, None)
+
+
+def test_dependency_and_stage_updates_accumulate_history():
+    engine = create_engine("sqlite:///:memory:")
+    metadata_name = "tbl_map_dmex_metric_combo"
+    METADATA_REGISTRY.pop(metadata_name, None)
+    register_metadata(
+        metadata_name,
+        {
+            "target_table": "tbl_map_dmex_metric_combo",
+            "natural_key_cols": ["Measure_Cd"],
+            "data_columns": {
+                "DMeX_Metric_Cd": {"type": "TEXT", "nullable": False},
+                "DMeX_Measure_Type": {"type": "TEXT", "nullable": True},
+                "DMeX_Metric_Type_Cd": {"type": "TEXT", "nullable": True},
+                "DMex_Metric_Instance_Id": {"type": "BIGINT", "nullable": True},
+            },
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "dummy.csv",
+            "schema_handling": {"mode": "evolve"},
+            "dependencies": [
+                {
+                    "table": "dep_dim",
+                    "on": [{"source": "DMeX_Metric_Cd", "target": "DMeX_Metric_Cd"}],
+                    "select": {"DMex_Metric_Instance_Id": "DMex_Metric_Instance_Id"},
+                    "how": "left",
+                    "on_missing": "null",
+                }
+            ],
+        },
+    )
+
+    stage_df = pd.DataFrame(
+        [
+            {
+                "Measure_Cd": "m1",
+                "DMeX_Metric_Cd": "A",
+                "DMeX_Measure_Type": "stage-0",
+                "DMeX_Metric_Type_Cd": "metric1",
+            },
+            {
+                "Measure_Cd": "m2",
+                "DMeX_Metric_Cd": "B",
+                "DMeX_Measure_Type": "type2",
+                "DMeX_Metric_Type_Cd": "metric2",
+            },
+        ]
+    )
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE dep_dim (
+                        DMeX_Metric_Cd TEXT PRIMARY KEY,
+                        DMex_Metric_Instance_Id INTEGER,
+                        Current_Ind INTEGER NOT NULL
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO dep_dim (DMeX_Metric_Cd, DMex_Metric_Instance_Id, Current_Ind) VALUES "
+                    "('A', 10, 1), ('B', 20, 1)"
+                )
+            )
+
+        run_dimension(engine, metadata_name, override_df=stage_df)
+
+        edits = [
+            (11, "stage-1", "metric-A"),
+            (12, "stage-2", "metric-B"),
+            (13, "stage-3", "metric-C"),
+            (14, "stage-4", "metric-D"),
+            (15, "stage-5", "metric-E"),
+        ]
+        for value, measure_type, metric_type in edits:
+            stage_df.loc[stage_df.Measure_Cd == "m1", "DMeX_Measure_Type"] = measure_type
+            stage_df.loc[stage_df.Measure_Cd == "m1", "DMeX_Metric_Type_Cd"] = metric_type
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "UPDATE dep_dim SET DMex_Metric_Instance_Id = :value WHERE DMeX_Metric_Cd = 'A'"
+                    ),
+                    {"value": value},
+                )
+            run_dimension(engine, metadata_name, override_df=stage_df)
+
+        with engine.connect() as conn:
+            rows = list(
+                conn.execute(
+                    text(
+                        "SELECT Measure_Cd, DMex_Metric_Instance_Id, DMeX_Measure_Type, DMeX_Metric_Type_Cd, Current_Ind "
+                        "FROM tbl_map_dmex_metric_combo "
+                        "WHERE Measure_Cd = 'm1'"
+                    )
+                )
+            )
+            history_values = {row[2] for row in rows}
+            metric_types = {row[3] for row in rows}
+            current_row = next(row for row in rows if row[4] == 1)
+
+        assert len(rows) == 6
+        assert history_values == {"stage-0", "stage-1", "stage-2", "stage-3", "stage-4", "stage-5"}
+        assert current_row[1:] == (15, "stage-5", "metric-E", 1)
+        assert metric_types == {"metric1", "metric-A", "metric-B", "metric-C", "metric-D", "metric-E"}
+    finally:
+        METADATA_REGISTRY.pop(metadata_name, None)

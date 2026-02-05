@@ -669,6 +669,13 @@ def _apply_dependency_joins(
             where_clauses.extend(expressions)
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
+        logger.debug(
+            "Running dependency join against %s (filter_current=%s) for %d rows",
+            table_ref,
+            dep.filter_target_current,
+            len(incoming),
+        )
+
         query = text(f"SELECT {quoted_cols} FROM {table_ref} {where_sql}")
         dep_df = pd.read_sql_query(query, con=engine)
 
@@ -684,9 +691,16 @@ def _apply_dependency_joins(
         for alias in select_aliases.values():
             incoming[alias] = key_series.map(lambda key: dep_map.get(key, {}).get(alias))
 
-        if dep.on_missing == "error":
-            missing_mask = incoming[list(select_aliases.values())].isna().any(axis=1)
-            if missing_mask.any():
+        missing_mask = incoming[list(select_aliases.values())].isna().any(axis=1)
+        if missing_mask.any():
+            missing_keys = incoming.loc[missing_mask, on_source].drop_duplicates()
+            logger.info(
+                "Dependency join %s produced %s missing rows; example keys: %s",
+                table_ref,
+                missing_mask.sum(),
+                missing_keys.head(5).to_dict(orient="records"),
+            )
+            if dep.on_missing == "error":
                 raise RuntimeError(f"Dependency join {dep.table} produced missing values.")
 
     return incoming
