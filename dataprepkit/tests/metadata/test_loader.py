@@ -9,7 +9,7 @@ from dataprepkit.metadata_loader import (
     register_metadata,
     run_dimension,
 )
-from dataprepkit.helpers.staging import stage_dataframe
+from dataprepkit.helpers.staging import stage_dataframe, union_tables_by_name_regex
 from dataprepkit.helpers.schema import ensure_schema_exists
 
 
@@ -126,6 +126,39 @@ def test_stage_dataframe_ensures_schema(monkeypatch):
     stage_dataframe(engine, "stage_table", df, schema="custom")
 
     assert calls == [(engine, "custom")]
+
+
+def test_union_tables_by_name_regex_unions_all_matches():
+    engine = create_engine("sqlite:///:memory:")
+    stage_dataframe(engine, "stg_sales_1", pd.DataFrame({"id": [1, 2]}))
+    stage_dataframe(engine, "stg_sales_2", pd.DataFrame({"id": [3]}))
+
+    union_tables_by_name_regex(engine, None, r"^stg_sales_\d+$", "stg_sales_all")
+
+    with engine.connect() as conn:
+        rows = conn.execute(text("SELECT id FROM stg_sales_all ORDER BY id")).fetchall()
+    assert rows == [(1,), (2,), (3,)]
+
+
+def test_union_tables_by_name_regex_overwrites_existing_output():
+    engine = create_engine("sqlite:///:memory:")
+    stage_dataframe(engine, "stg_src_1", pd.DataFrame({"id": [10]}))
+    stage_dataframe(engine, "stg_src_2", pd.DataFrame({"id": [20]}))
+    stage_dataframe(engine, "stg_output", pd.DataFrame({"id": [999]}))
+
+    union_tables_by_name_regex(engine, None, r"^stg_src_\d+$", "stg_output")
+
+    with engine.connect() as conn:
+        rows = conn.execute(text("SELECT id FROM stg_output ORDER BY id")).fetchall()
+    assert rows == [(10,), (20,)]
+
+
+def test_union_tables_by_name_regex_raises_when_no_match():
+    engine = create_engine("sqlite:///:memory:")
+    stage_dataframe(engine, "stg_any", pd.DataFrame({"id": [1]}))
+
+    with pytest.raises(ValueError, match="No tables matched regex"):
+        union_tables_by_name_regex(engine, None, r"^missing_", "stg_output")
 
 
 def test_dependency_null_value_does_not_rehash_other_rows():
