@@ -519,3 +519,86 @@ def test_ingest_fact_maps_named_surrogate_when_dim_has_no_surrogate_key():
     assert result == 600
 
 
+def test_ingest_fact_respects_current_ind_filter_with_mixed_case_column():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE staging (
+                    batch_id TEXT,
+                    Measure_Cd TEXT,
+                    measure_value REAL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE fact (
+                    batch_id TEXT,
+                    Measure_Instance_Id INTEGER,
+                    measure_value REAL,
+                    Insert_Date TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE Dimensions_tbl_map_measure (
+                    Legacy_BonCode TEXT,
+                    Measure_Instance_Id INTEGER,
+                    Current_Ind INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Measure_Cd, measure_value) VALUES ('B7','M1', 1.0)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO Dimensions_tbl_map_measure (Legacy_BonCode, Measure_Instance_Id, Current_Ind) VALUES ('M1', NULL, 0)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO Dimensions_tbl_map_measure (Legacy_BonCode, Measure_Instance_Id, Current_Ind) VALUES ('M1', 101, 1)"
+            )
+        )
+
+    config = FactConfig(
+        batch=FactBatchMetadata(fact_table="fact", validations={}),
+        dimensions=[
+            DimensionJoinSpec(
+                dim_table="Dimensions_tbl_map_measure",
+                staging_columns=["Measure_Cd"],
+                dim_columns=["Legacy_BonCode"],
+                filter_target_current=True,
+                add_columns={"Measure_Instance_Id": "Measure_Instance_Id"},
+                require_not_null=["Measure_Instance_Id"],
+            )
+        ],
+        fact_columns=["Measure_Instance_Id", "measure_value"],
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={
+            "batch_id": None,
+            "Measure_Cd": None,
+            "measure_value": None,
+        },
+    )
+
+    ingest_fact(engine, config, batch_id="B7")
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("SELECT Measure_Instance_Id FROM fact WHERE batch_id='B7'")
+        ).scalar_one()
+    assert result == 101
+
+

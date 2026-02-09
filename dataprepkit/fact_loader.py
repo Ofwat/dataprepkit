@@ -171,7 +171,8 @@ def _get_existing_columns(engine: Engine, table_name: str) -> set[str]:
 
 
 def _has_current_indicator(engine: Engine, table_name: str) -> bool:
-    return "current_ind" in _get_existing_columns(engine, table_name)
+    columns = _get_existing_columns(engine, table_name)
+    return any(col.lower() == "current_ind" for col in columns)
 
 
 def _ensure_fact_table(
