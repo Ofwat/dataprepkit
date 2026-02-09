@@ -31,6 +31,7 @@ class DimensionJoinSpec:
     require_not_null: Sequence[str] = field(default_factory=list[str])
     surrogate_column: str | None = None
     filter_target_current: bool = True
+    internal_columns: Mapping[str, str] = field(default_factory=dict[str, str])
     join_chain: Sequence["DimensionJoinSpec"] = field(default_factory=list["DimensionJoinSpec"])
 
 
@@ -244,17 +245,17 @@ def verify_stage_file_hashes(
 def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str = "replace") -> None:
     base_cols = list(config.temp_columns.keys())
     temp_columns = dict(config.temp_columns)
-        for dimension in config.dimensions:
-            surrogate_col = dimension.surrogate_column or _default_surrogate_column_name(
-                dimension.dim_table
-            )
-            temp_columns.setdefault(surrogate_col, "BIGINT")
-            for col in dimension.add_columns:
-                temp_columns.setdefault(col, "BIGINT")
-        for extra in config.extra_columns:
-            temp_columns.setdefault(extra.column, "BIGINT")
+    for dimension in config.dimensions:
+        surrogate_col = dimension.surrogate_column or _default_surrogate_column_name(
+            dimension.dim_table
+        )
+        temp_columns.setdefault(surrogate_col, "BIGINT")
+        for col in dimension.add_columns:
+            temp_columns.setdefault(col, "BIGINT")
         for col in dimension.internal_columns:
             temp_columns.setdefault(col, "BIGINT")
+    for extra in config.extra_columns:
+        temp_columns.setdefault(extra.column, "BIGINT")
     _ensure_temp_table(engine, config.temp_table, temp_columns)
     if not base_cols:
         raise RuntimeError("No base columns defined for temp table copy")
