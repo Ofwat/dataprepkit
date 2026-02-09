@@ -441,3 +441,81 @@ def test_ingest_fact_internal_columns_used_for_chain(fact_engine):
     assert result == (3, 55)
 
 
+def test_ingest_fact_maps_named_surrogate_when_dim_has_no_surrogate_key():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE staging (
+                    batch_id TEXT,
+                    Organisation_Cd TEXT,
+                    measure_value REAL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE fact (
+                    batch_id TEXT,
+                    Organisation_Instance_Id INTEGER,
+                    measure_value REAL,
+                    Insert_Date TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE Dimensions_tbl_d_company (
+                    Organisation_Cd TEXT,
+                    Organisation_Instance_Id INTEGER,
+                    current_ind INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B6','ORG6', 6.0)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO Dimensions_tbl_d_company (Organisation_Cd, Organisation_Instance_Id, current_ind) VALUES ('ORG6', 600, 1)"
+            )
+        )
+
+    config = FactConfig(
+        batch=FactBatchMetadata(fact_table="fact", validations={}),
+        dimensions=[
+            DimensionJoinSpec(
+                dim_table="Dimensions_tbl_d_company",
+                staging_columns=["Organisation_Cd"],
+                dim_columns=["Organisation_Cd"],
+                surrogate_column="Organisation_Instance_Id",
+                add_columns={"Organisation_Instance_Id": "Organisation_Instance_Id"},
+                require_not_null=["Organisation_Instance_Id"],
+            )
+        ],
+        fact_columns=["Organisation_Instance_Id", "measure_value"],
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={
+            "batch_id": None,
+            "Organisation_Cd": None,
+            "measure_value": None,
+        },
+    )
+
+    ingest_fact(engine, config, batch_id="B6")
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("SELECT Organisation_Instance_Id FROM fact WHERE batch_id='B6'")
+        ).scalar_one()
+    assert result == 600
+
+

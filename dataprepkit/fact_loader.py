@@ -289,17 +289,21 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
         surrogate_col = spec.surrogate_column or _default_surrogate_column_name(
             spec.dim_table
         )
-        surrogate_dim_col = "surrogate_key"
+        surrogate_dim_col: str | None = None
+        if spec.surrogate_column and spec.surrogate_column in dim_table_columns:
+            surrogate_dim_col = spec.surrogate_column
+        elif "surrogate_key" in dim_table_columns:
+            surrogate_dim_col = "surrogate_key"
         current_clause = ""
         if spec.filter_target_current and _has_current_indicator(engine, spec.dim_table):
             current_clause = " AND (d.current_ind = 1 OR d.current_ind IS NULL)"
         set_clauses: list[str] = []
-        if surrogate_dim_col in dim_table_columns:
+        if surrogate_dim_col:
             set_clauses.append(
                 f"{surrogate_col} = (SELECT d.{surrogate_dim_col} FROM {spec.dim_table} d WHERE {predicate}{current_clause})"
             )
         for col, dim_col in spec.add_columns.items():
-            if col == surrogate_col:
+            if col == surrogate_col and surrogate_dim_col:
                 continue
             set_clauses.append(
                 f"{col} = (SELECT d.{dim_col} FROM {spec.dim_table} d WHERE {predicate}{current_clause})"
@@ -308,20 +312,19 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
             set_clauses.append(
                 f"{col} = (SELECT d.{dim_col} FROM {spec.dim_table} d WHERE {predicate}{current_clause})"
             )
-        if not set_clauses:
-            return
-        update_stmt = text(
-            f"""
-            UPDATE {base_table}
-            SET {', '.join(set_clauses)}
-            WHERE EXISTS (
-                SELECT 1 FROM {spec.dim_table} d
-                WHERE {predicate}{current_clause}
+        if set_clauses:
+            update_stmt = text(
+                f"""
+                UPDATE {base_table}
+                SET {', '.join(set_clauses)}
+                WHERE EXISTS (
+                    SELECT 1 FROM {spec.dim_table} d
+                    WHERE {predicate}{current_clause}
+                )
+                """
             )
-            """
-        )
-        with engine.begin() as conn:
-            conn.execute(update_stmt)
+            with engine.begin() as conn:
+                conn.execute(update_stmt)
         if spec.require_not_null:
             cond = " OR ".join(f"{col} IS NULL" for col in spec.require_not_null)
             with engine.connect() as conn:
