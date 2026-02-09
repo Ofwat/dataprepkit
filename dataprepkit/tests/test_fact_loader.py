@@ -142,7 +142,8 @@ def _create_fact_tables(engine):
                         Organisation_Cd TEXT,
                         Company_Instance_Id INTEGER,
                         Company_Id INTEGER,
-                        Company_Type_Cd TEXT
+                        Company_Type_Cd TEXT,
+                        current_ind INTEGER
                     )
                     """
                 )
@@ -289,6 +290,16 @@ def test_ingest_fact_missing_dimension(fact_engine):
 def test_ingest_fact_creates_fact_table_when_missing(fact_engine):
     with fact_engine.begin() as conn:
         conn.execute(text("DROP TABLE IF EXISTS fact"))
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B3','REGION3', 3.5)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO Dimensions_tbl_d_company (surrogate_key, join_numeric_key, Organisation_Cd, Company_Instance_Id, Company_Id) VALUES (9, 90, 'REGION3', 900, 901)"
+            )
+        )
     config = FactConfig(
         batch=FactBatchMetadata(
             fact_table="fact",
@@ -313,7 +324,7 @@ def test_ingest_fact_creates_fact_table_when_missing(fact_engine):
             "measure_value": None,
         },
     )
-    ingest_fact(fact_engine, config, batch_id="B2")
+    ingest_fact(fact_engine, config, batch_id="B3")
     with fact_engine.connect() as conn:
         count = conn.execute(text("SELECT COUNT(1) FROM fact")).scalar()
     assert count == 1

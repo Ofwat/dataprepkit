@@ -7,7 +7,7 @@ from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, 
 import hashlib
 import re
 
-from sqlalchemy import Engine, Inspector, text
+from sqlalchemy import Engine, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from dataprepkit.helpers.schema import ensure_schema_exists
@@ -50,6 +50,7 @@ class ExtraColumnSpec:
 class FactBatchMetadata:
     fact_table: str
     validations: Dict[str, str]  # {filename_col: hash_col}
+    batch_id: str | None = None
 
 
 @dataclass
@@ -161,12 +162,16 @@ def _ensure_temp_table(
 
 
 def _get_existing_columns(engine: Engine, table_name: str) -> set[str]:
-    inspector = Inspector.from_engine(engine)
+    inspector = inspect(engine)
     schema = table_name.split(".")[0] if "." in table_name else None
     table = table_name.split(".")[-1]
     if not inspector.has_table(table, schema):
         return set()
     return {col["name"] for col in inspector.get_columns(table, schema)}
+
+
+def _has_current_indicator(engine: Engine, table_name: str) -> bool:
+    return "current_ind" in _get_existing_columns(engine, table_name)
 
 
 def _ensure_fact_table(
@@ -245,15 +250,21 @@ def verify_stage_file_hashes(
 def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str = "replace") -> None:
     base_cols = list(config.temp_columns.keys())
     temp_columns = dict(config.temp_columns)
-    for dimension in config.dimensions:
-        surrogate_col = dimension.surrogate_column or _default_surrogate_column_name(
-            dimension.dim_table
+
+    def _register_dimension_columns(spec: DimensionJoinSpec) -> None:
+        surrogate_col = spec.surrogate_column or _default_surrogate_column_name(
+            spec.dim_table
         )
         temp_columns.setdefault(surrogate_col, "BIGINT")
-        for col in dimension.add_columns:
+        for col in spec.add_columns:
             temp_columns.setdefault(col, "BIGINT")
-        for col in dimension.internal_columns:
+        for col in spec.internal_columns:
             temp_columns.setdefault(col, "BIGINT")
+        for chained in spec.join_chain:
+            _register_dimension_columns(chained)
+
+    for dimension in config.dimensions:
+        _register_dimension_columns(dimension)
     for extra in config.extra_columns:
         temp_columns.setdefault(extra.column, "BIGINT")
     _ensure_temp_table(engine, config.temp_table, temp_columns)
@@ -274,16 +285,19 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
             f"{base_table}.{s} = d.{dcol}"
             for s, dcol in zip(spec.staging_columns, spec.dim_columns)
         )
+        dim_table_columns = _get_existing_columns(engine, spec.dim_table)
         surrogate_col = spec.surrogate_column or _default_surrogate_column_name(
             spec.dim_table
         )
-        surrogate_dim_col = spec.surrogate_column or "surrogate_key"
+        surrogate_dim_col = "surrogate_key"
         current_clause = ""
-        if spec.filter_target_current:
+        if spec.filter_target_current and _has_current_indicator(engine, spec.dim_table):
             current_clause = " AND (d.current_ind = 1 OR d.current_ind IS NULL)"
-        set_clauses = [
-            f"{surrogate_col} = (SELECT d.{surrogate_dim_col} FROM {spec.dim_table} d WHERE {predicate}{current_clause})"
-        ]
+        set_clauses: list[str] = []
+        if surrogate_dim_col in dim_table_columns:
+            set_clauses.append(
+                f"{surrogate_col} = (SELECT d.{surrogate_dim_col} FROM {spec.dim_table} d WHERE {predicate}{current_clause})"
+            )
         for col, dim_col in spec.add_columns.items():
             if col == surrogate_col:
                 continue
@@ -323,7 +337,7 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
             for s, dcol in zip(spec.staging_columns, spec.dim_columns)
         )
         current_clause = ""
-        if spec.filter_target_current:
+        if spec.filter_target_current and _has_current_indicator(engine, spec.dim_table):
             current_clause = " AND (d.current_ind = 1 OR d.current_ind IS NULL)"
         set_clause = (
             f"{spec.column} = (SELECT d.{spec.dim_column} FROM {spec.dim_table} d WHERE {predicate}{current_clause})"
