@@ -308,6 +308,8 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
             set_clauses.append(
                 f"{col} = (SELECT d.{dim_col} FROM {spec.dim_table} d WHERE {predicate}{current_clause})"
             )
+        if not set_clauses:
+            return
         update_stmt = text(
             f"""
             UPDATE {base_table}
