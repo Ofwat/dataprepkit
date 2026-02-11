@@ -264,6 +264,68 @@ def test_union_tables_by_name_regex_raises_when_no_match():
         union_tables_by_name_regex(engine, None, r"^missing_", "stg_output")
 
 
+def test_union_tables_by_name_regex_mssql_quotes_schema_with_literal_brackets(monkeypatch):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    class _FakeInspector:
+        def __init__(self):
+            self.schema_arg = None
+
+        def get_table_names(self, schema=None):
+            self.schema_arg = schema
+            return ["afw_qd_validation_stg", "nhs_qd_validation_stg"]
+
+    engine = _FakeEngine()
+    inspector = _FakeInspector()
+    read_calls = []
+    output_call = {}
+
+    def fake_inspect(engine_arg):
+        assert engine_arg is engine
+        return inspector
+
+    def fake_read_sql_table(name, con, schema):
+        read_calls.append((name, con, schema))
+        return pd.DataFrame({"id": [1]})
+
+    def fake_to_sql(self, name, con, if_exists, index, schema):
+        output_call.update(
+            {
+                "name": name,
+                "con": con,
+                "if_exists": if_exists,
+                "index": index,
+                "schema": schema,
+            }
+        )
+
+    monkeypatch.setattr("dataprepkit.helpers.staging.inspect", fake_inspect)
+    monkeypatch.setattr("dataprepkit.helpers.staging.ensure_schema_exists", lambda *_: None)
+    monkeypatch.setattr(pd, "read_sql_table", fake_read_sql_table)
+    monkeypatch.setattr(pd.DataFrame, "to_sql", fake_to_sql)
+
+    union_tables_by_name_regex(
+        engine=engine,
+        schema="Staging OFFICIAL - SENSITIVE [MARKET SENSITIVE]",
+        table_name_regex=r"^\w{3}_qd_validation_stg$",
+        output_table_name="qd_stg",
+    )
+
+    assert str(inspector.schema_arg) == "Staging OFFICIAL - SENSITIVE [MARKET SENSITIVE]"
+    assert getattr(inspector.schema_arg, "quote", None) is True
+    assert len(read_calls) == 2
+    assert output_call["if_exists"] == "replace"
+    assert output_call["index"] is False
+    assert str(output_call["schema"]) == "Staging OFFICIAL - SENSITIVE [MARKET SENSITIVE]"
+    assert getattr(output_call["schema"], "quote", None) is True
+    assert str(output_call["name"]) == "qd_stg"
+    assert getattr(output_call["name"], "quote", None) is True
+
+
 def test_dependency_null_value_does_not_rehash_other_rows():
     engine = create_engine("sqlite:///:memory:")
     metadata_name = "tbl_map_dmex_metric_null"

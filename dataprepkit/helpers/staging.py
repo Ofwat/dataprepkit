@@ -108,14 +108,25 @@ def union_tables_by_name_regex(
     output_table_name
         Destination table name where the unioned result is written.
     """
-    ensure_schema_exists(engine, schema)
-    schema_for_sql = schema if engine.dialect.name == "mssql" else None
+    resolved_schema = _normalize_bracket_identifier(schema)
+    ensure_schema_exists(engine, resolved_schema)
+    schema_for_sql: str | None = resolved_schema
+    output_table_for_sql: str = (
+        _normalize_bracket_identifier(output_table_name) or output_table_name.strip()
+    )
+    if engine.dialect.name == "mssql":
+        if schema_for_sql is not None:
+            schema_for_sql = quoted_name(schema_for_sql, True)
+        output_table_for_sql = quoted_name(output_table_for_sql, True)
+    else:
+        schema_for_sql = None
 
     pattern = re.compile(table_name_regex)
     inspector = inspect(engine)
     table_names = inspector.get_table_names(schema=schema_for_sql)
+    output_table_compare = str(output_table_for_sql)
     matched_tables = sorted(
-        name for name in table_names if name != output_table_name and pattern.search(name)
+        name for name in table_names if name != output_table_compare and pattern.search(name)
     )
     if not matched_tables:
         raise ValueError(
@@ -128,7 +139,7 @@ def union_tables_by_name_regex(
     ]
     union_df = pd.concat(dataframes, ignore_index=True)
     union_df.to_sql(
-        output_table_name,
+        output_table_for_sql,
         con=engine,
         if_exists="replace",
         index=False,
