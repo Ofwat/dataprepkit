@@ -6,6 +6,33 @@ from sqlalchemy import Engine, inspect
 from dataprepkit.helpers.schema import ensure_schema_exists
 
 
+def _normalize_bracket_identifier(name: str | None) -> str | None:
+    if name is None:
+        return None
+    stripped = name.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        return stripped[1:-1].replace("]]", "]")
+    return stripped
+
+
+def _split_qualified_name(name: str) -> tuple[str | None, str]:
+    in_brackets = False
+    idx = 0
+    while idx < len(name):
+        char = name[idx]
+        if char == "[" and not in_brackets:
+            in_brackets = True
+        elif char == "]" and in_brackets:
+            if idx + 1 < len(name) and name[idx + 1] == "]":
+                idx += 1
+            else:
+                in_brackets = False
+        elif char == "." and not in_brackets:
+            return name[:idx], name[idx + 1 :]
+        idx += 1
+    return None, name
+
+
 def stage_dataframe(
     engine: Engine,
     table_name: str,
@@ -33,11 +60,19 @@ def stage_dataframe(
     schema
         Optional schema name.
     """
-    ensure_schema_exists(engine, schema)
-    schema_for_sql = schema if engine.dialect.name == "mssql" else None
+    resolved_schema = _normalize_bracket_identifier(schema)
+    resolved_table = table_name.strip()
+    if resolved_schema is None:
+        name_schema, name_table = _split_qualified_name(resolved_table)
+        if name_schema is not None:
+            resolved_schema = _normalize_bracket_identifier(name_schema)
+            resolved_table = name_table
+    resolved_table = _normalize_bracket_identifier(resolved_table) or resolved_table
+    ensure_schema_exists(engine, resolved_schema)
+    schema_for_sql = resolved_schema if engine.dialect.name == "mssql" else None
 
     df.to_sql(
-        table_name,
+        resolved_table,
         engine,
         if_exists=if_exists,
         index=index,

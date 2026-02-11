@@ -128,6 +128,74 @@ def test_stage_dataframe_ensures_schema(monkeypatch):
     assert calls == [(engine, "custom")]
 
 
+def test_stage_dataframe_mssql_parses_bracketed_qualified_names(monkeypatch):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    engine = _FakeEngine()
+    df = pd.DataFrame({"col": [1]})
+    calls = []
+    captured = {}
+
+    def fake_ensure(engine_arg, schema_arg):
+        calls.append((engine_arg, schema_arg))
+
+    def fake_to_sql(self, name, con, if_exists, index, schema):
+        captured.update(
+            {
+                "name": name,
+                "con": con,
+                "if_exists": if_exists,
+                "index": index,
+                "schema": schema,
+            }
+        )
+
+    monkeypatch.setattr("dataprepkit.helpers.staging.ensure_schema_exists", fake_ensure)
+    monkeypatch.setattr(pd.DataFrame, "to_sql", fake_to_sql)
+
+    stage_dataframe(engine, "[my[schema]]].[ta]]ble[]", df)
+
+    assert calls == [(engine, "my[schema]")]
+    assert captured == {
+        "name": "ta]ble[",
+        "con": engine,
+        "if_exists": "replace",
+        "index": False,
+        "schema": "my[schema]",
+    }
+
+
+def test_stage_dataframe_mssql_normalizes_bracketed_schema_argument(monkeypatch):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    engine = _FakeEngine()
+    df = pd.DataFrame({"col": [1]})
+    calls = []
+    captured = {}
+
+    def fake_ensure(engine_arg, schema_arg):
+        calls.append((engine_arg, schema_arg))
+
+    def fake_to_sql(self, name, con, if_exists, index, schema):
+        captured.update({"name": name, "schema": schema})
+
+    monkeypatch.setattr("dataprepkit.helpers.staging.ensure_schema_exists", fake_ensure)
+    monkeypatch.setattr(pd.DataFrame, "to_sql", fake_to_sql)
+
+    stage_dataframe(engine, "[ta]]ble[]", df, schema="[my[schema]]]")
+
+    assert calls == [(engine, "my[schema]")]
+    assert captured == {"name": "ta]ble[", "schema": "my[schema]"}
+
+
 def test_union_tables_by_name_regex_unions_all_matches():
     engine = create_engine("sqlite:///:memory:")
     stage_dataframe(engine, "stg_sales_1", pd.DataFrame({"id": [1, 2]}))
