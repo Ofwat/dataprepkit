@@ -14,6 +14,7 @@ from dataprepkit.fact_loader import (
     HashMismatchError,
     MissingStageFileError,
     StageFileSpec,
+    TableRef,
     ingest_fact,
     verify_stage_file_hashes,
 )
@@ -600,5 +601,51 @@ def test_ingest_fact_respects_current_ind_filter_with_mixed_case_column():
             text("SELECT Measure_Instance_Id FROM fact WHERE batch_id='B7'")
         ).scalar_one()
     assert result == 101
+
+
+def test_ingest_fact_supports_explicit_table_refs(fact_engine):
+    with fact_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B8','REGION8', 8.5)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO Dimensions_tbl_d_company "
+                "(surrogate_key, join_numeric_key, Organisation_Cd, Company_Instance_Id, Company_Id) "
+                "VALUES (8, 80, 'REGION8', 800, 801)"
+            )
+        )
+    config = FactConfig(
+        batch=FactBatchMetadata(
+            fact_table=TableRef(table="fact", schema=None),
+            batch_id="B8",
+            validations={},
+        ),
+        dimensions=[
+            DimensionJoinSpec(
+                dim_table="Dimensions_tbl_d_company",
+                staging_columns=["Organisation_Cd"],
+                dim_columns=["Organisation_Cd"],
+                add_columns={"Company_Instance_Id": "Company_Instance_Id"},
+                require_not_null=["Company_Instance_Id"],
+            )
+        ],
+        fact_columns=["company_sk", "measure_value", "Company_Instance_Id"],
+        source_table=TableRef(table="staging", schema=None),
+        temp_table=TableRef(table="tmp_fact", schema=None),
+        temp_columns={
+            "batch_id": None,
+            "Organisation_Cd": None,
+            "measure_value": None,
+        },
+    )
+    ingest_fact(fact_engine, config, batch_id="B8")
+    with fact_engine.connect() as conn:
+        result = conn.execute(
+            text("SELECT batch_id, Company_Instance_Id FROM fact WHERE batch_id='B8'")
+        ).fetchone()
+    assert result == ("B8", 800)
 
 

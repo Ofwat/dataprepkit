@@ -21,6 +21,12 @@ class MissingStageFileError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class TableRef:
+    table: str
+    schema: str | None = None
+
+
 @dataclass
 class DimensionJoinSpec:
     dim_table: str
@@ -48,7 +54,7 @@ class ExtraColumnSpec:
 
 @dataclass
 class FactBatchMetadata:
-    fact_table: str
+    fact_table: str | TableRef
     validations: Dict[str, str]  # {filename_col: hash_col}
     batch_id: str | None = None
 
@@ -58,8 +64,8 @@ class FactConfig:
     batch: FactBatchMetadata
     dimensions: Sequence[DimensionJoinSpec]
     fact_columns: Sequence[str]
-    source_table: str
-    temp_table: str
+    source_table: str | TableRef
+    temp_table: str | TableRef
     temp_columns: Mapping[str, Optional[str]]
     extra_columns: Sequence[ExtraColumnSpec] = field(default_factory=list[ExtraColumnSpec])
     batch_id_column_name: str = "batch_id"
@@ -72,6 +78,31 @@ class StageFileSpec:
     filename_column: str
     hash_column: str
     path_columns: Sequence[str] = field(default_factory=list[str])
+
+
+def _parse_table_ref(table_name: str | TableRef) -> TableRef:
+    if isinstance(table_name, TableRef):
+        return table_name
+    if "." not in table_name:
+        return TableRef(table=table_name)
+    schema, table = table_name.split(".", 1)
+    return TableRef(table=table, schema=schema)
+
+
+def _quote_mssql_identifier(identifier: str) -> str:
+    return f"[{identifier.replace(']', ']]')}]"
+
+
+def _render_table_name(engine: Engine, table_name: str | TableRef) -> str:
+    table_ref = _parse_table_ref(table_name)
+    if engine.dialect.name == "mssql":
+        table_sql = _quote_mssql_identifier(table_ref.table)
+        if table_ref.schema:
+            return f"{_quote_mssql_identifier(table_ref.schema)}.{table_sql}"
+        return table_sql
+    if table_ref.schema:
+        return f"{table_ref.schema}.{table_ref.table}"
+    return table_ref.table
 
 
 def _default_surrogate_column_name(dim_table: str) -> str:
@@ -147,47 +178,52 @@ def _render_column_defs(
 
 
 def _ensure_temp_table(
-    engine: Engine, table_name: str, columns: Mapping[str, Optional[str]]
+    engine: Engine, table_name: str | TableRef, columns: Mapping[str, Optional[str]]
 ) -> None:
     if not any(dtype for dtype in columns.values()):
         return
-    schema = table_name.split(".")[0] if "." in table_name else None
+    table_ref = _parse_table_ref(table_name)
+    schema = table_ref.schema
+    table_name_sql = _render_table_name(engine, table_ref)
     if schema:
         ensure_schema_exists(engine, schema)
     with engine.begin() as conn:
-        conn.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
+        conn.execute(text(f"DROP TABLE IF EXISTS {table_name_sql}"))
         column_defs = _render_column_defs(columns, engine)
-        create_sql = f"CREATE TABLE {table_name} ({column_defs})"
+        create_sql = f"CREATE TABLE {table_name_sql} ({column_defs})"
         conn.execute(text(create_sql))
 
 
-def _get_existing_columns(engine: Engine, table_name: str) -> set[str]:
+def _get_existing_columns(engine: Engine, table_name: str | TableRef) -> set[str]:
     inspector = inspect(engine)
-    schema = table_name.split(".")[0] if "." in table_name else None
-    table = table_name.split(".")[-1]
+    table_ref = _parse_table_ref(table_name)
+    schema = table_ref.schema
+    table = table_ref.table
     if not inspector.has_table(table, schema):
         return set()
     return {col["name"] for col in inspector.get_columns(table, schema)}
 
 
-def _has_current_indicator(engine: Engine, table_name: str) -> bool:
+def _has_current_indicator(engine: Engine, table_name: str | TableRef) -> bool:
     columns = _get_existing_columns(engine, table_name)
     return any(col.lower() == "current_ind" for col in columns)
 
 
 def _ensure_fact_table(
-    engine: Engine, table_name: str, columns: Mapping[str, Optional[str]]
+    engine: Engine, table_name: str | TableRef, columns: Mapping[str, Optional[str]]
 ) -> None:
     if not columns:
         return
-    schema = table_name.split(".")[0] if "." in table_name else None
+    table_ref = _parse_table_ref(table_name)
+    schema = table_ref.schema
+    table_name_sql = _render_table_name(engine, table_ref)
     if schema:
         ensure_schema_exists(engine, schema)
     existing = _get_existing_columns(engine, table_name)
     if not existing:
         column_defs = _render_column_defs(columns, engine)
         with engine.begin() as conn:
-            conn.execute(text(f"CREATE TABLE {table_name} ({column_defs})"))
+            conn.execute(text(f"CREATE TABLE {table_name_sql} ({column_defs})"))
         return
     new_columns = {
         name: dtype for name, dtype in columns.items() if name not in existing
@@ -197,7 +233,7 @@ def _ensure_fact_table(
     with engine.begin() as conn:
         for name, dtype in new_columns.items():
             col_type = dtype if dtype else _column_type_for_engine(engine)
-            conn.execute(text(f"ALTER TABLE {table_name} ADD {name} {col_type}"))
+            conn.execute(text(f"ALTER TABLE {table_name_sql} ADD {name} {col_type}"))
 
 
 def verify_stage_file_hashes(
@@ -251,6 +287,9 @@ def verify_stage_file_hashes(
 def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str = "replace") -> None:
     base_cols = list(config.temp_columns.keys())
     temp_columns = dict(config.temp_columns)
+    source_table_sql = _render_table_name(engine, config.source_table)
+    temp_table_sql = _render_table_name(engine, config.temp_table)
+    fact_table_sql = _render_table_name(engine, config.batch.fact_table)
 
     def _register_dimension_columns(spec: DimensionJoinSpec) -> None:
         surrogate_col = spec.surrogate_column or _default_surrogate_column_name(
@@ -274,8 +313,8 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
     cols = ", ".join(base_cols)
     insert_temp = text(
         f"""
-        INSERT INTO {config.temp_table} ({cols})
-        SELECT {cols} FROM {config.source_table}
+        INSERT INTO {temp_table_sql} ({cols})
+        SELECT {cols} FROM {source_table_sql}
         """
     )
     with engine.begin() as conn:
@@ -371,15 +410,15 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
                 )
 
     for dimension in config.dimensions:
-        _apply_dimension(config.temp_table, dimension)
+        _apply_dimension(temp_table_sql, dimension)
         for extra in config.extra_columns:
             if extra.dim_table == dimension.dim_table:
-                _apply_extra_column(config.temp_table, extra)
+                _apply_extra_column(temp_table_sql, extra)
         for chained in dimension.join_chain:
-            _apply_dimension(config.temp_table, chained)
+            _apply_dimension(temp_table_sql, chained)
             for extra in config.extra_columns:
                 if extra.dim_table == chained.dim_table:
-                    _apply_extra_column(config.temp_table, extra)
+                    _apply_extra_column(temp_table_sql, extra)
 
     fact_columns_types = {
         col: temp_columns.get(col) for col in config.fact_columns
@@ -396,10 +435,10 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
                 [config.batch_id_column_name] + config.fact_columns + ["Insert_Date"]
             )
             select_cols = ", ".join(config.fact_columns)
-            select_clause = f"SELECT :batch_id, {select_cols}, CURRENT_TIMESTAMP FROM {config.temp_table}"
+            select_clause = f"SELECT :batch_id, {select_cols}, CURRENT_TIMESTAMP FROM {temp_table_sql}"
             insert_sql = text(
                 f"""
-                INSERT INTO {config.batch.fact_table} ({insert_cols})
+                INSERT INTO {fact_table_sql} ({insert_cols})
                 {select_clause}
                 """
             )
