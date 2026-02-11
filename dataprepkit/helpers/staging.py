@@ -3,6 +3,7 @@ from typing import Literal
 
 import pandas as pd
 from sqlalchemy import Engine, inspect
+from sqlalchemy.sql.elements import quoted_name
 from dataprepkit.helpers.schema import ensure_schema_exists
 
 
@@ -69,10 +70,17 @@ def stage_dataframe(
             resolved_table = name_table
     resolved_table = _normalize_bracket_identifier(resolved_table) or resolved_table
     ensure_schema_exists(engine, resolved_schema)
-    schema_for_sql = resolved_schema if engine.dialect.name == "mssql" else None
+    schema_for_sql: str | None = resolved_schema
+    table_for_sql: str = resolved_table
+    if engine.dialect.name == "mssql":
+        if schema_for_sql is not None:
+            schema_for_sql = quoted_name(schema_for_sql, True)
+        table_for_sql = quoted_name(table_for_sql, True)
+    else:
+        schema_for_sql = None
 
     df.to_sql(
-        resolved_table,
+        table_for_sql,
         engine,
         if_exists=if_exists,
         index=index,

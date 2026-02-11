@@ -196,6 +196,41 @@ def test_stage_dataframe_mssql_normalizes_bracketed_schema_argument(monkeypatch)
     assert captured == {"name": "ta]ble[", "schema": "my[schema]"}
 
 
+def test_stage_dataframe_mssql_preserves_literal_brackets_in_schema(monkeypatch):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    engine = _FakeEngine()
+    df = pd.DataFrame({"col": [1]})
+    captured = {}
+    calls = []
+
+    def fake_ensure(engine_arg, schema_arg):
+        calls.append((engine_arg, schema_arg))
+
+    def fake_to_sql(self, name, con, if_exists, index, schema):
+        captured.update({"name": name, "schema": schema})
+
+    monkeypatch.setattr("dataprepkit.helpers.staging.ensure_schema_exists", fake_ensure)
+    monkeypatch.setattr(pd.DataFrame, "to_sql", fake_to_sql)
+
+    stage_dataframe(
+        engine,
+        "afw_pcd_validation_stg",
+        df,
+        schema="Staging OFFICIAL - SENSITIVE [MARKET SENSITIVE]",
+    )
+
+    assert str(captured["schema"]) == "Staging OFFICIAL - SENSITIVE [MARKET SENSITIVE]"
+    assert str(captured["name"]) == "afw_pcd_validation_stg"
+    assert getattr(captured["schema"], "quote", None) is True
+    assert getattr(captured["name"], "quote", None) is True
+    assert calls == [(engine, "Staging OFFICIAL - SENSITIVE [MARKET SENSITIVE]")]
+
+
 def test_union_tables_by_name_regex_unions_all_matches():
     engine = create_engine("sqlite:///:memory:")
     stage_dataframe(engine, "stg_sales_1", pd.DataFrame({"id": [1, 2]}))
