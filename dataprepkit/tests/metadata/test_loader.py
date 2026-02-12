@@ -1,6 +1,7 @@
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.dialects.mssql import DATETIME2
 
 from dataprepkit.metadata_loader import (
     DimensionMetadata,
@@ -229,6 +230,39 @@ def test_stage_dataframe_mssql_preserves_literal_brackets_in_schema(monkeypatch)
     assert getattr(captured["schema"], "quote", None) is True
     assert getattr(captured["name"], "quote", None) is True
     assert calls == [(engine, "Staging OFFICIAL - SENSITIVE [MARKET SENSITIVE]")]
+
+
+def test_stage_dataframe_mssql_datetime_columns_use_datetime2(monkeypatch):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    engine = _FakeEngine()
+    df = pd.DataFrame(
+        {
+            "id": [1],
+            "start_ts": [pd.Timestamp("2026-01-01 10:00:00")],
+            "end_ts": [pd.Timestamp("2026-01-01 11:00:00")],
+        }
+    )
+    captured = {}
+
+    def fake_to_sql(self, name, con, if_exists, index, schema, dtype=None):
+        captured["dtype"] = dtype
+
+    monkeypatch.setattr("dataprepkit.helpers.staging.ensure_schema_exists", lambda *_: None)
+    monkeypatch.setattr(pd.DataFrame, "to_sql", fake_to_sql)
+
+    stage_dataframe(engine, "validation_summary", df)
+
+    dtype = captured["dtype"]
+    assert isinstance(dtype["start_ts"], DATETIME2)
+    assert isinstance(dtype["end_ts"], DATETIME2)
+    assert dtype["start_ts"].precision == 3
+    assert dtype["end_ts"].precision == 3
+    assert "id" not in dtype
 
 
 def test_union_tables_by_name_regex_unions_all_matches():

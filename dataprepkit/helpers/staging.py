@@ -2,7 +2,9 @@ import re
 from typing import Literal
 
 import pandas as pd
+from pandas.api.types import is_datetime64_any_dtype, is_datetime64tz_dtype
 from sqlalchemy import Engine, inspect
+from sqlalchemy.dialects.mssql import DATETIME2
 from sqlalchemy.sql.elements import quoted_name
 from dataprepkit.helpers.schema import ensure_schema_exists
 
@@ -78,6 +80,23 @@ def stage_dataframe(
         table_for_sql = quoted_name(table_for_sql, True)
     else:
         schema_for_sql = None
+
+    if engine.dialect.name == "mssql":
+        dtype_overrides = {
+            col: DATETIME2(precision=3)
+            for col, dtype in df.dtypes.items()
+            if is_datetime64_any_dtype(dtype) or is_datetime64tz_dtype(dtype)
+        }
+        if dtype_overrides:
+            df.to_sql(
+                table_for_sql,
+                engine,
+                if_exists=if_exists,
+                index=index,
+                schema=schema_for_sql,
+                dtype=dtype_overrides,
+            )
+            return
 
     df.to_sql(
         table_for_sql,
