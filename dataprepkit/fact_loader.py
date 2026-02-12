@@ -427,7 +427,9 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
         config.batch_id_column_name, config.batch_id_column_type
     )
     fact_columns_types.setdefault("Insert_Date", "DATETIME2(3)")
-    _ensure_fact_table(engine, config.batch.fact_table, fact_columns_types)
+    _ensure_fact_table(engine,
+                       config.batch.fact_table,
+                       fact_columns_types)
 
     try:
         with engine.begin() as conn:
