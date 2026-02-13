@@ -106,6 +106,47 @@ def test_missing_target_file(tmp_path, sample_engine):
         )
 
 
+def test_verify_stage_file_hashes_accepts_explicit_schema_and_table(
+    tmp_path, sample_engine, monkeypatch
+):
+    file_path = tmp_path / "data.csv"
+    _create_file(file_path, content=b"payload")
+    expected = _md5_file(file_path)
+    captured = {}
+
+    def fake_list_stage_files(engine, table_name, spec, filters=None):
+        captured["table_name"] = table_name
+        yield ("REGION1", "data.csv", expected, {})
+
+    monkeypatch.setattr(
+        "dataprepkit.fact_loader._list_stage_files", fake_list_stage_files
+    )
+
+    spec = StageFileSpec("Organisation_Cd", "Filename", "file_hash_md5")
+    verify_stage_file_hashes(
+        sample_engine,
+        None,
+        spec,
+        schema="Staging",
+        table="qd_stg",
+        path_resolver=lambda *_: str(file_path),
+    )
+
+    assert captured["table_name"] == TableRef(table="qd_stg", schema="Staging")
+
+
+def test_verify_stage_file_hashes_rejects_conflicting_schema(sample_engine):
+    spec = StageFileSpec("Organisation_Cd", "Filename", "file_hash_md5")
+    with pytest.raises(ValueError, match="Conflicting schema values"):
+        verify_stage_file_hashes(
+            sample_engine,
+            "SchemaA.qd_stg",
+            spec,
+            schema="SchemaB",
+            path_resolver=lambda *_: __file__,
+        )
+
+
 def _create_fact_tables(engine):
     with engine.begin() as conn:
         conn.execute(

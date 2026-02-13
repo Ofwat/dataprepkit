@@ -128,17 +128,18 @@ def _compute_md5(path: str) -> str:
 
 def _list_stage_files(
     engine: Engine,
-    table_name: str,
+    table_name: str | TableRef,
     spec: StageFileSpec,
     filters: Optional[Dict[str, str]] = None,
 ) -> Iterable[Tuple[str, str, Optional[str], Mapping[str, str]]]:
+    table_name_sql = _render_table_name(engine, table_name)
     select_cols = [
         spec.organisation_column,
         spec.filename_column,
         spec.hash_column,
         *spec.path_columns,
     ]
-    query = f"SELECT DISTINCT {', '.join(select_cols)} FROM {table_name}"
+    query = f"SELECT DISTINCT {', '.join(select_cols)} FROM {table_name_sql}"
     params = {}
     if filters:
         where_clause = " AND ".join(f"{col} = :{col}" for col in filters)
@@ -238,9 +239,11 @@ def _ensure_fact_table(
 
 def verify_stage_file_hashes(
     engine: Engine,
-    table_name: str,
+    table_name: str | TableRef | None,
     spec: StageFileSpec,
     *,
+    schema: str | None = None,
+    table: str | None = None,
     path_resolver: Optional[
         Callable[[str, str, Mapping[str, str]], str]
     ] = None,
@@ -251,10 +254,25 @@ def verify_stage_file_hashes(
 
     Parameters:
         engine: SQLAlchemy engine bound to the staging database.
-        table_name: Fully qualified staging table name (schema.table).
+        table_name: Staging table name, optionally schema-qualified.
+        schema: Optional explicit schema for the staging table.
+        table: Optional explicit table name for the staging table.
         spec: Columns describing organisation, filename, and hash.
         path_resolver: Callable mapping (organisation, filename) -> path to actual file.
     """
+    if table is not None:
+        if table_name is not None:
+            raise ValueError("Provide either table_name or table/schema, not both.")
+        stage_table = TableRef(table=table, schema=schema)
+    else:
+        if table_name is None:
+            raise ValueError("Either table_name or table must be provided.")
+        stage_table = _parse_table_ref(table_name)
+        if schema is not None and stage_table.schema and stage_table.schema != schema:
+            raise ValueError("Conflicting schema values provided for staging table.")
+        if schema is not None:
+            stage_table = TableRef(table=stage_table.table, schema=schema)
+
     resolver = path_resolver
     if resolver is None and base_path is not None:
         def _base_resolver(svc, fname, extra=None):
@@ -267,7 +285,7 @@ def verify_stage_file_hashes(
     if resolver is None:
         raise ValueError("Either path_resolver or base_path must be provided.")
     for organisation, filename, expected_hash, row_meta in _list_stage_files(
-        engine, table_name, spec
+        engine, stage_table, spec
     ):
         if expected_hash is None:
             raise HashMismatchError(
