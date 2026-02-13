@@ -6,6 +6,7 @@ import textwrap
 import pytest
 from sqlalchemy import create_engine, text
 
+import dataprepkit.fact_loader as fact_loader_module
 from dataprepkit.fact_loader import (
     DimensionJoinSpec,
     ExtraColumnSpec,
@@ -688,5 +689,71 @@ def test_ingest_fact_supports_explicit_table_refs(fact_engine):
             text("SELECT batch_id, Company_Instance_Id FROM fact WHERE batch_id='B8'")
         ).fetchone()
     assert result == ("B8", 800)
+
+
+def test_ingest_fact_handles_existing_fact_table_when_inspection_misses_it(monkeypatch):
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE staging (
+                    batch_id TEXT,
+                    measure_value REAL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE fact (
+                    batch_id TEXT,
+                    measure_value REAL,
+                    Insert_Date TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, measure_value) VALUES ('B9', 9.0)"
+            )
+        )
+
+    original_get_existing_columns = fact_loader_module._get_existing_columns
+    calls = {"fact": 0}
+
+    def fake_get_existing_columns(engine_arg, table_name):
+        table_ref = (
+            table_name
+            if isinstance(table_name, TableRef)
+            else fact_loader_module._parse_table_ref(table_name)
+        )
+        if table_ref.table == "fact":
+            calls["fact"] += 1
+            if calls["fact"] == 1:
+                return set()
+        return original_get_existing_columns(engine_arg, table_name)
+
+    monkeypatch.setattr(
+        "dataprepkit.fact_loader._get_existing_columns", fake_get_existing_columns
+    )
+
+    config = FactConfig(
+        batch=FactBatchMetadata(fact_table="fact", validations={}),
+        dimensions=[],
+        fact_columns=["measure_value"],
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={"batch_id": "TEXT", "measure_value": "REAL"},
+    )
+
+    ingest_fact(engine, config, batch_id="B9")
+    with engine.connect() as conn:
+        value = conn.execute(
+            text("SELECT measure_value FROM fact WHERE batch_id='B9'")
+        ).scalar_one()
+    assert value == 9.0
 
 

@@ -223,9 +223,20 @@ def _ensure_fact_table(
     existing = _get_existing_columns(engine, table_name)
     if not existing:
         column_defs = _render_column_defs(columns, engine)
-        with engine.begin() as conn:
-            conn.execute(text(f"CREATE TABLE {table_name_sql} ({column_defs})"))
-        return
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f"CREATE TABLE {table_name_sql} ({column_defs})"))
+            return
+        except SQLAlchemyError as exc:
+            # Fabric/MSSQL metadata inspection can lag; if the table already exists,
+            # continue and reconcile missing columns instead of failing hard.
+            error_text = str(exc).lower()
+            if (
+                "already an object named" not in error_text
+                and "already exists" not in error_text
+            ):
+                raise
+            existing = _get_existing_columns(engine, table_name)
     new_columns = {
         name: dtype for name, dtype in columns.items() if name not in existing
     }
