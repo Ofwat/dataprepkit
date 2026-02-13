@@ -757,3 +757,42 @@ def test_ingest_fact_handles_existing_fact_table_when_inspection_misses_it(monke
     assert value == 9.0
 
 
+def test_ensure_fact_table_ignores_duplicate_column_from_stale_inspection(monkeypatch):
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE fact (
+                    Organisation_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+
+    original_get_existing_columns = fact_loader_module._get_existing_columns
+    calls = {"fact": 0}
+
+    def fake_get_existing_columns(engine_arg, table_name):
+        table_ref = (
+            table_name
+            if isinstance(table_name, TableRef)
+            else fact_loader_module._parse_table_ref(table_name)
+        )
+        if table_ref.table == "fact":
+            calls["fact"] += 1
+            if calls["fact"] == 1:
+                return set()
+        return original_get_existing_columns(engine_arg, table_name)
+
+    monkeypatch.setattr(
+        "dataprepkit.fact_loader._get_existing_columns", fake_get_existing_columns
+    )
+
+    fact_loader_module._ensure_fact_table(
+        engine,
+        "fact",
+        {"Organisation_Instance_Id": "BIGINT"},
+    )
+
+

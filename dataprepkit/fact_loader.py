@@ -237,15 +237,29 @@ def _ensure_fact_table(
             ):
                 raise
             existing = _get_existing_columns(engine, table_name)
+    existing_lower = {name.lower() for name in existing}
     new_columns = {
-        name: dtype for name, dtype in columns.items() if name not in existing
+        name: dtype
+        for name, dtype in columns.items()
+        if name.lower() not in existing_lower
     }
     if not new_columns:
         return
     with engine.begin() as conn:
         for name, dtype in new_columns.items():
             col_type = dtype if dtype else _column_type_for_engine(engine)
-            conn.execute(text(f"ALTER TABLE {table_name_sql} ADD {name} {col_type}"))
+            try:
+                conn.execute(text(f"ALTER TABLE {table_name_sql} ADD {name} {col_type}"))
+            except SQLAlchemyError as exc:
+                error_text = str(exc).lower()
+                duplicate_column_error = (
+                    "specified more than once" in error_text
+                    or "duplicate column name" in error_text
+                    or "column names in each table must be unique" in error_text
+                    or "already exists" in error_text
+                )
+                if not duplicate_column_error:
+                    raise
 
 
 def verify_stage_file_hashes(
