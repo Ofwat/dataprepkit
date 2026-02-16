@@ -205,12 +205,16 @@ def _parse_column_definition(
     return col_type, True
 
 
-def _column_type_from_definition(
+def _fact_column_definition_from_temp(
     column_definition: Optional[str] | Mapping[str, object] | None,
-) -> Optional[str]:
+) -> Optional[str] | Mapping[str, object]:
     if isinstance(column_definition, Mapping):
-        raw_type = column_definition.get("type")
-        return str(raw_type) if raw_type not in (None, "") else None
+        result: dict[str, object] = {}
+        if "type" in column_definition:
+            result["type"] = column_definition.get("type")
+        if "nullable" in column_definition:
+            result["nullable"] = column_definition.get("nullable")
+        return result
     return column_definition
 
 
@@ -281,7 +285,7 @@ def _has_current_indicator(engine: Engine, table_name: str | TableRef) -> bool:
 def _ensure_fact_table(
     engine: Engine,
     table_name: str | TableRef,
-    columns: Mapping[str, Optional[str]],
+    columns: Mapping[str, Optional[str] | Mapping[str, object]],
     *,
     fact_pk_column_name: str = "fact_id",
 ) -> None:
@@ -325,9 +329,10 @@ def _ensure_fact_table(
         return
     with engine.begin() as conn:
         for name, dtype in new_columns.items():
-            col_type = dtype if dtype else _column_type_for_engine(engine)
+            col_type, nullable = _parse_column_definition(dtype, engine)
+            null_sql = "" if nullable else " NOT NULL"
             try:
-                conn.execute(text(f"ALTER TABLE {table_name_sql} ADD {name} {col_type}"))
+                conn.execute(text(f"ALTER TABLE {table_name_sql} ADD {name} {col_type}{null_sql}"))
             except SQLAlchemyError as exc:
                 error_text = str(exc).lower()
                 duplicate_column_error = (
@@ -717,7 +722,7 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
                     _apply_extra_column(temp_table_sql, extra)
 
     fact_columns_types = {
-        col: _column_type_from_definition(temp_columns.get(col))
+        col: _fact_column_definition_from_temp(temp_columns.get(col))
         for col in config.fact_columns
     }
     fact_columns_types.setdefault(
