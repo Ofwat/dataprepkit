@@ -57,6 +57,8 @@ class FactBatchMetadata:
     fact_table: str | TableRef
     validations: Dict[str, str]  # {filename_col: hash_col}
     batch_id: str | None = None
+    table_comment: str | None = None
+    column_comments: Mapping[str, str] = field(default_factory=dict[str, str])
 
 
 @dataclass
@@ -277,6 +279,97 @@ def _ensure_fact_table(
                 )
                 if not duplicate_column_error:
                     raise
+
+
+def _apply_table_and_column_comments(
+    conn,
+    schema: str,
+    table: str,
+    description: str | None,
+    column_comments: Mapping[str, str],
+) -> None:
+    statements = [
+        "DECLARE @schema SYSNAME = :schema;",
+        "DECLARE @table SYSNAME = :table;",
+    ]
+    params: dict[str, str] = {"schema": schema, "table": table}
+    if description:
+        statements.append("DECLARE @description NVARCHAR(4000) = :description;")
+        params["description"] = description
+    statements.append(
+        "DECLARE @columns TABLE (ColumnName SYSNAME, Comment NVARCHAR(4000));"
+    )
+    for idx, (column, comment) in enumerate(column_comments.items()):
+        key_col = f"column_{idx}"
+        key_comment = f"comment_{idx}"
+        statements.append(
+            f"INSERT INTO @columns (ColumnName, Comment) VALUES (:{key_col}, :{key_comment});"
+        )
+        params[key_col] = column
+        params[key_comment] = comment
+    if description:
+        statements.append(
+            """
+BEGIN TRY
+  EXEC sys.sp_updateextendedproperty
+    @name=N'MS_Description', @value=@description,
+    @level0type=N'SCHEMA', @level0name=@schema,
+    @level1type=N'TABLE', @level1name=@table;
+END TRY
+BEGIN CATCH
+  EXEC sys.sp_addextendedproperty
+    @name=N'MS_Description', @value=@description,
+    @level0type=N'SCHEMA', @level0name=@schema,
+    @level1type=N'TABLE', @level1name=@table;
+END CATCH;
+"""
+        )
+    statements.append(
+        """
+DECLARE @col SYSNAME, @comment NVARCHAR(4000);
+WHILE EXISTS (SELECT 1 FROM @columns)
+BEGIN
+  SELECT TOP 1 @col = ColumnName, @comment = Comment FROM @columns;
+  BEGIN TRY
+    EXEC sys.sp_updateextendedproperty
+      @name=N'MS_Description', @value=@comment,
+      @level0type=N'SCHEMA', @level0name=@schema,
+      @level1type=N'TABLE', @level1name=@table,
+      @level2type=N'COLUMN', @level2name=@col;
+  END TRY
+  BEGIN CATCH
+    EXEC sys.sp_addextendedproperty
+      @name=N'MS_Description', @value=@comment,
+      @level0type=N'SCHEMA', @level0name=@schema,
+      @level1type=N'TABLE', @level1name=@table,
+      @level2type=N'COLUMN', @level2name=@col;
+  END CATCH;
+  DELETE FROM @columns WHERE ColumnName = @col;
+END
+"""
+    )
+    script = "\n".join(statements)
+    conn.execute(text(script), params)
+
+
+def _apply_fact_table_comments(
+    engine: Engine,
+    table_name: str | TableRef,
+    *,
+    table_comment: str | None = None,
+    column_comments: Mapping[str, str] | None = None,
+) -> None:
+    if engine.dialect.name != "mssql":
+        return
+    comments = dict(column_comments or {})
+    if not table_comment and not comments:
+        return
+    table_ref = _parse_table_ref(table_name)
+    schema = table_ref.schema or "dbo"
+    with engine.begin() as conn:
+        _apply_table_and_column_comments(
+            conn, schema, table_ref.table, table_comment, comments
+        )
 
 
 def verify_stage_file_hashes(
@@ -574,6 +667,12 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
     _ensure_fact_table(engine,
                        config.batch.fact_table,
                        fact_columns_types)
+    _apply_fact_table_comments(
+        engine,
+        config.batch.fact_table,
+        table_comment=config.batch.table_comment,
+        column_comments=config.batch.column_comments,
+    )
 
     try:
         with engine.begin() as conn:

@@ -971,3 +971,61 @@ def test_assert_columns_have_single_distinct_row_raises_when_empty():
         )
 
 
+def test_apply_fact_table_comments_executes_for_mssql():
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeConn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, stmt, params=None):
+            self.calls.append((str(stmt), params))
+
+    class _FakeBegin:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def __enter__(self):
+            return self.conn
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        def __init__(self):
+            self.dialect = _FakeDialect()
+            self.conn = _FakeConn()
+
+        def begin(self):
+            return _FakeBegin(self.conn)
+
+    engine = _FakeEngine()
+
+    fact_loader_module._apply_fact_table_comments(
+        engine,
+        TableRef(schema="Facts", table="qd_fact"),
+        table_comment="Fact description",
+        column_comments={"Batch_Id": "Batch identifier"},
+    )
+
+    assert len(engine.conn.calls) == 1
+    sql, params = engine.conn.calls[0]
+    assert "sp_updateextendedproperty" in sql
+    assert "sp_addextendedproperty" in sql
+    assert params["schema"] == "Facts"
+    assert params["table"] == "qd_fact"
+
+
+def test_apply_fact_table_comments_skips_for_non_mssql():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    # Should be a no-op for sqlite and not raise.
+    fact_loader_module._apply_fact_table_comments(
+        engine,
+        "fact",
+        table_comment="ignored",
+        column_comments={"Batch_Id": "ignored"},
+    )
+
+
