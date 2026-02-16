@@ -373,7 +373,55 @@ def test_ingest_fact_creates_fact_table_when_missing(fact_engine):
     ingest_fact(fact_engine, config, batch_id="B3")
     with fact_engine.connect() as conn:
         count = conn.execute(text("SELECT COUNT(1) FROM fact")).scalar()
+        columns = conn.execute(text("PRAGMA table_info(fact)")).fetchall()
     assert count == 1
+    pk_columns = [row[1] for row in columns if row[5] == 1]
+    assert pk_columns == ["fact_id"]
+
+
+def test_ingest_fact_uses_metadata_pk_column_name_when_creating_fact_table(fact_engine):
+    with fact_engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS fact"))
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B3P','REGION3', 3.5)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO Dimensions_tbl_d_company (surrogate_key, join_numeric_key, Organisation_Cd, Company_Instance_Id, Company_Id) VALUES (9, 90, 'REGION3', 900, 901)"
+            )
+        )
+    config = FactConfig(
+        batch=FactBatchMetadata(
+            fact_table="fact",
+            batch_id="B3P",
+            validations={},
+            fact_pk_column_name="qd_fact_id",
+        ),
+        dimensions=[
+            DimensionJoinSpec(
+                dim_table="Dimensions_tbl_d_company",
+                staging_columns=["Organisation_Cd"],
+                dim_columns=["Organisation_Cd"],
+                add_columns={"Company_Instance_Id": "Company_Instance_Id"},
+                require_not_null=["Company_Instance_Id"],
+            )
+        ],
+        fact_columns=["company_sk", "measure_value", "Company_Instance_Id"],
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={
+            "batch_id": None,
+            "Organisation_Cd": None,
+            "measure_value": None,
+        },
+    )
+    ingest_fact(fact_engine, config, batch_id="B3P")
+    with fact_engine.connect() as conn:
+        columns = conn.execute(text("PRAGMA table_info(fact)")).fetchall()
+    pk_columns = [row[1] for row in columns if row[5] == 1]
+    assert pk_columns == ["qd_fact_id"]
 
 
 def test_ingest_fact_allows_non_current_rows_when_disabled(fact_engine):

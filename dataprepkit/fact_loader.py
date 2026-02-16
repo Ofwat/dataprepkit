@@ -57,6 +57,7 @@ class FactBatchMetadata:
     fact_table: str | TableRef
     validations: Dict[str, str]  # {filename_col: hash_col}
     batch_id: str | None = None
+    fact_pk_column_name: str | None = None
     table_comment: str | None = None
     column_comments: Mapping[str, str] = field(default_factory=dict[str, str])
 
@@ -72,6 +73,7 @@ class FactConfig:
     extra_columns: Sequence[ExtraColumnSpec] = field(default_factory=list[ExtraColumnSpec])
     batch_id_column_name: str = "batch_id"
     batch_id_column_type: Optional[str] = "NVARCHAR(4000)"
+    fact_pk_column_name: str = "fact_id"
 
 
 @dataclass
@@ -197,6 +199,14 @@ def _render_column_defs(
     return ", ".join(defs)
 
 
+def _fact_pk_clause(engine: Engine, column_name: str) -> str:
+    if engine.dialect.name == "mssql":
+        return f"{column_name} BIGINT IDENTITY(1,1) PRIMARY KEY"
+    if engine.dialect.name == "sqlite":
+        return f"{column_name} INTEGER PRIMARY KEY AUTOINCREMENT"
+    return f"{column_name} BIGINT PRIMARY KEY"
+
+
 def _ensure_temp_table(
     engine: Engine, table_name: str | TableRef, columns: Mapping[str, Optional[str]]
 ) -> None:
@@ -230,7 +240,11 @@ def _has_current_indicator(engine: Engine, table_name: str | TableRef) -> bool:
 
 
 def _ensure_fact_table(
-    engine: Engine, table_name: str | TableRef, columns: Mapping[str, Optional[str]]
+    engine: Engine,
+    table_name: str | TableRef,
+    columns: Mapping[str, Optional[str]],
+    *,
+    fact_pk_column_name: str = "fact_id",
 ) -> None:
     if not columns:
         return
@@ -241,7 +255,13 @@ def _ensure_fact_table(
         ensure_schema_exists(engine, schema)
     existing = _get_existing_columns(engine, table_name)
     if not existing:
-        column_defs = _render_column_defs(columns, engine)
+        non_pk_columns = {
+            name: dtype for name, dtype in columns.items() if name != fact_pk_column_name
+        }
+        rendered_non_pk = _render_column_defs(non_pk_columns, engine)
+        column_defs = _fact_pk_clause(engine, fact_pk_column_name)
+        if rendered_non_pk:
+            column_defs = f"{column_defs}, {rendered_non_pk}"
         try:
             with engine.begin() as conn:
                 conn.execute(text(f"CREATE TABLE {table_name_sql} ({column_defs})"))
@@ -260,7 +280,7 @@ def _ensure_fact_table(
     new_columns = {
         name: dtype
         for name, dtype in columns.items()
-        if name.lower() not in existing_lower
+        if name.lower() not in existing_lower and name != fact_pk_column_name
     }
     if not new_columns:
         return
@@ -666,7 +686,10 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
     fact_columns_types.setdefault("Insert_Date", "DATETIME2(3)")
     _ensure_fact_table(engine,
                        config.batch.fact_table,
-                       fact_columns_types)
+                       fact_columns_types,
+                       fact_pk_column_name=(
+                           config.batch.fact_pk_column_name or config.fact_pk_column_name
+                       ))
     _apply_fact_table_comments(
         engine,
         config.batch.fact_table,
