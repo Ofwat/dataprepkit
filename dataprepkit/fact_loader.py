@@ -5,12 +5,14 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import hashlib
+import pandas as pd
 import re
 
 from sqlalchemy import Engine, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from dataprepkit.helpers.schema import ensure_schema_exists
+from dataprepkit.storage import archive_dataframe_path
 
 
 class HashMismatchError(RuntimeError):
@@ -60,6 +62,9 @@ class FactBatchMetadata:
     fact_pk_column_name: str | None = None
     table_comment: str | None = None
     column_comments: Mapping[str, str] = field(default_factory=dict[str, str])
+    input_archive_base_dir: str | None = None
+    input_archive_file_path: str | None = None
+    input_archive_filename: str | None = None
 
 
 @dataclass
@@ -482,6 +487,27 @@ def _batch_already_loaded(
         return (conn.execute(query, {"batch_id": batch_id}).scalar_one() or 0) > 0
 
 
+def _archive_input_table_snapshot(
+    engine: Engine,
+    source_table: str | TableRef,
+    *,
+    batch_id: str,
+    archive_base_dir: str,
+) -> tuple[str, str]:
+    source_ref = _parse_table_ref(source_table)
+    source_table_sql = _render_table_name(engine, source_ref)
+    path_info = archive_dataframe_path(
+        table_name=source_ref.table,
+        batch_id=batch_id,
+        base_dir=archive_base_dir,
+    )
+    archive_path = Path(path_info.file_path)
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    source_df = pd.read_sql_query(text(f"SELECT * FROM {source_table_sql}"), con=engine)
+    source_df.to_parquet(archive_path, index=False)
+    return str(archive_path), archive_path.name
+
+
 def verify_stage_file_hashes(
     engine: Engine,
     table_name: str | TableRef | None,
@@ -794,6 +820,15 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
         engine, fact_table_sql, config.batch_id_column_name, batch_id
     ):
         return
+    if config.batch.input_archive_base_dir:
+        archive_file_path, archive_filename = _archive_input_table_snapshot(
+            engine,
+            config.source_table,
+            batch_id=batch_id,
+            archive_base_dir=config.batch.input_archive_base_dir,
+        )
+        config.batch.input_archive_file_path = archive_file_path
+        config.batch.input_archive_filename = archive_filename
 
     try:
         with engine.begin() as conn:

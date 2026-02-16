@@ -3,6 +3,7 @@ from pathlib import Path
 import hashlib
 import textwrap
 
+import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
 
@@ -712,6 +713,51 @@ def test_ingest_fact_same_batch_id_preserves_existing_pk_and_values(fact_engine)
         ).one()
 
     assert second == first
+
+
+def test_ingest_fact_archives_input_table_and_updates_metadata(
+    fact_engine, tmp_path, monkeypatch
+):
+    with fact_engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS fact"))
+        conn.execute(text("DELETE FROM staging WHERE batch_id = 'B13'"))
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B13','REGION13', 13.5)"
+            )
+        )
+    batch_metadata = FactBatchMetadata(
+        fact_table="fact",
+        batch_id="B13",
+        validations={},
+        input_archive_base_dir=str(tmp_path / "archive"),
+    )
+    config = FactConfig(
+        batch=batch_metadata,
+        dimensions=[],
+        fact_columns=["measure_value"],
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={
+            "batch_id": {"type": "TEXT", "nullable": False},
+            "Organisation_Cd": {"type": "TEXT", "nullable": True},
+            "measure_value": {"type": "REAL", "nullable": True},
+        },
+    )
+
+    def fake_to_parquet(self, path, index=False):
+        Path(path).write_bytes(b"parquet")
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", fake_to_parquet)
+
+    ingest_fact(fact_engine, config, batch_id="B13")
+
+    assert batch_metadata.input_archive_file_path is not None
+    assert batch_metadata.input_archive_filename is not None
+    archived_path = Path(batch_metadata.input_archive_file_path)
+    assert archived_path.exists()
+    assert archived_path.suffix == ".parquet"
+    assert "staging__" in batch_metadata.input_archive_filename
 
 
 def test_ingest_fact_temp_columns_support_explicit_nullability(fact_engine):
