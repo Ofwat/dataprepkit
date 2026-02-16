@@ -69,7 +69,7 @@ class FactConfig:
     fact_columns: Sequence[str]
     source_table: str | TableRef
     temp_table: str | TableRef
-    temp_columns: Mapping[str, Optional[str]]
+    temp_columns: Mapping[str, Optional[str] | Mapping[str, object]]
     extra_columns: Sequence[ExtraColumnSpec] = field(default_factory=list[ExtraColumnSpec])
     batch_id_column_name: str = "batch_id"
     batch_id_column_type: Optional[str] = "NVARCHAR(4000)"
@@ -189,13 +189,50 @@ def _column_type_for_engine(engine: Engine) -> str:
     return "TEXT"
 
 
+def _parse_column_definition(
+    column_definition: Optional[str] | Mapping[str, object],
+    engine: Engine,
+) -> tuple[str, bool]:
+    if isinstance(column_definition, Mapping):
+        raw_type = column_definition.get("type")
+        raw_nullable = column_definition.get("nullable", True)
+        col_type = (
+            str(raw_type) if raw_type not in (None, "") else _column_type_for_engine(engine)
+        )
+        nullable = True if raw_nullable is None else bool(raw_nullable)
+        return col_type, nullable
+    col_type = column_definition if column_definition else _column_type_for_engine(engine)
+    return col_type, True
+
+
+def _column_type_from_definition(
+    column_definition: Optional[str] | Mapping[str, object] | None,
+) -> Optional[str]:
+    if isinstance(column_definition, Mapping):
+        raw_type = column_definition.get("type")
+        return str(raw_type) if raw_type not in (None, "") else None
+    return column_definition
+
+
+def _has_explicit_column_definition(
+    column_definition: Optional[str] | Mapping[str, object]
+) -> bool:
+    if isinstance(column_definition, Mapping):
+        return (
+            column_definition.get("type") not in (None, "")
+            or column_definition.get("nullable") is False
+        )
+    return bool(column_definition)
+
+
 def _render_column_defs(
-    columns: Mapping[str, Optional[str]], engine: Engine
+    columns: Mapping[str, Optional[str] | Mapping[str, object]], engine: Engine
 ) -> str:
     defs = []
-    for name, dtype in columns.items():
-        col_type = dtype if dtype else _column_type_for_engine(engine)
-        defs.append(f"{name} {col_type}")
+    for name, column_definition in columns.items():
+        col_type, nullable = _parse_column_definition(column_definition, engine)
+        null_sql = "" if nullable else " NOT NULL"
+        defs.append(f"{name} {col_type}{null_sql}")
     return ", ".join(defs)
 
 
@@ -208,9 +245,11 @@ def _fact_pk_clause(engine: Engine, column_name: str) -> str:
 
 
 def _ensure_temp_table(
-    engine: Engine, table_name: str | TableRef, columns: Mapping[str, Optional[str]]
+    engine: Engine,
+    table_name: str | TableRef,
+    columns: Mapping[str, Optional[str] | Mapping[str, object]],
 ) -> None:
-    if not any(dtype for dtype in columns.values()):
+    if not any(_has_explicit_column_definition(defn) for defn in columns.values()):
         return
     table_ref = _parse_table_ref(table_name)
     schema = table_ref.schema
@@ -678,7 +717,8 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
                     _apply_extra_column(temp_table_sql, extra)
 
     fact_columns_types = {
-        col: temp_columns.get(col) for col in config.fact_columns
+        col: _column_type_from_definition(temp_columns.get(col))
+        for col in config.fact_columns
     }
     fact_columns_types.setdefault(
         config.batch_id_column_name, config.batch_id_column_type

@@ -660,6 +660,53 @@ def test_ingest_fact_is_idempotent_for_same_batch_id(fact_engine):
     assert count == 1
 
 
+def test_ingest_fact_temp_columns_support_explicit_nullability(fact_engine):
+    with fact_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B10','REGION10', 10.5)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO Dimensions_tbl_d_company (surrogate_key, join_numeric_key, Organisation_Cd, Company_Instance_Id, Company_Id) VALUES (10, 100, 'REGION10', 1000, 1001)"
+            )
+        )
+    config = FactConfig(
+        batch=FactBatchMetadata(
+            fact_table="fact",
+            batch_id="B10",
+            validations={},
+        ),
+        dimensions=[
+            DimensionJoinSpec(
+                dim_table="Dimensions_tbl_d_company",
+                staging_columns=["Organisation_Cd"],
+                dim_columns=["Organisation_Cd"],
+                add_columns={"Company_Instance_Id": "Company_Instance_Id"},
+                require_not_null=["Company_Instance_Id"],
+            )
+        ],
+        fact_columns=["company_sk", "measure_value", "Company_Instance_Id"],
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={
+            "batch_id": {"type": "TEXT", "nullable": False},
+            "Organisation_Cd": {"type": "TEXT", "nullable": False},
+            "measure_value": {"type": "REAL", "nullable": True},
+        },
+    )
+
+    ingest_fact(fact_engine, config, batch_id="B10")
+
+    with fact_engine.connect() as conn:
+        columns = conn.execute(text("PRAGMA table_info(tmp_fact)")).fetchall()
+    not_null_flags = {row[1]: row[3] for row in columns}
+    assert not_null_flags["batch_id"] == 1
+    assert not_null_flags["Organisation_Cd"] == 1
+    assert not_null_flags["measure_value"] == 0
+
+
 def test_ingest_fact_respects_current_ind_filter_with_mixed_case_column():
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
     with engine.begin() as conn:
