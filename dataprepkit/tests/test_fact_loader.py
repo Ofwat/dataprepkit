@@ -740,6 +740,43 @@ def test_ingest_fact_propagates_temp_nullability_to_new_fact_table(fact_engine):
     assert not_null_flags["measure_value"] == 1
 
 
+def test_ingest_fact_fact_columns_support_explicit_nullability(fact_engine):
+    with fact_engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS fact"))
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B12','REGION12', 12.5)"
+            )
+        )
+    config = FactConfig(
+        batch=FactBatchMetadata(
+            fact_table="fact",
+            batch_id="B12",
+            validations={},
+        ),
+        dimensions=[],
+        fact_columns=[
+            {"name": "measure_value", "nullable": False},
+            {"name": "Organisation_Cd", "nullable": False},
+        ],
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={
+            "batch_id": {"type": "TEXT", "nullable": False},
+            "Organisation_Cd": {"type": "TEXT", "nullable": True},
+            "measure_value": {"type": "REAL", "nullable": True},
+        },
+    )
+
+    ingest_fact(fact_engine, config, batch_id="B12")
+
+    with fact_engine.connect() as conn:
+        columns = conn.execute(text("PRAGMA table_info(fact)")).fetchall()
+    not_null_flags = {row[1]: row[3] for row in columns}
+    assert not_null_flags["measure_value"] == 1
+    assert not_null_flags["Organisation_Cd"] == 1
+
+
 def test_ingest_fact_respects_current_ind_filter_with_mixed_case_column():
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
     with engine.begin() as conn:

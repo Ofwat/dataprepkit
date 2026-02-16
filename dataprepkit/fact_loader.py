@@ -66,7 +66,7 @@ class FactBatchMetadata:
 class FactConfig:
     batch: FactBatchMetadata
     dimensions: Sequence[DimensionJoinSpec]
-    fact_columns: Sequence[str]
+    fact_columns: Sequence[str | Mapping[str, object]]
     source_table: str | TableRef
     temp_table: str | TableRef
     temp_columns: Mapping[str, Optional[str] | Mapping[str, object]]
@@ -216,6 +216,38 @@ def _fact_column_definition_from_temp(
             result["nullable"] = column_definition.get("nullable")
         return result
     return column_definition
+
+
+def _resolve_fact_columns(
+    fact_columns: Sequence[str | Mapping[str, object]],
+    temp_columns: Mapping[str, Optional[str] | Mapping[str, object]],
+) -> tuple[list[str], dict[str, Optional[str] | Mapping[str, object]]]:
+    resolved_names: list[str] = []
+    resolved_definitions: dict[str, Optional[str] | Mapping[str, object]] = {}
+    for entry in fact_columns:
+        if isinstance(entry, Mapping):
+            raw_name = entry.get("name")
+            if not isinstance(raw_name, str) or not raw_name:
+                raise ValueError("fact_columns mapping entries must include non-empty 'name'.")
+            name = raw_name
+            definition: dict[str, object] = {}
+            if "type" in entry:
+                definition["type"] = entry.get("type")
+            if "nullable" in entry:
+                definition["nullable"] = entry.get("nullable")
+            if definition:
+                resolved_definitions[name] = definition
+            else:
+                resolved_definitions[name] = _fact_column_definition_from_temp(
+                    temp_columns.get(name)
+                )
+        else:
+            name = entry
+            resolved_definitions[name] = _fact_column_definition_from_temp(
+                temp_columns.get(name)
+            )
+        resolved_names.append(name)
+    return resolved_names, resolved_definitions
 
 
 def _has_explicit_column_definition(
@@ -721,10 +753,9 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
                 if extra.dim_table == chained.dim_table:
                     _apply_extra_column(temp_table_sql, extra)
 
-    fact_columns_types = {
-        col: _fact_column_definition_from_temp(temp_columns.get(col))
-        for col in config.fact_columns
-    }
+    resolved_fact_columns, fact_columns_types = _resolve_fact_columns(
+        config.fact_columns, temp_columns
+    )
     fact_columns_types.setdefault(
         config.batch_id_column_name, config.batch_id_column_type
     )
@@ -752,9 +783,9 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
                 {"batch_id": batch_id},
             )
             insert_cols = ", ".join(
-                [config.batch_id_column_name] + config.fact_columns + ["Insert_Date"]
+                [config.batch_id_column_name] + resolved_fact_columns + ["Insert_Date"]
             )
-            select_cols = ", ".join(config.fact_columns)
+            select_cols = ", ".join(resolved_fact_columns)
             select_clause = f"SELECT :batch_id, {select_cols}, CURRENT_TIMESTAMP FROM {temp_table_sql}"
             insert_sql = text(
                 f"""
