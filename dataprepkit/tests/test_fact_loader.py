@@ -663,6 +663,57 @@ def test_ingest_fact_is_idempotent_for_same_batch_id(fact_engine):
     assert count == 1
 
 
+def test_ingest_fact_same_batch_id_preserves_existing_pk_and_values(fact_engine):
+    with fact_engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS fact"))
+        conn.execute(
+            text("DELETE FROM staging WHERE batch_id = 'B9P'")
+        )
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B9P','REGION9P', 9.5)"
+            )
+        )
+    config = FactConfig(
+        batch=FactBatchMetadata(
+            fact_table="fact",
+            batch_id="B9P",
+            validations={},
+        ),
+        dimensions=[],
+        fact_columns=["measure_value"],
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={
+            "batch_id": {"type": "TEXT", "nullable": False},
+            "Organisation_Cd": {"type": "TEXT", "nullable": True},
+            "measure_value": {"type": "REAL", "nullable": True},
+        },
+    )
+
+    ingest_fact(fact_engine, config, batch_id="B9P")
+    with fact_engine.connect() as conn:
+        first = conn.execute(
+            text("SELECT fact_id, measure_value FROM fact WHERE batch_id='B9P'")
+        ).one()
+
+    with fact_engine.begin() as conn:
+        conn.execute(text("DELETE FROM staging WHERE batch_id = 'B9P'"))
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B9P','REGION9P', 99.9)"
+            )
+        )
+
+    ingest_fact(fact_engine, config, batch_id="B9P")
+    with fact_engine.connect() as conn:
+        second = conn.execute(
+            text("SELECT fact_id, measure_value FROM fact WHERE batch_id='B9P'")
+        ).one()
+
+    assert second == first
+
+
 def test_ingest_fact_temp_columns_support_explicit_nullability(fact_engine):
     with fact_engine.begin() as conn:
         conn.execute(
