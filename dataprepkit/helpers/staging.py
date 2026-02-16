@@ -3,10 +3,14 @@ from typing import Literal
 
 import pandas as pd
 from pandas.api.types import is_datetime64_any_dtype, is_datetime64tz_dtype
-from sqlalchemy import Engine, inspect
+from sqlalchemy import Engine, inspect, text
 from sqlalchemy.dialects.mssql import DATETIME2
 from sqlalchemy.sql.elements import quoted_name
 from dataprepkit.helpers.schema import ensure_schema_exists
+
+
+def _quote_mssql_identifier(identifier: str) -> str:
+    return f"[{identifier.replace(']', ']]')}]"
 
 
 def _normalize_bracket_identifier(name: str | None) -> str | None:
@@ -164,3 +168,57 @@ def union_tables_by_name_regex(
         index=False,
         schema=schema_for_sql,
     )
+
+
+def drop_tables_by_name_regex(
+    engine: Engine,
+    schema: str | None,
+    table_name_regex: str,
+) -> list[str]:
+    """
+    Drop all tables in a schema whose names match a regex.
+
+    Parameters
+    ----------
+    engine
+        SQLAlchemy engine.
+    schema
+        Optional schema name used to discover and drop tables.
+    table_name_regex
+        Regular expression applied to table names (not schema-qualified names).
+    """
+    resolved_schema = _normalize_bracket_identifier(schema)
+    ensure_schema_exists(engine, resolved_schema)
+    schema_for_sql: str | None = resolved_schema
+    if engine.dialect.name == "mssql":
+        if schema_for_sql is not None:
+            schema_for_sql = quoted_name(schema_for_sql, True)
+    else:
+        schema_for_sql = None
+
+    pattern = re.compile(table_name_regex)
+    inspector = inspect(engine)
+    matched_tables = sorted(
+        name for name in inspector.get_table_names(schema=schema_for_sql) if pattern.search(name)
+    )
+    if not matched_tables:
+        return []
+
+    with engine.begin() as conn:
+        for name in matched_tables:
+            if schema_for_sql is not None:
+                if engine.dialect.name == "mssql":
+                    table_ref = (
+                        f"{_quote_mssql_identifier(str(schema_for_sql))}."
+                        f"{_quote_mssql_identifier(name)}"
+                    )
+                else:
+                    table_ref = f"{schema_for_sql}.{name}"
+            else:
+                table_ref = (
+                    _quote_mssql_identifier(name)
+                    if engine.dialect.name == "mssql"
+                    else name
+                )
+            conn.execute(text(f"DROP TABLE {table_ref}"))
+    return matched_tables

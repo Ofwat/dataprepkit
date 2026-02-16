@@ -11,6 +11,7 @@ from dataprepkit.metadata_loader import (
     run_dimension,
 )
 from dataprepkit.helpers.staging import stage_dataframe, union_tables_by_name_regex
+from dataprepkit.helpers.staging import drop_tables_by_name_regex
 from dataprepkit.helpers.schema import ensure_schema_exists
 
 
@@ -296,6 +297,85 @@ def test_union_tables_by_name_regex_raises_when_no_match():
 
     with pytest.raises(ValueError, match="No tables matched regex"):
         union_tables_by_name_regex(engine, None, r"^missing_", "stg_output")
+
+
+def test_drop_tables_by_name_regex_drops_matching_tables():
+    engine = create_engine("sqlite:///:memory:")
+    stage_dataframe(engine, "stg_drop_1", pd.DataFrame({"id": [1]}))
+    stage_dataframe(engine, "stg_drop_2", pd.DataFrame({"id": [2]}))
+    stage_dataframe(engine, "stg_keep", pd.DataFrame({"id": [3]}))
+
+    dropped = drop_tables_by_name_regex(engine, None, r"^stg_drop_\d+$")
+
+    assert dropped == ["stg_drop_1", "stg_drop_2"]
+    with engine.connect() as conn:
+        remaining = {
+            row[0]
+            for row in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type = 'table'")
+            ).fetchall()
+        }
+    assert "stg_keep" in remaining
+    assert "stg_drop_1" not in remaining
+    assert "stg_drop_2" not in remaining
+
+
+def test_drop_tables_by_name_regex_mssql_quotes_literal_brackets(monkeypatch):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeConn:
+        def __init__(self):
+            self.executed = []
+
+        def execute(self, stmt):
+            self.executed.append(str(stmt))
+
+    class _FakeBegin:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def __enter__(self):
+            return self.conn
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+        def __init__(self):
+            self.conn = _FakeConn()
+
+        def begin(self):
+            return _FakeBegin(self.conn)
+
+    class _FakeInspector:
+        def get_table_names(self, schema=None):
+            assert str(schema) == "Staging OFFICIAL - SENSITIVE [MARKET SENSITIVE]"
+            return ["a_qd_stg", "b_qd_stg"]
+
+    engine = _FakeEngine()
+    inspector = _FakeInspector()
+
+    monkeypatch.setattr("dataprepkit.helpers.staging.inspect", lambda _: inspector)
+    monkeypatch.setattr("dataprepkit.helpers.staging.ensure_schema_exists", lambda *_: None)
+
+    dropped = drop_tables_by_name_regex(
+        engine=engine,
+        schema="Staging OFFICIAL - SENSITIVE [MARKET SENSITIVE]",
+        table_name_regex=r"^\w_qd_stg$",
+    )
+
+    assert dropped == ["a_qd_stg", "b_qd_stg"]
+    assert (
+        engine.conn.executed[0]
+        == "DROP TABLE [Staging OFFICIAL - SENSITIVE [MARKET SENSITIVE]]].[a_qd_stg]"
+    )
+    assert (
+        engine.conn.executed[1]
+        == "DROP TABLE [Staging OFFICIAL - SENSITIVE [MARKET SENSITIVE]]].[b_qd_stg]"
+    )
 
 
 def test_union_tables_by_name_regex_mssql_quotes_schema_with_literal_brackets(monkeypatch):
