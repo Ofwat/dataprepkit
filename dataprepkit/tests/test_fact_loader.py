@@ -715,6 +715,84 @@ def test_ingest_fact_same_batch_id_preserves_existing_pk_and_values(fact_engine)
     assert second == first
 
 
+def test_ingest_fact_skips_duplicate_rows_across_different_batches(fact_engine):
+    with fact_engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS fact"))
+        conn.execute(text("DELETE FROM staging WHERE batch_id IN ('B14', 'B15')"))
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B14','REGION14', 14.5)"
+            )
+        )
+    config = FactConfig(
+        batch=FactBatchMetadata(fact_table="fact", validations={}),
+        dimensions=[],
+        fact_columns=["measure_value"],
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={
+            "batch_id": {"type": "TEXT", "nullable": False},
+            "Organisation_Cd": {"type": "TEXT", "nullable": True},
+            "measure_value": {"type": "REAL", "nullable": True},
+        },
+    )
+
+    ingest_fact(fact_engine, config, batch_id="B14")
+    with fact_engine.begin() as conn:
+        conn.execute(text("DELETE FROM staging WHERE batch_id = 'B14'"))
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B15','REGION14', 14.5)"
+            )
+        )
+    ingest_fact(fact_engine, config, batch_id="B15")
+
+    with fact_engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT batch_id, measure_value FROM fact ORDER BY fact_id")
+        ).fetchall()
+    assert rows == [("B14", 14.5)]
+
+
+def test_ingest_fact_inserts_changed_rows_across_different_batches(fact_engine):
+    with fact_engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS fact"))
+        conn.execute(text("DELETE FROM staging WHERE batch_id IN ('B16', 'B17')"))
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B16','REGION16', 16.5)"
+            )
+        )
+    config = FactConfig(
+        batch=FactBatchMetadata(fact_table="fact", validations={}),
+        dimensions=[],
+        fact_columns=["measure_value"],
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={
+            "batch_id": {"type": "TEXT", "nullable": False},
+            "Organisation_Cd": {"type": "TEXT", "nullable": True},
+            "measure_value": {"type": "REAL", "nullable": True},
+        },
+    )
+
+    ingest_fact(fact_engine, config, batch_id="B16")
+    with fact_engine.begin() as conn:
+        conn.execute(text("DELETE FROM staging WHERE batch_id = 'B16'"))
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B17','REGION16', 17.5)"
+            )
+        )
+    ingest_fact(fact_engine, config, batch_id="B17")
+
+    with fact_engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT batch_id, measure_value FROM fact ORDER BY fact_id")
+        ).fetchall()
+    assert rows == [("B16", 16.5), ("B17", 17.5)]
+
+
 def test_ingest_fact_archives_input_table_and_updates_metadata(
     fact_engine, tmp_path, monkeypatch
 ):

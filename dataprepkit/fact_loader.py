@@ -487,6 +487,23 @@ def _batch_already_loaded(
         return (conn.execute(query, {"batch_id": batch_id}).scalar_one() or 0) > 0
 
 
+def _null_safe_row_match_predicate(
+    engine: Engine,
+    left_alias: str,
+    right_alias: str,
+    columns: Sequence[str],
+) -> str:
+    predicates = []
+    for column in columns:
+        col_sql = _quote_identifier(engine, column)
+        left_expr = f"{left_alias}.{col_sql}"
+        right_expr = f"{right_alias}.{col_sql}"
+        predicates.append(
+            f"(({left_expr} = {right_expr}) OR ({left_expr} IS NULL AND {right_expr} IS NULL))"
+        )
+    return " AND ".join(predicates) if predicates else "1 = 1"
+
+
 def _archive_input_table_snapshot(
     engine: Engine,
     source_table: str | TableRef,
@@ -835,8 +852,19 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
             insert_cols = ", ".join(
                 [config.batch_id_column_name] + resolved_fact_columns + ["Insert_Date"]
             )
-            select_cols = ", ".join(resolved_fact_columns)
-            select_clause = f"SELECT :batch_id, {select_cols}, CURRENT_TIMESTAMP FROM {temp_table_sql}"
+            select_cols = ", ".join(
+                f"s.{_quote_identifier(engine, col)}" for col in resolved_fact_columns
+            )
+            duplicate_predicate = _null_safe_row_match_predicate(
+                engine, "e", "s", resolved_fact_columns
+            )
+            select_clause = (
+                f"SELECT :batch_id, {select_cols}, CURRENT_TIMESTAMP "
+                f"FROM {temp_table_sql} s "
+                f"WHERE NOT EXISTS ("
+                f"SELECT 1 FROM {fact_table_sql} e WHERE {duplicate_predicate}"
+                f")"
+            )
             insert_sql = text(
                 f"""
                 INSERT INTO {fact_table_sql} ({insert_cols})
