@@ -16,6 +16,7 @@ from dataprepkit.fact_loader import (
     MissingStageFileError,
     StageFileSpec,
     TableRef,
+    assert_columns_have_single_distinct_row,
     assert_columns_not_null,
     assert_columns_unique,
     ingest_fact,
@@ -889,6 +890,84 @@ def test_assert_columns_not_null_raises_when_nulls_present():
     with pytest.raises(RuntimeError, match="Null values found"):
         assert_columns_not_null(
             engine, table_name="staging", schema="main", columns=["a", "b"]
+        )
+
+
+def test_assert_columns_have_single_distinct_row_passes():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE staging (
+                    batch_id TEXT,
+                    process_cd TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, process_cd) VALUES ('B1', 'P1'), ('B1', 'P1')"
+            )
+        )
+
+    assert_columns_have_single_distinct_row(
+        engine,
+        table_name="staging",
+        schema="main",
+        columns=["batch_id", "process_cd"],
+    )
+
+
+def test_assert_columns_have_single_distinct_row_raises_when_multiple_distinct():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE staging (
+                    batch_id TEXT,
+                    process_cd TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, process_cd) VALUES ('B1', 'P1'), ('B2', 'P1')"
+            )
+        )
+
+    with pytest.raises(RuntimeError, match="Expected a single distinct row"):
+        assert_columns_have_single_distinct_row(
+            engine,
+            table_name="staging",
+            schema="main",
+            columns=["batch_id", "process_cd"],
+        )
+
+
+def test_assert_columns_have_single_distinct_row_raises_when_empty():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE staging (
+                    batch_id TEXT,
+                    process_cd TEXT
+                )
+                """
+            )
+        )
+
+    with pytest.raises(RuntimeError, match="Expected a single distinct row"):
+        assert_columns_have_single_distinct_row(
+            engine,
+            table_name="staging",
+            schema="main",
+            columns=["batch_id", "process_cd"],
         )
 
 

@@ -398,6 +398,36 @@ def assert_columns_not_null(
         )
 
 
+def assert_columns_have_single_distinct_row(
+    engine: Engine,
+    table_name: str | TableRef,
+    *,
+    schema: str | None = None,
+    columns: Sequence[str],
+) -> None:
+    if not columns:
+        raise ValueError("columns must not be empty.")
+    table_ref = _resolve_table_ref(table_name, schema)
+    table_sql = _render_table_name(engine, table_ref)
+    rendered_cols = [_quote_identifier(engine, col) for col in columns]
+    cols_sql = ", ".join(rendered_cols)
+    query = text(
+        f"""
+        SELECT COUNT(1)
+        FROM (
+            SELECT DISTINCT {cols_sql}
+            FROM {table_sql}
+        ) AS distinct_rows
+        """
+    )
+    with engine.connect() as conn:
+        distinct_count = conn.execute(query).scalar_one()
+    if distinct_count != 1:
+        raise RuntimeError(
+            f"Expected a single distinct row for column set {list(columns)} in {table_sql}, got {distinct_count}."
+        )
+
+
 def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str = "replace") -> None:
     base_cols = list(config.temp_columns.keys())
     temp_columns = dict(config.temp_columns)
