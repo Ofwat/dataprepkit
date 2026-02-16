@@ -613,6 +613,53 @@ def test_ingest_fact_maps_named_surrogate_when_dim_has_no_surrogate_key():
     assert result == 600
 
 
+def test_ingest_fact_is_idempotent_for_same_batch_id(fact_engine):
+    with fact_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) VALUES ('B9','REGION9', 9.5)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO Dimensions_tbl_d_company (surrogate_key, join_numeric_key, Organisation_Cd, Company_Instance_Id, Company_Id) VALUES (19, 190, 'REGION9', 1900, 1901)"
+            )
+        )
+    config = FactConfig(
+        batch=FactBatchMetadata(
+            fact_table="fact",
+            batch_id="B9",
+            validations={},
+        ),
+        dimensions=[
+            DimensionJoinSpec(
+                dim_table="Dimensions_tbl_d_company",
+                staging_columns=["Organisation_Cd"],
+                dim_columns=["Organisation_Cd"],
+                add_columns={"Company_Instance_Id": "Company_Instance_Id"},
+                require_not_null=["Company_Instance_Id"],
+            )
+        ],
+        fact_columns=["company_sk", "measure_value", "Company_Instance_Id"],
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={
+            "batch_id": None,
+            "Organisation_Cd": None,
+            "measure_value": None,
+        },
+    )
+
+    ingest_fact(fact_engine, config, batch_id="B9")
+    ingest_fact(fact_engine, config, batch_id="B9")
+
+    with fact_engine.connect() as conn:
+        count = conn.execute(
+            text("SELECT COUNT(1) FROM fact WHERE batch_id='B9'")
+        ).scalar()
+    assert count == 1
+
+
 def test_ingest_fact_respects_current_ind_filter_with_mixed_case_column():
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
     with engine.begin() as conn:

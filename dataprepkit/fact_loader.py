@@ -699,6 +699,13 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
 
     try:
         with engine.begin() as conn:
+            conn.execute(
+                text(
+                    f"DELETE FROM {fact_table_sql} "
+                    f"WHERE {config.batch_id_column_name} = :batch_id"
+                ),
+                {"batch_id": batch_id},
+            )
             insert_cols = ", ".join(
                 [config.batch_id_column_name] + config.fact_columns + ["Insert_Date"]
             )
