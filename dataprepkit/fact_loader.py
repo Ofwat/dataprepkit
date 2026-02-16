@@ -756,10 +756,14 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
     resolved_fact_columns, fact_columns_types = _resolve_fact_columns(
         config.fact_columns, temp_columns
     )
-    fact_columns_types.setdefault(
-        config.batch_id_column_name, config.batch_id_column_type
-    )
-    fact_columns_types.setdefault("Insert_Date", "DATETIME2(3)")
+    fact_columns_types[config.batch_id_column_name] = {
+        "type": config.batch_id_column_type,
+        "nullable": False,
+    }
+    fact_columns_types["Insert_Date"] = {
+        "type": "DATETIME2(3)",
+        "nullable": False,
+    }
     _ensure_fact_table(engine,
                        config.batch.fact_table,
                        fact_columns_types,

@@ -377,6 +377,9 @@ def test_ingest_fact_creates_fact_table_when_missing(fact_engine):
     assert count == 1
     pk_columns = [row[1] for row in columns if row[5] == 1]
     assert pk_columns == ["fact_id"]
+    not_null_flags = {row[1]: row[3] for row in columns}
+    assert not_null_flags["batch_id"] == 1
+    assert not_null_flags["Insert_Date"] == 1
 
 
 def test_ingest_fact_uses_metadata_pk_column_name_when_creating_fact_table(fact_engine):
