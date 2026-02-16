@@ -361,7 +361,7 @@ def assert_columns_unique(
         f"""
         SELECT COUNT(1)
         FROM (
-            SELECT 1
+            SELECT 1 AS duplicate_marker
             FROM {table_sql}
             GROUP BY {cols_sql}
             HAVING COUNT(1) > 1
