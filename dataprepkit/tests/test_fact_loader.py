@@ -16,6 +16,8 @@ from dataprepkit.fact_loader import (
     MissingStageFileError,
     StageFileSpec,
     TableRef,
+    assert_columns_not_null,
+    assert_columns_unique,
     ingest_fact,
     verify_stage_file_hashes,
 )
@@ -794,5 +796,99 @@ def test_ensure_fact_table_ignores_duplicate_column_from_stale_inspection(monkey
         "fact",
         {"Organisation_Instance_Id": "BIGINT"},
     )
+
+
+def test_assert_columns_unique_passes_for_unique_combinations():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE staging (
+                    a TEXT,
+                    b TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO staging (a, b) VALUES ('x', '1'), ('x', '2'), ('y', '1')"
+            )
+        )
+
+    assert_columns_unique(engine, table_name="staging", schema="main", columns=["a", "b"])
+
+
+def test_assert_columns_unique_raises_for_duplicate_combinations():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE staging (
+                    a TEXT,
+                    b TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO staging (a, b) VALUES ('x', '1'), ('x', '1')"
+            )
+        )
+
+    with pytest.raises(RuntimeError, match="Duplicate values found"):
+        assert_columns_unique(
+            engine, table_name="staging", schema="main", columns=["a", "b"]
+        )
+
+
+def test_assert_columns_not_null_passes_when_no_nulls():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE staging (
+                    a TEXT,
+                    b TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO staging (a, b) VALUES ('x', '1'), ('y', '2')"
+            )
+        )
+
+    assert_columns_not_null(engine, table_name="staging", schema="main", columns=["a", "b"])
+
+
+def test_assert_columns_not_null_raises_when_nulls_present():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE staging (
+                    a TEXT,
+                    b TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO staging (a, b) VALUES ('x', NULL), ('y', '2')"
+            )
+        )
+
+    with pytest.raises(RuntimeError, match="Null values found"):
+        assert_columns_not_null(
+            engine, table_name="staging", schema="main", columns=["a", "b"]
+        )
 
 

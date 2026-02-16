@@ -105,6 +105,23 @@ def _render_table_name(engine: Engine, table_name: str | TableRef) -> str:
     return table_ref.table
 
 
+def _quote_identifier(engine: Engine, identifier: str) -> str:
+    if engine.dialect.name == "mssql":
+        return _quote_mssql_identifier(identifier)
+    return f'"{identifier.replace(chr(34), chr(34) * 2)}"'
+
+
+def _resolve_table_ref(
+    table_name: str | TableRef, schema: str | None = None
+) -> TableRef:
+    table_ref = _parse_table_ref(table_name)
+    if schema is None:
+        return table_ref
+    if table_ref.schema and table_ref.schema != schema:
+        raise ValueError("Conflicting schema values provided for table.")
+    return TableRef(table=table_ref.table, schema=schema)
+
+
 def _default_surrogate_column_name(dim_table: str) -> str:
     table = dim_table.split(".")[-1]
     match = re.search(r"tbl_[^_]*_(.+)$", table, re.IGNORECASE)
@@ -325,6 +342,60 @@ def verify_stage_file_hashes(
             raise HashMismatchError(
                 f"{filename} hash mismatch (expected {expected_hash}, got {actual_hash})"
             )
+
+
+def assert_columns_unique(
+    engine: Engine,
+    table_name: str | TableRef,
+    *,
+    schema: str | None = None,
+    columns: Sequence[str],
+) -> None:
+    if not columns:
+        raise ValueError("columns must not be empty.")
+    table_ref = _resolve_table_ref(table_name, schema)
+    table_sql = _render_table_name(engine, table_ref)
+    rendered_cols = [_quote_identifier(engine, col) for col in columns]
+    cols_sql = ", ".join(rendered_cols)
+    query = text(
+        f"""
+        SELECT COUNT(1)
+        FROM (
+            SELECT 1
+            FROM {table_sql}
+            GROUP BY {cols_sql}
+            HAVING COUNT(1) > 1
+        ) AS duplicates
+        """
+    )
+    with engine.connect() as conn:
+        duplicate_groups = conn.execute(query).scalar_one()
+    if duplicate_groups:
+        raise RuntimeError(
+            f"Duplicate values found for column set {list(columns)} in {table_sql}."
+        )
+
+
+def assert_columns_not_null(
+    engine: Engine,
+    table_name: str | TableRef,
+    *,
+    schema: str | None = None,
+    columns: Sequence[str],
+) -> None:
+    if not columns:
+        raise ValueError("columns must not be empty.")
+    table_ref = _resolve_table_ref(table_name, schema)
+    table_sql = _render_table_name(engine, table_ref)
+    rendered_cols = [_quote_identifier(engine, col) for col in columns]
+    where_clause = " OR ".join(f"{col} IS NULL" for col in rendered_cols)
+    query = text(f"SELECT COUNT(1) FROM {table_sql} WHERE {where_clause}")
+    with engine.connect() as conn:
+        null_count = conn.execute(query).scalar_one()
+    if null_count:
+        raise RuntimeError(
+            f"Null values found in required columns {list(columns)} for {table_sql}."
+        )
 
 
 def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str = "replace") -> None:
