@@ -190,6 +190,8 @@ def _read_excel_one_sheet_openpyxl(filepath: str) -> pd.DataFrame:
 def _default_csv_reader(filepath: str) -> pd.DataFrame:
     if filepath.lower().endswith(".xlsx"):
         return _read_excel_one_sheet_openpyxl(filepath)
+    if filepath.lower().endswith(".parquet"):
+        return pd.read_parquet(filepath)
 
     return pd.read_csv(
         filepath,

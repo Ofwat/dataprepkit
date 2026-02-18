@@ -174,6 +174,25 @@ def test_default_csv_reader_handles_excel(tmp_path):
     assert metadata_loader.pd.isna(result_with_missing["col"]).sum() == 0
 
 
+def test_default_csv_reader_handles_parquet(tmp_path, monkeypatch):
+    src = tmp_path / "data.parquet"
+    src.touch()
+    expected = metadata_loader.pd.DataFrame({"col": ["p1", "p2"]})
+
+    called = {"filepath": None}
+
+    def fake_read_parquet(filepath):
+        called["filepath"] = filepath
+        return expected
+
+    monkeypatch.setattr(metadata_loader.pd, "read_parquet", fake_read_parquet)
+
+    result = metadata_loader._default_csv_reader(str(src))
+
+    assert called["filepath"] == str(src)
+    assert result.equals(expected)
+
+
 def test_cast_data_columns_uses_default_format(tmp_path):
     metadata_loader.METADATA_REGISTRY.pop("default_format_test", None)
 
