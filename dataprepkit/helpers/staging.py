@@ -1,5 +1,6 @@
 import re
 from typing import Literal
+from pathlib import Path
 
 import pandas as pd
 from pandas.api.types import is_datetime64_any_dtype, is_datetime64tz_dtype
@@ -7,6 +8,7 @@ from sqlalchemy import Engine, inspect, text
 from sqlalchemy.dialects.mssql import DATETIME2
 from sqlalchemy.sql.elements import quoted_name
 from dataprepkit.helpers.schema import ensure_schema_exists
+from dataprepkit.storage import archive_dataframe_path
 
 
 def _quote_mssql_identifier(identifier: str) -> str:
@@ -48,6 +50,10 @@ def stage_dataframe(
     if_exists: Literal["fail", "replace", "append"] = "replace",
     index: bool = False,
     schema: str | None = None,
+    use_copy_into_parquet: bool = False,
+    parquet_base_dir: str | None = None,
+    copy_source_base_url: str | None = None,
+    copy_into_options: str = "",
 ) -> None:
     """
     Write a DataFrame into a staging table (generic helper).
@@ -66,6 +72,14 @@ def stage_dataframe(
         Whether to write DataFrame index.
     schema
         Optional schema name.
+    use_copy_into_parquet
+        If True, write a parquet snapshot and load via COPY INTO (MSSQL/Fabric).
+    parquet_base_dir
+        Local/mounted base directory where parquet snapshots are written.
+    copy_source_base_url
+        External HTTPS base URL matching parquet_base_dir visibility for COPY INTO.
+    copy_into_options
+        Additional COPY INTO options suffix (for example: ", MAXERRORS = 10").
     """
     resolved_schema = _normalize_bracket_identifier(schema)
     resolved_table = table_name.strip()
@@ -86,6 +100,52 @@ def stage_dataframe(
         schema_for_sql = None
 
     if engine.dialect.name == "mssql":
+        if use_copy_into_parquet:
+            if not parquet_base_dir:
+                raise ValueError("parquet_base_dir is required when use_copy_into_parquet=True.")
+            if not copy_source_base_url:
+                raise ValueError("copy_source_base_url is required when use_copy_into_parquet=True.")
+
+            path_info = archive_dataframe_path(
+                table_name=resolved_table,
+                batch_id="stage",
+                base_dir=parquet_base_dir,
+            )
+            parquet_path = Path(path_info.file_path)
+            df.to_parquet(parquet_path, index=index)
+
+            source_url = (
+                f"{copy_source_base_url.rstrip('/')}/{resolved_table}/{parquet_path.name}"
+            )
+            schema_sql = (
+                _quote_mssql_identifier(str(schema_for_sql))
+                if schema_for_sql is not None
+                else None
+            )
+            table_sql = _quote_mssql_identifier(str(table_for_sql))
+            destination_table = (
+                f"{schema_sql}.{table_sql}" if schema_sql is not None else table_sql
+            )
+
+            options_sql = copy_into_options.strip()
+            if options_sql and not options_sql.startswith(","):
+                options_sql = f", {options_sql}"
+
+            with engine.begin() as conn:
+                if if_exists == "replace":
+                    conn.execute(text(f"TRUNCATE TABLE {destination_table}"))
+                copy_sql = text(
+                    f"""
+                    COPY INTO {destination_table}
+                    FROM :source_url
+                    WITH (
+                        FILE_TYPE = 'PARQUET'{options_sql}
+                    )
+                    """
+                )
+                conn.execute(copy_sql, {"source_url": source_url})
+            return
+
         dtype_overrides = {
             col: DATETIME2(precision=3)
             for col, dtype in df.dtypes.items()

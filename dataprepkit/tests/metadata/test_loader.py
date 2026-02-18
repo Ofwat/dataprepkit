@@ -266,6 +266,87 @@ def test_stage_dataframe_mssql_datetime_columns_use_datetime2(monkeypatch):
     assert "id" not in dtype
 
 
+def test_stage_dataframe_copy_into_requires_paths():
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    with pytest.raises(ValueError):
+        stage_dataframe(
+            _FakeEngine(),
+            "stage_table",
+            pd.DataFrame({"col": [1]}),
+            use_copy_into_parquet=True,
+        )
+
+
+def test_stage_dataframe_copy_into_writes_parquet_and_executes_copy(monkeypatch, tmp_path):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeConn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, params=None):
+            self.calls.append((str(statement), dict(params or {})))
+
+    class _FakeBegin:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def __enter__(self):
+            return self.conn
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+        def __init__(self):
+            self.conn = _FakeConn()
+
+        def begin(self):
+            return _FakeBegin(self.conn)
+
+    written = {}
+
+    def fake_to_parquet(self, path, index=False):
+        written["path"] = str(path)
+        written["index"] = index
+
+    monkeypatch.setattr("dataprepkit.helpers.staging.ensure_schema_exists", lambda *_: None)
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", fake_to_parquet)
+    engine = _FakeEngine()
+
+    stage_dataframe(
+        engine,
+        "stage_table",
+        pd.DataFrame({"col": [1]}),
+        schema="dbo",
+        use_copy_into_parquet=True,
+        parquet_base_dir=str(tmp_path),
+        copy_source_base_url="https://contoso.dfs.core.windows.net/raw",
+        if_exists="replace",
+    )
+
+    assert written["path"].endswith(".parquet")
+    assert written["index"] is False
+    assert len(engine.conn.calls) == 2
+    truncate_sql, truncate_params = engine.conn.calls[0]
+    copy_sql, copy_params = engine.conn.calls[1]
+    assert "TRUNCATE TABLE [dbo].[stage_table]" in truncate_sql
+    assert truncate_params == {}
+    assert "COPY INTO [dbo].[stage_table]" in copy_sql
+    assert "FILE_TYPE = 'PARQUET'" in copy_sql
+    assert copy_params["source_url"].startswith(
+        "https://contoso.dfs.core.windows.net/raw/stage_table/"
+    )
+
+
 def test_union_tables_by_name_regex_unions_all_matches():
     engine = create_engine("sqlite:///:memory:")
     stage_dataframe(engine, "stg_sales_1", pd.DataFrame({"id": [1, 2]}))
