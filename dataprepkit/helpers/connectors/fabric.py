@@ -52,7 +52,7 @@ def create_engine_for_fabric(
     database: str,
     preferred_driver: Optional[str] = None,
     port: int | None = None,
-    fast_executemany: bool = True,
+    fast_executemany: bool = False,
 ) -> sa.engine.Engine:
     driver = _get_driver(preferred_driver) if preferred_driver else _get_driver()
     if credentials is None:

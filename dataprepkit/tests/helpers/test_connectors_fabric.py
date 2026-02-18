@@ -36,7 +36,7 @@ def test_create_engine_builds_connection_string(endpoint, expected_host, expecte
     assert port == expected_port
     assert database == "target_db"
     assert encrypt is True and trust is False
-    assert engine_calls[-1].get("fast_executemany") is True
+    assert engine_calls[-1].get("fast_executemany") is False
 
 
 def test_create_engine_honors_preferred_driver(monkeypatch):
