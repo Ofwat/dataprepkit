@@ -4,7 +4,7 @@ from pathlib import Path
 import uuid
 
 import pandas as pd
-from pandas.api.types import is_datetime64_any_dtype, is_datetime64tz_dtype
+from pandas.api.types import is_datetime64_any_dtype, is_datetime64tz_dtype, is_object_dtype
 from sqlalchemy import Engine, inspect, text
 from sqlalchemy.dialects.mssql import DATETIME2
 from sqlalchemy.exc import ProgrammingError
@@ -42,6 +42,24 @@ def _split_qualified_name(name: str) -> tuple[str | None, str]:
             return name[:idx], name[idx + 1 :]
         idx += 1
     return None, name
+
+
+def _normalize_for_parquet(df: pd.DataFrame) -> pd.DataFrame:
+    normalized = df.copy()
+    for col in normalized.columns:
+        if not is_object_dtype(normalized[col].dtype):
+            continue
+        series = normalized[col]
+        normalized[col] = series.map(
+            lambda value: (
+                None
+                if pd.isna(value)
+                else value.decode("utf-8", errors="replace")
+                if isinstance(value, (bytes, bytearray))
+                else str(value)
+            )
+        )
+    return normalized
 
 
 def stage_dataframe(
@@ -135,7 +153,7 @@ def stage_dataframe(
                 base_dir=parquet_base_dir,
             )
             parquet_path = Path(path_info.file_path)
-            df.to_parquet(parquet_path, index=index)
+            _normalize_for_parquet(df).to_parquet(parquet_path, index=index)
 
             source_url = (
                 f"{resolved_copy_source_base_url.rstrip('/')}/{resolved_table}/{parquet_path.name}"
