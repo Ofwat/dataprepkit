@@ -4,7 +4,11 @@ from pathlib import Path
 import uuid
 
 import pandas as pd
-from pandas.api.types import is_datetime64_any_dtype, is_datetime64tz_dtype, is_object_dtype
+from pandas.api.types import (
+    is_datetime64_any_dtype,
+    is_datetime64tz_dtype,
+    is_object_dtype,
+)
 from sqlalchemy import Engine, inspect, text
 from sqlalchemy.dialects.mssql import DATETIME2
 from sqlalchemy.exc import ProgrammingError
@@ -47,9 +51,18 @@ def _split_qualified_name(name: str) -> tuple[str | None, str]:
 def _normalize_for_parquet(df: pd.DataFrame) -> pd.DataFrame:
     normalized = df.copy()
     for col in normalized.columns:
-        if not is_object_dtype(normalized[col].dtype):
-            continue
         series = normalized[col]
+        if is_datetime64_any_dtype(series.dtype) or is_datetime64tz_dtype(series.dtype):
+            normalized[col] = series.map(
+                lambda value: (
+                    None
+                    if pd.isna(value)
+                    else pd.Timestamp(value).strftime("%Y-%m-%d %H:%M:%S.%f")
+                )
+            )
+            continue
+        if not is_object_dtype(series.dtype):
+            continue
         normalized[col] = series.map(
             lambda value: (
                 None

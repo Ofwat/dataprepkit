@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from dataprepkit.scd2 import SCD2ValidationError
-from dataprepkit.scd2 import _insert_snapshot_rows, apply_changes
+from dataprepkit.scd2 import _insert_snapshot_rows, _insert_snapshot_rows_from_raw, apply_changes
 
 
 SYSTEM_COLUMNS = {
@@ -671,3 +671,39 @@ def test_insert_snapshot_rows_sanitizes_nan():
         )
         result = pd.read_sql_table(staging_table, conn)
         assert pd.isna(result.loc[0, "existing_join_numeric"])
+
+
+def test_insert_snapshot_rows_from_raw_uses_try_cast_for_mssql():
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    class _FakeConn:
+        engine = _FakeEngine()
+
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, params=None):
+            self.calls.append((str(statement), dict(params or {})))
+
+    conn = _FakeConn()
+    _insert_snapshot_rows_from_raw(
+        conn,
+        raw_table="stg_raw",
+        target_table="stg_typed",
+        columns=["Interval_Start_Date", "existing_join_numeric"],
+        column_types={
+            "interval_start_date": "DATETIME2(3)",
+            "existing_join_numeric": "BIGINT",
+        },
+    )
+
+    sql, params = conn.calls[0]
+    assert "INSERT INTO stg_typed ([Interval_Start_Date], [existing_join_numeric])" in sql
+    assert "TRY_CAST(NULLIF(src.[Interval_Start_Date], '') AS DATETIME2(3))" in sql
+    assert "TRY_CAST(NULLIF(src.[existing_join_numeric], '') AS BIGINT)" in sql
+    assert "FROM stg_raw src" in sql
+    assert params == {}
