@@ -267,7 +267,7 @@ def test_stage_dataframe_mssql_datetime_columns_use_datetime2(monkeypatch):
     assert "id" not in dtype
 
 
-def test_stage_dataframe_copy_into_requires_paths():
+def test_stage_dataframe_copy_into_requires_parquet_base_dir():
     class _FakeDialect:
         name = "mssql"
 
@@ -336,22 +336,23 @@ def test_stage_dataframe_copy_into_writes_parquet_and_executes_copy(monkeypatch,
         schema="dbo",
         use_copy_into_parquet=True,
         parquet_base_dir=str(tmp_path),
-        copy_source_base_url="https://contoso.dfs.core.windows.net/raw",
         if_exists="replace",
     )
 
     assert written["path"].endswith(".parquet")
     assert written["index"] is False
+    assert "BATCHstage_" in written["path"]
     assert len(engine.conn.calls) == 2
     truncate_sql, truncate_params = engine.conn.calls[0]
     copy_sql, copy_params = engine.conn.calls[1]
     assert "TRUNCATE TABLE [dbo].[stage_table]" in truncate_sql
     assert truncate_params == {}
-    assert "COPY INTO [dbo].[stage_table]" in copy_sql
-    assert "FILE_TYPE = 'PARQUET'" in copy_sql
-    assert copy_params["source_url"].startswith(
-        "https://contoso.dfs.core.windows.net/raw/stage_table/"
-    )
+    assert "INSERT INTO [dbo].[stage_table] ([col])" in copy_sql
+    assert "FROM OPENROWSET(" in copy_sql
+    assert "FORMAT = 'PARQUET'" in copy_sql
+    assert f"BULK '{str(tmp_path).rstrip('/')}/stage_table/" in copy_sql
+    assert copy_params == {}
+    assert copy_sql.startswith("\n                    INSERT INTO [dbo].[stage_table]")
 
 
 def test_stage_dataframe_copy_into_creates_missing_table(monkeypatch, tmp_path):
@@ -415,7 +416,7 @@ def test_stage_dataframe_copy_into_creates_missing_table(monkeypatch, tmp_path):
     assert captured["create_calls"] == 1
     assert captured["if_exists"] == "fail"
     assert len(engine.conn.calls) == 1
-    assert "COPY INTO [dbo].[stage_table]" in engine.conn.calls[0][0]
+    assert "INSERT INTO [dbo].[stage_table] ([col])" in engine.conn.calls[0][0]
 
 
 def test_stage_dataframe_copy_into_falls_back_to_delete_on_truncate_error(monkeypatch, tmp_path):
@@ -474,7 +475,8 @@ def test_stage_dataframe_copy_into_falls_back_to_delete_on_truncate_error(monkey
 
     assert any("TRUNCATE TABLE [dbo].[stage_table]" in call[0] for call in engine.conn.calls)
     assert any("DELETE FROM [dbo].[stage_table]" in call[0] for call in engine.conn.calls)
-    assert any("COPY INTO [dbo].[stage_table]" in call[0] for call in engine.conn.calls)
+    assert any("FROM OPENROWSET(" in call[0] for call in engine.conn.calls)
+    assert any("INSERT INTO [dbo].[stage_table] ([col])" in call[0] for call in engine.conn.calls)
 
 
 def test_union_tables_by_name_regex_unions_all_matches():

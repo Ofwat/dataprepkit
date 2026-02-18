@@ -1,6 +1,7 @@
 import re
 from typing import Literal
 from pathlib import Path
+import uuid
 
 import pandas as pd
 from pandas.api.types import is_datetime64_any_dtype, is_datetime64tz_dtype
@@ -78,7 +79,7 @@ def stage_dataframe(
     parquet_base_dir
         Local/mounted base directory where parquet snapshots are written.
     copy_source_base_url
-        External HTTPS base URL matching parquet_base_dir visibility for COPY INTO.
+        External base URL matching parquet_base_dir visibility. Defaults to parquet_base_dir.
     copy_into_options
         Additional COPY INTO options suffix (for example: ", MAXERRORS = 10").
     """
@@ -110,8 +111,7 @@ def stage_dataframe(
         if use_copy_into_parquet:
             if not parquet_base_dir:
                 raise ValueError("parquet_base_dir is required when use_copy_into_parquet=True.")
-            if not copy_source_base_url:
-                raise ValueError("copy_source_base_url is required when use_copy_into_parquet=True.")
+            resolved_copy_source_base_url = copy_source_base_url or parquet_base_dir
 
             table_exists = inspect(engine).has_table(
                 str(table_for_sql),
@@ -131,14 +131,14 @@ def stage_dataframe(
 
             path_info = archive_dataframe_path(
                 table_name=resolved_table,
-                batch_id="stage",
+                batch_id=f"stage_{uuid.uuid4().hex[:8]}",
                 base_dir=parquet_base_dir,
             )
             parquet_path = Path(path_info.file_path)
             df.to_parquet(parquet_path, index=index)
 
             source_url = (
-                f"{copy_source_base_url.rstrip('/')}/{resolved_table}/{parquet_path.name}"
+                f"{resolved_copy_source_base_url.rstrip('/')}/{resolved_table}/{parquet_path.name}"
             )
             schema_sql = (
                 _quote_mssql_identifier(str(schema_for_sql))
@@ -160,16 +160,22 @@ def stage_dataframe(
                         conn.execute(text(f"TRUNCATE TABLE {destination_table}"))
                     except ProgrammingError:
                         conn.execute(text(f"DELETE FROM {destination_table}"))
-                copy_sql = text(
+                selected_columns = [_quote_mssql_identifier(str(col)) for col in df.columns]
+                if not selected_columns:
+                    return
+                columns_sql = ", ".join(selected_columns)
+                escaped_source = source_url.replace("'", "''")
+                openrowset_sql = text(
                     f"""
-                    COPY INTO {destination_table}
-                    FROM :source_url
-                    WITH (
-                        FILE_TYPE = 'PARQUET'{options_sql}
-                    )
+                    INSERT INTO {destination_table} ({columns_sql})
+                    SELECT {columns_sql}
+                    FROM OPENROWSET(
+                        BULK '{escaped_source}',
+                        FORMAT = 'PARQUET'{options_sql}
+                    ) AS src
                     """
                 )
-                conn.execute(copy_sql, {"source_url": source_url})
+                conn.execute(openrowset_sql)
             return
 
         if dtype_overrides:
