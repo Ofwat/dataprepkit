@@ -6,6 +6,12 @@ updates a target table with system columns (surrogate keys, hashes, flags).
 
 The logic assumes the target table already exists and exposes the system
 columns indicated via the configuration mapping.
+
+TODO(prod-hardening):
+- Capture and persist cast rejects when raw->typed staging `TRY_CAST` yields NULL.
+- Add run-level metrics/logging for raw rows, casted rows, rejected rows, and applied SCD2 changes.
+- Add retention/cleanup policy for transient raw/typed staging tables and staged parquet files.
+- Add integration coverage on real Fabric SQL DB for representative schemas and larger volumes.
 """
 
 from __future__ import annotations
