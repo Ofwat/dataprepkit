@@ -18,7 +18,7 @@ import pandas as pd
 import math
 from sqlalchemy.engine import Engine
 from sqlalchemy import inspect, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 import uuid
 
 
@@ -250,8 +250,21 @@ def _insert_snapshot_rows(
     try:
         if records:
             conn.execute(insert_sql, records)
+    except ProgrammingError as exc:
+        if not _is_string_truncation_error(exc):
+            raise
+        try:
+            for record in records:
+                conn.execute(insert_sql, record)
+        except IntegrityError as row_exc:
+            raise SCD2ValidationError("Incoming data contains duplicate natural keys.") from row_exc
     except IntegrityError as exc:
         raise SCD2ValidationError("Incoming data contains duplicate natural keys.") from exc
+
+
+def _is_string_truncation_error(exc: ProgrammingError) -> bool:
+    message = str(exc).lower()
+    return "right truncation" in message and "string data" in message
 
 
 def _build_join_condition(left_alias: str, right_alias: str, columns: Sequence[str]) -> str:

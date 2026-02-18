@@ -4,6 +4,7 @@ from datetime import datetime
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import ProgrammingError
 
 from dataprepkit.scd2 import SCD2ValidationError
 from dataprepkit.scd2 import _insert_snapshot_rows, apply_changes
@@ -671,3 +672,42 @@ def test_insert_snapshot_rows_sanitizes_nan():
         )
         result = pd.read_sql_table(staging_table, conn)
         assert pd.isna(result.loc[0, "existing_join_numeric"])
+
+
+def test_insert_snapshot_rows_retries_rowwise_on_truncation_error():
+    class DummyConn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, _statement, params=None):
+            self.calls.append(params)
+            if isinstance(params, list):
+                raise ProgrammingError(
+                    "INSERT INTO stage_retry (...) VALUES (...)",
+                    params,
+                    Exception("String data, right truncation: length 588 buffer 510"),
+                )
+            return None
+
+    incoming = pd.DataFrame(
+        {
+            "natural_key": ["key-1", "key-2"],
+            "data_column": ["short", "x" * 588],
+            "row_hash": ["hash-1", "hash-2"],
+        }
+    )
+    conn = DummyConn()
+
+    _insert_snapshot_rows(
+        conn,
+        "stage_retry",
+        incoming,
+        natural_key_cols=["natural_key"],
+        data_cols=["data_column"],
+        hash_col="row_hash",
+    )
+
+    assert isinstance(conn.calls[0], list)
+    assert len(conn.calls[0]) == 2
+    assert isinstance(conn.calls[1], dict)
+    assert isinstance(conn.calls[2], dict)
