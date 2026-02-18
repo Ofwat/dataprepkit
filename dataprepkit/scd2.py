@@ -20,6 +20,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 import uuid
+from dataprepkit.helpers.staging import stage_dataframe
 
 
 DEFAULT_SYSTEM_COLUMNS = {
@@ -54,6 +55,10 @@ def apply_changes(
     archive_filename: str | None = None,
     has_batch_id: bool = False,
     has_archive_filename: bool = False,
+    staging_use_openrowset_parquet: bool = False,
+    staging_parquet_base_dir: str | None = None,
+    staging_copy_source_base_url: str | None = None,
+    staging_copy_into_options: str = "",
 ) -> bool:
     """
     Apply SCD2 semantics to the target table using the incoming DataFrame.
@@ -78,7 +83,10 @@ def apply_changes(
     incoming_df[hash_col] = incoming_df.apply(lambda row: _compute_row_hash(row, data_cols), axis=1)
 
     base_name = f"temp_snapshot_{uuid.uuid4().hex}"
-    staging_table = _resolve_staging_table_name(engine, base_name)
+    use_openrowset_staging = staging_use_openrowset_parquet and engine.dialect.name == "mssql"
+    staging_table = _resolve_staging_table_name_for_mode(
+        engine, base_name, use_temp_table=not use_openrowset_staging
+    )
     execution_time = execution_time or _execution_timestamp()
 
     with engine.begin() as conn:
@@ -103,27 +111,52 @@ def apply_changes(
             )
         else:
             incoming_df["existing_join_numeric"] = None
-        _create_staging_table(
-            conn,
-            staging_table,
-            natural_key_cols,
-            data_cols,
-            hash_col,
-            column_types,
-            extra_columns=extra_columns,
-            nullable_data_cols=nullable_columns,
-        )
-        changes_applied = False
-        try:
-            _insert_snapshot_rows(
+        if not use_openrowset_staging:
+            _create_staging_table(
                 conn,
                 staging_table,
-                incoming_df,
                 natural_key_cols,
                 data_cols,
                 hash_col,
+                column_types,
                 extra_columns=extra_columns,
+                nullable_data_cols=nullable_columns,
             )
+        changes_applied = False
+        try:
+            if use_openrowset_staging:
+                if not staging_parquet_base_dir:
+                    raise SCD2ValidationError(
+                        "staging_parquet_base_dir is required when staging_use_openrowset_parquet=True."
+                    )
+                staging_schema, staging_table_name = _split_table_name(staging_table)
+                snapshot_columns = list(natural_key_cols) + list(data_cols) + [hash_col]
+                if extra_columns:
+                    snapshot_columns.extend(extra_columns)
+                snapshot_df = incoming_df[snapshot_columns].copy()
+                snapshot_df = snapshot_df.where(pd.notna(snapshot_df), None)
+                stage_dataframe(
+                    engine,
+                    staging_table_name,
+                    snapshot_df,
+                    if_exists="replace",
+                    index=False,
+                    schema=staging_schema,
+                    use_copy_into_parquet=True,
+                    parquet_base_dir=staging_parquet_base_dir,
+                    copy_source_base_url=staging_copy_source_base_url,
+                    copy_into_options=staging_copy_into_options,
+                )
+            else:
+                _insert_snapshot_rows(
+                    conn,
+                    staging_table,
+                    incoming_df,
+                    natural_key_cols,
+                    data_cols,
+                    hash_col,
+                    extra_columns=extra_columns,
+                )
             changes_applied = _apply_snapshot_to_target(
                 conn,
                 staging_table,
@@ -153,9 +186,15 @@ def _execution_timestamp() -> str:
 
 
 def _resolve_staging_table_name(engine: Engine, base_name: str) -> str:
+    return _resolve_staging_table_name_for_mode(engine, base_name, use_temp_table=True)
+
+
+def _resolve_staging_table_name_for_mode(
+    engine: Engine, base_name: str, *, use_temp_table: bool
+) -> str:
     dialect = engine.dialect.name
     if dialect == "mssql":
-        return f"#{base_name}"
+        return f"#{base_name}" if use_temp_table else base_name
     if dialect == "sqlite":
         return f"temp_{base_name}"
     return base_name

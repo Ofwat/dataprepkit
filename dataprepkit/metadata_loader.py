@@ -221,6 +221,10 @@ def run_dimension(
     *,
     override_df: pd.DataFrame | None = None,
     csv_reader: callable = _default_csv_reader,
+    staging_use_openrowset_parquet: bool = False,
+    staging_parquet_base_dir: str | None = None,
+    staging_copy_source_base_url: str | None = None,
+    staging_copy_into_options: str = "",
 ) -> pd.DataFrame:
     """
     Load a dimension based on metadata and apply SCD2 semantics.
@@ -235,6 +239,14 @@ def run_dimension(
         Optional DataFrame to bypass file reading (useful for tests).
     csv_reader
         Callable to read the source file (defaults to pandas.read_csv).
+    staging_use_openrowset_parquet
+        If True (MSSQL only), stage incoming snapshot via parquet + OPENROWSET load.
+    staging_parquet_base_dir
+        Base directory where staging parquet files are written.
+    staging_copy_source_base_url
+        Optional SQL-visible base path/URI for OPENROWSET BULK source.
+    staging_copy_into_options
+        Optional OPENROWSET options suffix (for example ", MAXERRORS = 10").
     """
     metadata = get_metadata(metadata_name)
     incoming = (
@@ -335,6 +347,10 @@ def run_dimension(
                 archive_filename=archive_filename,
                 has_batch_id=has_batch_id,
                 has_archive_filename=has_archive_filename,
+                staging_use_openrowset_parquet=staging_use_openrowset_parquet,
+                staging_parquet_base_dir=staging_parquet_base_dir,
+                staging_copy_source_base_url=staging_copy_source_base_url,
+                staging_copy_into_options=staging_copy_into_options,
             )
     except Exception as exc:
         duration = (datetime.now(timezone.utc) - start_ts).total_seconds()

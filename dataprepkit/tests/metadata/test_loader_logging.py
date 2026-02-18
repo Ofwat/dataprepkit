@@ -165,6 +165,40 @@ def test_run_dimension_logs_execution_time(monkeypatch, caplog):
     assert captured.get("execution_time") is not None
 
 
+def test_run_dimension_passes_openrowset_staging_options(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    _create_dimension_table(engine)
+    captured = {}
+
+    def fake_apply_changes(*args, **kwargs):
+        captured["staging_use_openrowset_parquet"] = kwargs.get(
+            "staging_use_openrowset_parquet"
+        )
+        captured["staging_parquet_base_dir"] = kwargs.get("staging_parquet_base_dir")
+        captured["staging_copy_source_base_url"] = kwargs.get(
+            "staging_copy_source_base_url"
+        )
+        captured["staging_copy_into_options"] = kwargs.get("staging_copy_into_options")
+        return False
+
+    monkeypatch.setattr("dataprepkit.metadata_loader.apply_changes", fake_apply_changes)
+
+    run_dimension(
+        engine,
+        "dummy_dimension",
+        override_df=pd.DataFrame([{"natural_key": "x", "data_column": "v"}]),
+        staging_use_openrowset_parquet=True,
+        staging_parquet_base_dir="/tmp/stage",
+        staging_copy_source_base_url="abfss://workspace@onelake/path",
+        staging_copy_into_options=", MAXERRORS = 10",
+    )
+
+    assert captured["staging_use_openrowset_parquet"] is True
+    assert captured["staging_parquet_base_dir"] == "/tmp/stage"
+    assert captured["staging_copy_source_base_url"] == "abfss://workspace@onelake/path"
+    assert captured["staging_copy_into_options"] == ", MAXERRORS = 10"
+
+
 def _insert_row(engine, natural_key, join_numeric, current_ind=1, update_date=None):
     with engine.begin() as conn:
         conn.execute(
