@@ -355,6 +355,61 @@ def test_stage_dataframe_copy_into_writes_parquet_and_executes_copy(monkeypatch,
     assert copy_sql.startswith("\n                    INSERT INTO [dbo].[stage_table]")
 
 
+def test_stage_dataframe_copy_into_accepts_separate_source_base_url(monkeypatch, tmp_path):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeConn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, params=None):
+            self.calls.append((str(statement), dict(params or {})))
+
+    class _FakeBegin:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def __enter__(self):
+            return self.conn
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+        def __init__(self):
+            self.conn = _FakeConn()
+
+        def begin(self):
+            return _FakeBegin(self.conn)
+
+    class _FakeInspector:
+        @staticmethod
+        def has_table(_table, schema=None):
+            return True
+
+    monkeypatch.setattr("dataprepkit.helpers.staging.ensure_schema_exists", lambda *_: None)
+    monkeypatch.setattr("dataprepkit.helpers.staging.inspect", lambda _: _FakeInspector())
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", lambda self, path, index=False: None)
+    engine = _FakeEngine()
+
+    stage_dataframe(
+        engine,
+        "stage_table",
+        pd.DataFrame({"col": [1]}),
+        schema="dbo",
+        use_copy_into_parquet=True,
+        parquet_base_dir=str(tmp_path),
+        copy_source_base_url="abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse/Files/tmp",
+        if_exists="append",
+    )
+
+    sql, _ = engine.conn.calls[0]
+    assert "BULK 'abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse/Files/tmp/stage_table/" in sql
+
+
 def test_stage_dataframe_copy_into_creates_missing_table(monkeypatch, tmp_path):
     class _FakeDialect:
         name = "mssql"
@@ -409,7 +464,6 @@ def test_stage_dataframe_copy_into_creates_missing_table(monkeypatch, tmp_path):
         schema="dbo",
         use_copy_into_parquet=True,
         parquet_base_dir=str(tmp_path),
-        copy_source_base_url="https://contoso.dfs.core.windows.net/raw",
         if_exists="replace",
     )
 
@@ -469,7 +523,6 @@ def test_stage_dataframe_copy_into_falls_back_to_delete_on_truncate_error(monkey
         schema="dbo",
         use_copy_into_parquet=True,
         parquet_base_dir=str(tmp_path),
-        copy_source_base_url="https://contoso.dfs.core.windows.net/raw",
         if_exists="replace",
     )
 

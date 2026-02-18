@@ -79,7 +79,7 @@ def stage_dataframe(
     parquet_base_dir
         Local/mounted base directory where parquet snapshots are written.
     copy_source_base_url
-        External base URL matching parquet_base_dir visibility. Defaults to parquet_base_dir.
+        Optional SQL-visible base path/URI for OPENROWSET BULK. Defaults to parquet_base_dir.
     copy_into_options
         Additional COPY INTO options suffix (for example: ", MAXERRORS = 10").
     """
