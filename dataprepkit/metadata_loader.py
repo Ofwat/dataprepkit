@@ -221,6 +221,10 @@ def run_dimension(
     *,
     override_df: pd.DataFrame | None = None,
     csv_reader: callable = _default_csv_reader,
+    staging_use_openrowset_parquet: bool = False,
+    staging_parquet_base_dir: str | None = None,
+    staging_copy_source_base_url: str | None = None,
+    staging_copy_into_options: str = "",
 ) -> pd.DataFrame:
     """
     Load a dimension based on metadata and apply SCD2 semantics.
@@ -235,6 +239,14 @@ def run_dimension(
         Optional DataFrame to bypass file reading (useful for tests).
     csv_reader
         Callable to read the source file (defaults to pandas.read_csv).
+    staging_use_openrowset_parquet
+        If True (MSSQL only), stage incoming snapshot via parquet + OPENROWSET load.
+    staging_parquet_base_dir
+        Base directory where staging parquet files are written.
+    staging_copy_source_base_url
+        Optional SQL-visible base path/URI for OPENROWSET BULK source.
+    staging_copy_into_options
+        Optional OPENROWSET options suffix (for example ", MAXERRORS = 10").
     """
     metadata = get_metadata(metadata_name)
     incoming = (
@@ -335,6 +347,10 @@ def run_dimension(
                 archive_filename=archive_filename,
                 has_batch_id=has_batch_id,
                 has_archive_filename=has_archive_filename,
+                staging_use_openrowset_parquet=staging_use_openrowset_parquet,
+                staging_parquet_base_dir=staging_parquet_base_dir,
+                staging_copy_source_base_url=staging_copy_source_base_url,
+                staging_copy_into_options=staging_copy_into_options,
             )
     except Exception as exc:
         duration = (datetime.now(timezone.utc) - start_ts).total_seconds()
@@ -373,6 +389,70 @@ def run_dimension(
     logger.info("SCD2 classification counts: not available")
     _post_scd2_validation(engine, metadata.target_table, metadata.natural_key_cols)
     return incoming
+
+
+def run_dimension_copy_into(
+    engine: Engine,
+    metadata_name: str,
+    *,
+    destination_table: str,
+    copy_source_base_url: str,
+    parquet_base_dir: str,
+    copy_into_options: str = "",
+    override_df: pd.DataFrame | None = None,
+    csv_reader: callable = _default_csv_reader,
+) -> str:
+    """
+    Experimental path: read via pandas, persist parquet, then invoke COPY INTO.
+
+    Returns the external source URL used in the COPY INTO command.
+    """
+    metadata = get_metadata(metadata_name)
+    incoming = (
+        override_df.copy()
+        if override_df is not None
+        else csv_reader(metadata.filepath)
+    )
+    incoming = _cast_data_columns(incoming, metadata)
+    if metadata.column_renames:
+        incoming = incoming.rename(columns=metadata.column_renames)
+        if incoming.columns.duplicated().any():
+            raise ValueError(
+                "Column renames introduced duplicate column names; check metadata."
+            )
+    if metadata.processing_class:
+        incoming = metadata.processing_class(incoming)
+    incoming = _apply_dependency_joins(incoming, metadata.dependencies, engine)
+
+    _, target_table = _split_table_name(metadata.target_table)
+    batch_id = metadata.archive_batch_id or metadata.name
+    parquet_info = archive_dataframe_path(
+        table_name=target_table,
+        batch_id=batch_id,
+        base_dir=parquet_base_dir,
+    )
+    parquet_path = Path(parquet_info.file_path)
+    incoming.to_parquet(parquet_path, index=False)
+
+    source_url = (
+        f"{copy_source_base_url.rstrip('/')}/{target_table}/{parquet_path.name}"
+    )
+    options_sql = copy_into_options.strip()
+    if options_sql and not options_sql.startswith(","):
+        options_sql = f", {options_sql}"
+
+    copy_sql = text(
+        f"""
+        COPY INTO {destination_table}
+        FROM :source_url
+        WITH (
+            FILE_TYPE = 'PARQUET'{options_sql}
+        )
+        """
+    )
+    with engine.begin() as conn:
+        conn.execute(copy_sql, {"source_url": source_url})
+    return source_url
 
 
 def _get_target_columns(engine: Engine, table_name: str) -> set[str]:

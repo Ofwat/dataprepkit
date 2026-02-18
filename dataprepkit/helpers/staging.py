@@ -1,12 +1,20 @@
 import re
 from typing import Literal
+from pathlib import Path
+import uuid
 
 import pandas as pd
-from pandas.api.types import is_datetime64_any_dtype, is_datetime64tz_dtype
+from pandas.api.types import (
+    is_datetime64_any_dtype,
+    is_datetime64tz_dtype,
+    is_object_dtype,
+)
 from sqlalchemy import Engine, inspect, text
 from sqlalchemy.dialects.mssql import DATETIME2
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.sql.elements import quoted_name
 from dataprepkit.helpers.schema import ensure_schema_exists
+from dataprepkit.storage import archive_dataframe_path
 
 
 def _quote_mssql_identifier(identifier: str) -> str:
@@ -40,6 +48,33 @@ def _split_qualified_name(name: str) -> tuple[str | None, str]:
     return None, name
 
 
+def _normalize_for_parquet(df: pd.DataFrame) -> pd.DataFrame:
+    normalized = df.copy()
+    for col in normalized.columns:
+        series = normalized[col]
+        if is_datetime64_any_dtype(series.dtype) or is_datetime64tz_dtype(series.dtype):
+            normalized[col] = series.map(
+                lambda value: (
+                    None
+                    if pd.isna(value)
+                    else pd.Timestamp(value).strftime("%Y-%m-%d %H:%M:%S.%f")
+                )
+            )
+            continue
+        if not is_object_dtype(series.dtype):
+            continue
+        normalized[col] = series.map(
+            lambda value: (
+                None
+                if pd.isna(value)
+                else value.decode("utf-8", errors="replace")
+                if isinstance(value, (bytes, bytearray))
+                else str(value)
+            )
+        )
+    return normalized
+
+
 def stage_dataframe(
     engine: Engine,
     table_name: str,
@@ -48,6 +83,10 @@ def stage_dataframe(
     if_exists: Literal["fail", "replace", "append"] = "replace",
     index: bool = False,
     schema: str | None = None,
+    use_copy_into_parquet: bool = False,
+    parquet_base_dir: str | None = None,
+    copy_source_base_url: str | None = None,
+    copy_into_options: str = "",
 ) -> None:
     """
     Write a DataFrame into a staging table (generic helper).
@@ -66,6 +105,14 @@ def stage_dataframe(
         Whether to write DataFrame index.
     schema
         Optional schema name.
+    use_copy_into_parquet
+        If True, write a parquet snapshot and load via COPY INTO (MSSQL/Fabric).
+    parquet_base_dir
+        Local/mounted base directory where parquet snapshots are written.
+    copy_source_base_url
+        Optional SQL-visible base path/URI for OPENROWSET BULK. Defaults to parquet_base_dir.
+    copy_into_options
+        Additional COPY INTO options suffix (for example: ", MAXERRORS = 10").
     """
     resolved_schema = _normalize_bracket_identifier(schema)
     resolved_table = table_name.strip()
@@ -91,6 +138,77 @@ def stage_dataframe(
             for col, dtype in df.dtypes.items()
             if is_datetime64_any_dtype(dtype) or is_datetime64tz_dtype(dtype)
         }
+
+        if use_copy_into_parquet:
+            if not parquet_base_dir:
+                raise ValueError("parquet_base_dir is required when use_copy_into_parquet=True.")
+            resolved_copy_source_base_url = copy_source_base_url or parquet_base_dir
+
+            table_exists = inspect(engine).has_table(
+                str(table_for_sql),
+                schema=str(schema_for_sql) if schema_for_sql is not None else None,
+            )
+            if if_exists == "fail" and table_exists:
+                raise ValueError(f"Table '{table_name}' already exists.")
+            if not table_exists:
+                df.head(0).to_sql(
+                    table_for_sql,
+                    engine,
+                    if_exists="fail",
+                    index=index,
+                    schema=schema_for_sql,
+                    dtype=dtype_overrides or None,
+                )
+
+            path_info = archive_dataframe_path(
+                table_name=resolved_table,
+                batch_id=f"stage_{uuid.uuid4().hex[:8]}",
+                base_dir=parquet_base_dir,
+            )
+            parquet_path = Path(path_info.file_path)
+            _normalize_for_parquet(df).to_parquet(parquet_path, index=index)
+
+            source_url = (
+                f"{resolved_copy_source_base_url.rstrip('/')}/{resolved_table}/{parquet_path.name}"
+            )
+            schema_sql = (
+                _quote_mssql_identifier(str(schema_for_sql))
+                if schema_for_sql is not None
+                else None
+            )
+            table_sql = _quote_mssql_identifier(str(table_for_sql))
+            destination_table = (
+                f"{schema_sql}.{table_sql}" if schema_sql is not None else table_sql
+            )
+
+            options_sql = copy_into_options.strip()
+            if options_sql and not options_sql.startswith(","):
+                options_sql = f", {options_sql}"
+
+            with engine.begin() as conn:
+                if if_exists == "replace" and table_exists:
+                    try:
+                        conn.execute(text(f"TRUNCATE TABLE {destination_table}"))
+                    except ProgrammingError:
+                        conn.execute(text(f"DELETE FROM {destination_table}"))
+                selected_columns = [_quote_mssql_identifier(str(col)) for col in df.columns]
+                if not selected_columns:
+                    return
+                columns_sql = ", ".join(selected_columns)
+                escaped_source = source_url.replace("'", "''")
+                openrowset_sql = text(
+                    f"""
+                    INSERT INTO {destination_table} ({columns_sql})
+                    SELECT {columns_sql}
+                    FROM OPENROWSET(
+                        BULK '{escaped_source}',
+                        FORMAT = 'PARQUET'{options_sql}
+                    ) AS src
+                    """
+                )
+                conn.execute(openrowset_sql)
+            return
+
         if dtype_overrides:
             df.to_sql(
                 table_for_sql,

@@ -193,6 +193,104 @@ def test_default_csv_reader_handles_parquet(tmp_path, monkeypatch):
     assert result.equals(expected)
 
 
+def test_run_dimension_copy_into_writes_parquet_and_executes_copy(tmp_path, monkeypatch):
+    class DummyConn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, params=None):
+            self.calls.append((str(statement), dict(params or {})))
+
+    class DummyBegin:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def __enter__(self):
+            return self.conn
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class DummyEngine:
+        def __init__(self):
+            self.conn = DummyConn()
+
+        def begin(self):
+            return DummyBegin(self.conn)
+
+    written = {}
+
+    def fake_to_parquet(self, path, index=False):
+        written["path"] = str(path)
+        written["index"] = index
+
+    monkeypatch.setattr(metadata_loader.pd.DataFrame, "to_parquet", fake_to_parquet)
+
+    engine = DummyEngine()
+    incoming = metadata_loader.pd.DataFrame([{"natural_key": "k1", "data_column": "v1"}])
+    source_url = metadata_loader.run_dimension_copy_into(
+        engine,
+        "dummy_dimension",
+        destination_table="dbo.stage_dimension",
+        copy_source_base_url="https://contoso.dfs.core.windows.net/raw",
+        parquet_base_dir=str(tmp_path),
+        override_df=incoming,
+    )
+
+    assert written["path"].endswith(".parquet")
+    assert written["index"] is False
+    assert "dimension" in written["path"]
+    assert source_url.startswith("https://contoso.dfs.core.windows.net/raw/dimension/")
+    assert len(engine.conn.calls) == 1
+    sql, params = engine.conn.calls[0]
+    assert "COPY INTO dbo.stage_dimension" in sql
+    assert "FILE_TYPE = 'PARQUET'" in sql
+    assert params["source_url"] == source_url
+
+
+def test_run_dimension_copy_into_accepts_extra_options(tmp_path, monkeypatch):
+    class DummyConn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, params=None):
+            self.calls.append((str(statement), dict(params or {})))
+
+    class DummyBegin:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def __enter__(self):
+            return self.conn
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class DummyEngine:
+        def __init__(self):
+            self.conn = DummyConn()
+
+        def begin(self):
+            return DummyBegin(self.conn)
+
+    monkeypatch.setattr(metadata_loader.pd.DataFrame, "to_parquet", lambda self, path, index=False: None)
+    engine = DummyEngine()
+    incoming = metadata_loader.pd.DataFrame([{"natural_key": "k1", "data_column": "v1"}])
+
+    metadata_loader.run_dimension_copy_into(
+        engine,
+        "dummy_dimension",
+        destination_table="dbo.stage_dimension",
+        copy_source_base_url="https://contoso.dfs.core.windows.net/raw",
+        parquet_base_dir=str(tmp_path),
+        override_df=incoming,
+        copy_into_options=", MAXERRORS = 10",
+    )
+
+    sql, _ = engine.conn.calls[0]
+    assert "MAXERRORS = 10" in sql
+
+
 def test_cast_data_columns_uses_default_format(tmp_path):
     metadata_loader.METADATA_REGISTRY.pop("default_format_test", None)
 

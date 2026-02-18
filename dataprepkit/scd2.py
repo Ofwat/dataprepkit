@@ -6,6 +6,12 @@ updates a target table with system columns (surrogate keys, hashes, flags).
 
 The logic assumes the target table already exists and exposes the system
 columns indicated via the configuration mapping.
+
+TODO(prod-hardening):
+- Capture and persist cast rejects when raw->typed staging `TRY_CAST` yields NULL.
+- Add run-level metrics/logging for raw rows, casted rows, rejected rows, and applied SCD2 changes.
+- Add retention/cleanup policy for transient raw/typed staging tables and staged parquet files.
+- Add integration coverage on real Fabric SQL DB for representative schemas and larger volumes.
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 import uuid
+from dataprepkit.helpers.staging import stage_dataframe
 
 
 DEFAULT_SYSTEM_COLUMNS = {
@@ -54,6 +61,10 @@ def apply_changes(
     archive_filename: str | None = None,
     has_batch_id: bool = False,
     has_archive_filename: bool = False,
+    staging_use_openrowset_parquet: bool = False,
+    staging_parquet_base_dir: str | None = None,
+    staging_copy_source_base_url: str | None = None,
+    staging_copy_into_options: str = "",
 ) -> bool:
     """
     Apply SCD2 semantics to the target table using the incoming DataFrame.
@@ -78,7 +89,10 @@ def apply_changes(
     incoming_df[hash_col] = incoming_df.apply(lambda row: _compute_row_hash(row, data_cols), axis=1)
 
     base_name = f"temp_snapshot_{uuid.uuid4().hex}"
-    staging_table = _resolve_staging_table_name(engine, base_name)
+    use_openrowset_staging = staging_use_openrowset_parquet and engine.dialect.name == "mssql"
+    staging_table = _resolve_staging_table_name_for_mode(
+        engine, base_name, use_temp_table=not use_openrowset_staging
+    )
     execution_time = execution_time or _execution_timestamp()
 
     with engine.begin() as conn:
@@ -103,27 +117,73 @@ def apply_changes(
             )
         else:
             incoming_df["existing_join_numeric"] = None
-        _create_staging_table(
-            conn,
-            staging_table,
-            natural_key_cols,
-            data_cols,
-            hash_col,
-            column_types,
-            extra_columns=extra_columns,
-            nullable_data_cols=nullable_columns,
-        )
-        changes_applied = False
-        try:
-            _insert_snapshot_rows(
+        if not use_openrowset_staging:
+            _create_staging_table(
                 conn,
                 staging_table,
-                incoming_df,
                 natural_key_cols,
                 data_cols,
                 hash_col,
+                column_types,
                 extra_columns=extra_columns,
+                nullable_data_cols=nullable_columns,
             )
+        changes_applied = False
+        raw_staging_table: str | None = None
+        try:
+            if use_openrowset_staging:
+                if not staging_parquet_base_dir:
+                    raise SCD2ValidationError(
+                        "staging_parquet_base_dir is required when staging_use_openrowset_parquet=True."
+                    )
+                raw_staging_table = f"{staging_table}__raw"
+                all_snapshot_columns = list(natural_key_cols) + list(data_cols) + [hash_col]
+                if extra_columns:
+                    all_snapshot_columns.extend(extra_columns)
+                staging_schema, staging_table_name = _split_table_name(staging_table)
+                raw_schema, raw_table_name = _split_table_name(raw_staging_table)
+                snapshot_df = incoming_df[all_snapshot_columns].copy()
+                raw_snapshot_df = snapshot_df.astype("string")
+                stage_dataframe(
+                    engine,
+                    raw_table_name,
+                    raw_snapshot_df,
+                    if_exists="replace",
+                    index=False,
+                    schema=raw_schema,
+                    use_copy_into_parquet=True,
+                    parquet_base_dir=staging_parquet_base_dir,
+                    copy_source_base_url=staging_copy_source_base_url,
+                    copy_into_options=staging_copy_into_options,
+                )
+                _create_staging_table(
+                    conn,
+                    staging_table,
+                    natural_key_cols,
+                    data_cols,
+                    hash_col,
+                    column_types,
+                    extra_columns=extra_columns,
+                    nullable_data_cols=nullable_columns,
+                    preserve_mssql_types=True,
+                )
+                _insert_snapshot_rows_from_raw(
+                    conn,
+                    raw_table=raw_staging_table,
+                    target_table=staging_table,
+                    columns=all_snapshot_columns,
+                    column_types=column_types,
+                )
+            else:
+                _insert_snapshot_rows(
+                    conn,
+                    staging_table,
+                    incoming_df,
+                    natural_key_cols,
+                    data_cols,
+                    hash_col,
+                    extra_columns=extra_columns,
+                )
             changes_applied = _apply_snapshot_to_target(
                 conn,
                 staging_table,
@@ -140,6 +200,8 @@ def apply_changes(
                 has_archive_filename=has_archive_filename,
             )
         finally:
+            if raw_staging_table:
+                conn.execute(text(f"DROP TABLE IF EXISTS {raw_staging_table}"))
             conn.execute(text(f"DROP TABLE IF EXISTS {staging_table}"))
         _validate_row_growth(conn, target_table, pre_total)
         return changes_applied
@@ -153,9 +215,15 @@ def _execution_timestamp() -> str:
 
 
 def _resolve_staging_table_name(engine: Engine, base_name: str) -> str:
+    return _resolve_staging_table_name_for_mode(engine, base_name, use_temp_table=True)
+
+
+def _resolve_staging_table_name_for_mode(
+    engine: Engine, base_name: str, *, use_temp_table: bool
+) -> str:
     dialect = engine.dialect.name
     if dialect == "mssql":
-        return f"#{base_name}"
+        return f"#{base_name}" if use_temp_table else base_name
     if dialect == "sqlite":
         return f"temp_{base_name}"
     return base_name
@@ -182,13 +250,14 @@ def _create_staging_table(
     column_types: Mapping[str, str],
     extra_columns: Sequence[str] | None = None,
     nullable_data_cols: Sequence[str] | None = None,
+    preserve_mssql_types: bool = False,
 ):
     dialect = conn.engine.dialect.name
     column_defs = []
     nullable_set = set(nullable_data_cols or [])
     for col in natural_key_cols:
         column_defs.append(
-            f"{col} {_column_type_for_column(col, column_types, conn.engine)} NOT NULL"
+            f"{col} {_column_type_for_column(col, column_types, conn.engine, preserve_mssql_types=preserve_mssql_types)} NOT NULL"
         )
     for col in data_cols:
         null_clause = (
@@ -197,14 +266,14 @@ def _create_staging_table(
             else " NOT NULL"
         )
         column_defs.append(
-            f"{col} {_column_type_for_column(col, column_types, conn.engine)}{null_clause}"
+            f"{col} {_column_type_for_column(col, column_types, conn.engine, preserve_mssql_types=preserve_mssql_types)}{null_clause}"
         )
     column_defs.append(
-        f"{hash_col} {_column_type_for_column(hash_col, column_types, conn.engine)} NOT NULL"
+        f"{hash_col} {_column_type_for_column(hash_col, column_types, conn.engine, preserve_mssql_types=preserve_mssql_types)} NOT NULL"
     )
     for extra in extra_columns or []:
         column_defs.append(
-            f"{extra} {_column_type_for_column(extra, column_types, conn.engine)}"
+            f"{extra} {_column_type_for_column(extra, column_types, conn.engine, preserve_mssql_types=preserve_mssql_types)}"
         )
     unique_clause = f", UNIQUE({', '.join(natural_key_cols)})" if natural_key_cols else ""
     create_sql = text(
@@ -252,6 +321,42 @@ def _insert_snapshot_rows(
             conn.execute(insert_sql, records)
     except IntegrityError as exc:
         raise SCD2ValidationError("Incoming data contains duplicate natural keys.") from exc
+
+
+def _insert_snapshot_rows_from_raw(
+    conn,
+    *,
+    raw_table: str,
+    target_table: str,
+    columns: Sequence[str],
+    column_types: Mapping[str, str],
+) -> None:
+    rendered_columns = ", ".join(_quote_identifier(conn.engine, col) for col in columns)
+    select_parts = []
+    for col in columns:
+        target_type = _column_type_for_column(
+            col, column_types, conn.engine, preserve_mssql_types=True
+        )
+        quoted = _quote_identifier(conn.engine, col)
+        if conn.engine.dialect.name == "mssql":
+            select_parts.append(f"TRY_CAST(NULLIF(src.{quoted}, '') AS {target_type})")
+        else:
+            select_parts.append(f"src.{quoted}")
+    select_sql = ", ".join(select_parts)
+    insert_sql = text(
+        f"""
+        INSERT INTO {target_table} ({rendered_columns})
+        SELECT {select_sql}
+        FROM {raw_table} src
+        """
+    )
+    conn.execute(insert_sql)
+
+
+def _quote_identifier(engine: Engine, identifier: str) -> str:
+    if engine.dialect.name == "mssql":
+        return f"[{identifier.replace(']', ']]')}]"
+    return f'"{identifier.replace(chr(34), chr(34) * 2)}"'
 
 
 def _build_join_condition(left_alias: str, right_alias: str, columns: Sequence[str]) -> str:
@@ -408,13 +513,17 @@ def _get_column_types(conn, target_table: str) -> Mapping[str, str]:
 
 
 def _column_type_for_column(
-    column_name: str, column_types: Mapping[str, str], engine: Engine
+    column_name: str,
+    column_types: Mapping[str, str],
+    engine: Engine,
+    *,
+    preserve_mssql_types: bool = False,
 ) -> str:
     key = column_name.lower()
     explicit = column_types.get(key)
     if explicit:
         sanitized = explicit.split()[0]
-        if engine.dialect.name == "mssql":
+        if engine.dialect.name == "mssql" and not preserve_mssql_types:
             return "NVARCHAR(4000)"
         return sanitized
     return _column_type_for_engine(engine)
