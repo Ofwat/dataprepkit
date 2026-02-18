@@ -6,6 +6,7 @@ import pandas as pd
 from pandas.api.types import is_datetime64_any_dtype, is_datetime64tz_dtype
 from sqlalchemy import Engine, inspect, text
 from sqlalchemy.dialects.mssql import DATETIME2
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.sql.elements import quoted_name
 from dataprepkit.helpers.schema import ensure_schema_exists
 from dataprepkit.storage import archive_dataframe_path
@@ -100,11 +101,33 @@ def stage_dataframe(
         schema_for_sql = None
 
     if engine.dialect.name == "mssql":
+        dtype_overrides = {
+            col: DATETIME2(precision=3)
+            for col, dtype in df.dtypes.items()
+            if is_datetime64_any_dtype(dtype) or is_datetime64tz_dtype(dtype)
+        }
+
         if use_copy_into_parquet:
             if not parquet_base_dir:
                 raise ValueError("parquet_base_dir is required when use_copy_into_parquet=True.")
             if not copy_source_base_url:
                 raise ValueError("copy_source_base_url is required when use_copy_into_parquet=True.")
+
+            table_exists = inspect(engine).has_table(
+                str(table_for_sql),
+                schema=str(schema_for_sql) if schema_for_sql is not None else None,
+            )
+            if if_exists == "fail" and table_exists:
+                raise ValueError(f"Table '{table_name}' already exists.")
+            if not table_exists:
+                df.head(0).to_sql(
+                    table_for_sql,
+                    engine,
+                    if_exists="fail",
+                    index=index,
+                    schema=schema_for_sql,
+                    dtype=dtype_overrides or None,
+                )
 
             path_info = archive_dataframe_path(
                 table_name=resolved_table,
@@ -132,8 +155,11 @@ def stage_dataframe(
                 options_sql = f", {options_sql}"
 
             with engine.begin() as conn:
-                if if_exists == "replace":
-                    conn.execute(text(f"TRUNCATE TABLE {destination_table}"))
+                if if_exists == "replace" and table_exists:
+                    try:
+                        conn.execute(text(f"TRUNCATE TABLE {destination_table}"))
+                    except ProgrammingError:
+                        conn.execute(text(f"DELETE FROM {destination_table}"))
                 copy_sql = text(
                     f"""
                     COPY INTO {destination_table}
@@ -146,11 +172,6 @@ def stage_dataframe(
                 conn.execute(copy_sql, {"source_url": source_url})
             return
 
-        dtype_overrides = {
-            col: DATETIME2(precision=3)
-            for col, dtype in df.dtypes.items()
-            if is_datetime64_any_dtype(dtype) or is_datetime64tz_dtype(dtype)
-        }
         if dtype_overrides:
             df.to_sql(
                 table_for_sql,

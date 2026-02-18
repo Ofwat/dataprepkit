@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.dialects.mssql import DATETIME2
+from sqlalchemy.exc import ProgrammingError
 
 from dataprepkit.metadata_loader import (
     DimensionMetadata,
@@ -318,7 +319,13 @@ def test_stage_dataframe_copy_into_writes_parquet_and_executes_copy(monkeypatch,
         written["path"] = str(path)
         written["index"] = index
 
+    class _FakeInspector:
+        @staticmethod
+        def has_table(_table, schema=None):
+            return True
+
     monkeypatch.setattr("dataprepkit.helpers.staging.ensure_schema_exists", lambda *_: None)
+    monkeypatch.setattr("dataprepkit.helpers.staging.inspect", lambda _: _FakeInspector())
     monkeypatch.setattr(pd.DataFrame, "to_parquet", fake_to_parquet)
     engine = _FakeEngine()
 
@@ -345,6 +352,129 @@ def test_stage_dataframe_copy_into_writes_parquet_and_executes_copy(monkeypatch,
     assert copy_params["source_url"].startswith(
         "https://contoso.dfs.core.windows.net/raw/stage_table/"
     )
+
+
+def test_stage_dataframe_copy_into_creates_missing_table(monkeypatch, tmp_path):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeConn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, params=None):
+            self.calls.append((str(statement), dict(params or {})))
+
+    class _FakeBegin:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def __enter__(self):
+            return self.conn
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+        def __init__(self):
+            self.conn = _FakeConn()
+
+        def begin(self):
+            return _FakeBegin(self.conn)
+
+    class _FakeInspector:
+        @staticmethod
+        def has_table(_table, schema=None):
+            return False
+
+    captured = {"create_calls": 0}
+    monkeypatch.setattr("dataprepkit.helpers.staging.ensure_schema_exists", lambda *_: None)
+    monkeypatch.setattr("dataprepkit.helpers.staging.inspect", lambda _: _FakeInspector())
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", lambda self, path, index=False: None)
+
+    def fake_to_sql(self, name, con, if_exists, index, schema, dtype=None):
+        captured["create_calls"] += 1
+        captured["if_exists"] = if_exists
+
+    monkeypatch.setattr(pd.DataFrame, "to_sql", fake_to_sql)
+    engine = _FakeEngine()
+
+    stage_dataframe(
+        engine,
+        "stage_table",
+        pd.DataFrame({"col": [1]}),
+        schema="dbo",
+        use_copy_into_parquet=True,
+        parquet_base_dir=str(tmp_path),
+        copy_source_base_url="https://contoso.dfs.core.windows.net/raw",
+        if_exists="replace",
+    )
+
+    assert captured["create_calls"] == 1
+    assert captured["if_exists"] == "fail"
+    assert len(engine.conn.calls) == 1
+    assert "COPY INTO [dbo].[stage_table]" in engine.conn.calls[0][0]
+
+
+def test_stage_dataframe_copy_into_falls_back_to_delete_on_truncate_error(monkeypatch, tmp_path):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeConn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, params=None):
+            sql = str(statement)
+            self.calls.append((sql, dict(params or {})))
+            if "TRUNCATE TABLE" in sql:
+                raise ProgrammingError("TRUNCATE", {}, Exception("denied"))
+
+    class _FakeBegin:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def __enter__(self):
+            return self.conn
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+        def __init__(self):
+            self.conn = _FakeConn()
+
+        def begin(self):
+            return _FakeBegin(self.conn)
+
+    class _FakeInspector:
+        @staticmethod
+        def has_table(_table, schema=None):
+            return True
+
+    monkeypatch.setattr("dataprepkit.helpers.staging.ensure_schema_exists", lambda *_: None)
+    monkeypatch.setattr("dataprepkit.helpers.staging.inspect", lambda _: _FakeInspector())
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", lambda self, path, index=False: None)
+    engine = _FakeEngine()
+
+    stage_dataframe(
+        engine,
+        "stage_table",
+        pd.DataFrame({"col": [1]}),
+        schema="dbo",
+        use_copy_into_parquet=True,
+        parquet_base_dir=str(tmp_path),
+        copy_source_base_url="https://contoso.dfs.core.windows.net/raw",
+        if_exists="replace",
+    )
+
+    assert any("TRUNCATE TABLE [dbo].[stage_table]" in call[0] for call in engine.conn.calls)
+    assert any("DELETE FROM [dbo].[stage_table]" in call[0] for call in engine.conn.calls)
+    assert any("COPY INTO [dbo].[stage_table]" in call[0] for call in engine.conn.calls)
 
 
 def test_union_tables_by_name_regex_unions_all_matches():
