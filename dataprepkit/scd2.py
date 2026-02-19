@@ -189,6 +189,14 @@ def apply_changes(
                     target_table=staging_table,
                     columns=all_snapshot_columns,
                     column_types=column_types,
+                    column_type_overrides={
+                        "existing_join_numeric": _column_type_for_column(
+                            join_numeric_key_col,
+                            column_types,
+                            conn.engine,
+                            preserve_mssql_types=True,
+                        )
+                    },
                 )
             else:
                 _insert_snapshot_rows(
@@ -352,11 +360,16 @@ def _insert_snapshot_rows_from_raw(
     target_table: str,
     columns: Sequence[str],
     column_types: Mapping[str, str],
+    column_type_overrides: Mapping[str, str] | None = None,
 ) -> None:
     rendered_columns = ", ".join(_quote_identifier(conn.engine, col) for col in columns)
     select_parts = []
     for col in columns:
-        target_type = _column_type_for_column(
+        target_type = (
+            column_type_overrides.get(col)
+            if column_type_overrides
+            else None
+        ) or _column_type_for_column(
             col, column_types, conn.engine, preserve_mssql_types=True
         )
         quoted = _quote_identifier(conn.engine, col)

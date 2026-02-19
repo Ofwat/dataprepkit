@@ -750,3 +750,35 @@ def test_create_staging_table_uses_override_type_for_existing_join_numeric():
     sql, params = conn.calls[0]
     assert "existing_join_numeric BIGINT" in sql
     assert params == {}
+
+
+def test_insert_snapshot_rows_from_raw_honors_type_overrides():
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    class _FakeConn:
+        engine = _FakeEngine()
+
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, params=None):
+            self.calls.append((str(statement), dict(params or {})))
+
+    conn = _FakeConn()
+    _insert_snapshot_rows_from_raw(
+        conn,
+        raw_table="stg_raw",
+        target_table="stg_typed",
+        columns=["Site_Cd", "existing_join_numeric"],
+        column_types={"site_cd": "NVARCHAR(4000)"},
+        column_type_overrides={"existing_join_numeric": "BIGINT"},
+    )
+
+    sql, params = conn.calls[0]
+    assert "TRY_CAST(NULLIF(src.[Site_Cd], '') AS NVARCHAR(4000))" in sql
+    assert "TRY_CAST(NULLIF(src.[existing_join_numeric], '') AS BIGINT)" in sql
+    assert params == {}
