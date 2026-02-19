@@ -87,6 +87,7 @@ def stage_dataframe(
     parquet_base_dir: str | None = None,
     copy_source_base_url: str | None = None,
     copy_into_options: str = "",
+    openrowset_max_rows_per_file: int = 250_000,
 ) -> None:
     """
     Write a DataFrame into a staging table (generic helper).
@@ -113,6 +114,8 @@ def stage_dataframe(
         Optional SQL-visible base path/URI for OPENROWSET BULK. Defaults to parquet_base_dir.
     copy_into_options
         Additional COPY INTO options suffix (for example: ", MAXERRORS = 10").
+    openrowset_max_rows_per_file
+        Maximum rows per parquet part file for OPENROWSET loads.
     """
     resolved_schema = _normalize_bracket_identifier(schema)
     resolved_table = table_name.strip()
@@ -142,6 +145,8 @@ def stage_dataframe(
         if use_copy_into_parquet:
             if not parquet_base_dir:
                 raise ValueError("parquet_base_dir is required when use_copy_into_parquet=True.")
+            if openrowset_max_rows_per_file < 1:
+                raise ValueError("openrowset_max_rows_per_file must be >= 1.")
             resolved_copy_source_base_url = copy_source_base_url or parquet_base_dir
 
             table_exists = inspect(engine).has_table(
@@ -165,11 +170,22 @@ def stage_dataframe(
                 batch_id=f"stage_{uuid.uuid4().hex[:8]}",
                 base_dir=parquet_base_dir,
             )
+            normalized_df = _normalize_for_parquet(df)
             parquet_path = Path(path_info.file_path)
-            _normalize_for_parquet(df).to_parquet(parquet_path, index=index)
+            part_dir = parquet_path.with_suffix("")
+            part_dir.mkdir(parents=True, exist_ok=True)
+            total_rows = len(normalized_df)
+            if total_rows == 0:
+                normalized_df.to_parquet(part_dir / "part-00000.parquet", index=index)
+            else:
+                for part_idx, start in enumerate(
+                    range(0, total_rows, openrowset_max_rows_per_file)
+                ):
+                    chunk = normalized_df.iloc[start : start + openrowset_max_rows_per_file]
+                    chunk.to_parquet(part_dir / f"part-{part_idx:05d}.parquet", index=index)
 
             source_url = (
-                f"{resolved_copy_source_base_url.rstrip('/')}/{resolved_table}/{parquet_path.name}"
+                f"{resolved_copy_source_base_url.rstrip('/')}/{resolved_table}/{part_dir.name}/*.parquet"
             )
             schema_sql = (
                 _quote_mssql_identifier(str(schema_for_sql))

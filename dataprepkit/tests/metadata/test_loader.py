@@ -351,6 +351,7 @@ def test_stage_dataframe_copy_into_writes_parquet_and_executes_copy(monkeypatch,
     assert "FROM OPENROWSET(" in copy_sql
     assert "FORMAT = 'PARQUET'" in copy_sql
     assert f"BULK '{str(tmp_path).rstrip('/')}/stage_table/" in copy_sql
+    assert "/*.parquet'" in copy_sql
     assert copy_params == {}
     assert copy_sql.startswith("\n                    INSERT INTO [dbo].[stage_table]")
 
@@ -408,6 +409,70 @@ def test_stage_dataframe_copy_into_accepts_separate_source_base_url(monkeypatch,
 
     sql, _ = engine.conn.calls[0]
     assert "BULK 'abfss://workspace@onelake.dfs.fabric.microsoft.com/lakehouse/Files/tmp/stage_table/" in sql
+    assert "/*.parquet'" in sql
+
+
+def test_stage_dataframe_copy_into_splits_into_multiple_parquet_parts(monkeypatch, tmp_path):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeConn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, params=None):
+            self.calls.append((str(statement), dict(params or {})))
+
+    class _FakeBegin:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def __enter__(self):
+            return self.conn
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+        def __init__(self):
+            self.conn = _FakeConn()
+
+        def begin(self):
+            return _FakeBegin(self.conn)
+
+    class _FakeInspector:
+        @staticmethod
+        def has_table(_table, schema=None):
+            return True
+
+    writes = []
+
+    def fake_to_parquet(self, path, index=False):
+        writes.append((str(path), len(self), index))
+
+    monkeypatch.setattr("dataprepkit.helpers.staging.ensure_schema_exists", lambda *_: None)
+    monkeypatch.setattr("dataprepkit.helpers.staging.inspect", lambda _: _FakeInspector())
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", fake_to_parquet)
+    engine = _FakeEngine()
+
+    stage_dataframe(
+        engine,
+        "stage_table",
+        pd.DataFrame({"col": [1, 2, 3]}),
+        schema="dbo",
+        use_copy_into_parquet=True,
+        parquet_base_dir=str(tmp_path),
+        if_exists="append",
+        openrowset_max_rows_per_file=1,
+    )
+
+    assert len(writes) == 3
+    assert all("part-" in path for path, _rows, _index in writes)
+    assert all(rows == 1 for _path, rows, _index in writes)
+    sql, _ = engine.conn.calls[0]
+    assert "/*.parquet'" in sql
 
 
 def test_stage_dataframe_copy_into_normalizes_mixed_object_columns(monkeypatch, tmp_path):
