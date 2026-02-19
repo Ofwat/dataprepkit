@@ -87,7 +87,7 @@ def stage_dataframe(
     parquet_base_dir: str | None = None,
     copy_source_base_url: str | None = None,
     copy_into_options: str = "",
-    openrowset_max_rows_per_file: int = 250_000,
+    openrowset_max_rows_per_file: int = 1_000_000,
 ) -> None:
     """
     Write a DataFrame into a staging table (generic helper).
