@@ -152,6 +152,10 @@ def apply_changes(
                 raw_schema, raw_table_name = _split_table_name(raw_staging_table)
                 snapshot_df = incoming_df[all_snapshot_columns].copy()
                 raw_snapshot_df = snapshot_df.astype("string")
+                if "existing_join_numeric" in raw_snapshot_df.columns:
+                    raw_snapshot_df["existing_join_numeric"] = snapshot_df[
+                        "existing_join_numeric"
+                    ].map(_normalize_existing_join_numeric_for_raw)
                 stage_dataframe(
                     engine,
                     raw_table_name,
@@ -385,7 +389,21 @@ def _insert_snapshot_rows_from_raw(
         FROM {raw_table} src
         """
     )
-    conn.execute(insert_sql)
+    try:
+        conn.execute(insert_sql)
+    except IntegrityError as exc:
+        raise SCD2ValidationError("Incoming data contains duplicate natural keys.") from exc
+
+
+def _normalize_existing_join_numeric_for_raw(value) -> str | None:
+    if pd.isna(value):
+        return None
+    if isinstance(value, float):
+        if math.isnan(value):
+            return None
+        if value.is_integer():
+            return str(int(value))
+    return str(value)
 
 
 def _quote_identifier(engine: Engine, identifier: str) -> str:

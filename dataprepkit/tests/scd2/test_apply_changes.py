@@ -4,12 +4,14 @@ from datetime import datetime
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
 
 from dataprepkit.scd2 import SCD2ValidationError
 from dataprepkit.scd2 import (
     _create_staging_table,
     _insert_snapshot_rows,
     _insert_snapshot_rows_from_raw,
+    _normalize_existing_join_numeric_for_raw,
     apply_changes,
 )
 
@@ -782,3 +784,140 @@ def test_insert_snapshot_rows_from_raw_honors_type_overrides():
     assert "TRY_CAST(NULLIF(src.[Site_Cd], '') AS NVARCHAR(4000))" in sql
     assert "TRY_CAST(NULLIF(src.[existing_join_numeric], '') AS BIGINT)" in sql
     assert params == {}
+
+
+def test_insert_snapshot_rows_from_raw_uses_join_key_type_for_existing_join_numeric():
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    class _FakeConn:
+        engine = _FakeEngine()
+
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, params=None):
+            self.calls.append((str(statement), dict(params or {})))
+
+    conn = _FakeConn()
+    join_key_type = "BIGINT"
+    _insert_snapshot_rows_from_raw(
+        conn,
+        raw_table="stg_raw",
+        target_table="stg_typed",
+        columns=["Site_Cd", "existing_join_numeric"],
+        # Simulates real target metadata where only actual join key exists.
+        column_types={"site_cd": "NVARCHAR(4000)", "site_id": join_key_type},
+        # This mapping is what apply_changes now provides.
+        column_type_overrides={"existing_join_numeric": join_key_type},
+    )
+
+    sql, params = conn.calls[0]
+    assert "TRY_CAST(NULLIF(src.[existing_join_numeric], '') AS BIGINT)" in sql
+    assert "TRY_CAST(NULLIF(src.[Site_Cd], '') AS NVARCHAR(4000))" in sql
+    assert params == {}
+
+
+def test_insert_snapshot_rows_from_raw_maps_integrity_to_validation_error():
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    class _FakeConn:
+        engine = _FakeEngine()
+
+        def execute(self, _statement, _params=None):
+            raise IntegrityError("INSERT", {}, Exception("dup"))
+
+    with pytest.raises(SCD2ValidationError, match="duplicate natural keys"):
+        _insert_snapshot_rows_from_raw(
+            _FakeConn(),
+            raw_table="stg_raw",
+            target_table="stg_typed",
+            columns=["Site_Cd", "existing_join_numeric"],
+            column_types={"site_cd": "NVARCHAR(4000)"},
+            column_type_overrides={"existing_join_numeric": "BIGINT"},
+        )
+
+
+def test_normalize_existing_join_numeric_for_raw_keeps_integer_text():
+    assert _normalize_existing_join_numeric_for_raw(7084) == "7084"
+    assert _normalize_existing_join_numeric_for_raw(7084.0) == "7084"
+    assert _normalize_existing_join_numeric_for_raw(None) is None
+
+
+def test_apply_changes_openrowset_normalizes_existing_join_numeric_for_reuse(monkeypatch):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeConn:
+        def __init__(self, engine):
+            self.engine = engine
+
+        def execute(self, _statement, _params=None):
+            class _Result:
+                rowcount = 0
+
+                @staticmethod
+                def fetchall():
+                    return [("k1", 7084)]
+
+                @staticmethod
+                def scalar():
+                    return 0
+
+            return _Result()
+
+    class _FakeBegin:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def __enter__(self):
+            return self.conn
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+        def __init__(self):
+            self.conn = _FakeConn(self)
+
+        def begin(self):
+            return _FakeBegin(self.conn)
+
+    captured = {}
+
+    def fake_stage_dataframe(_engine, _table_name, df, **_kwargs):
+        captured["raw_existing"] = df["existing_join_numeric"].tolist()
+
+    monkeypatch.setattr("dataprepkit.scd2.stage_dataframe", fake_stage_dataframe)
+    monkeypatch.setattr("dataprepkit.scd2._get_column_types", lambda *_: {"site_id": "BIGINT"})
+    monkeypatch.setattr("dataprepkit.scd2._count_rows", lambda *_: 0)
+    monkeypatch.setattr("dataprepkit.scd2._validate_row_growth", lambda *_: None)
+    monkeypatch.setattr("dataprepkit.scd2._create_staging_table", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("dataprepkit.scd2._insert_snapshot_rows_from_raw", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("dataprepkit.scd2._apply_snapshot_to_target", lambda *_args, **_kwargs: False)
+
+    engine = _FakeEngine()
+    incoming = pd.DataFrame([{"Site_Cd": "k1", "Site_Name": "edited"}])
+    apply_changes(
+        engine=engine,
+        target_table="Dimensions.dim_site",
+        incoming=incoming,
+        natural_key_cols=["Site_Cd"],
+        data_cols=["Site_Name"],
+        join_numeric_key_col="Site_Id",
+        surrogate_key_col="Site_Instance_Id",
+        system_columns=SYSTEM_COLUMNS,
+        staging_use_openrowset_parquet=True,
+        staging_parquet_base_dir="/tmp/stage",
+    )
+
+    assert captured["raw_existing"] == ["7084"]
