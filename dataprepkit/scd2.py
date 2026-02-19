@@ -127,6 +127,14 @@ def apply_changes(
                 column_types,
                 extra_columns=extra_columns,
                 nullable_data_cols=nullable_columns,
+                extra_column_type_overrides={
+                    "existing_join_numeric": _column_type_for_column(
+                        join_numeric_key_col,
+                        column_types,
+                        conn.engine,
+                        preserve_mssql_types=True,
+                    )
+                },
             )
         changes_applied = False
         raw_staging_table: str | None = None
@@ -166,6 +174,14 @@ def apply_changes(
                     extra_columns=extra_columns,
                     nullable_data_cols=nullable_columns,
                     preserve_mssql_types=True,
+                    extra_column_type_overrides={
+                        "existing_join_numeric": _column_type_for_column(
+                            join_numeric_key_col,
+                            column_types,
+                            conn.engine,
+                            preserve_mssql_types=True,
+                        )
+                    },
                 )
                 _insert_snapshot_rows_from_raw(
                     conn,
@@ -251,6 +267,7 @@ def _create_staging_table(
     extra_columns: Sequence[str] | None = None,
     nullable_data_cols: Sequence[str] | None = None,
     preserve_mssql_types: bool = False,
+    extra_column_type_overrides: Mapping[str, str] | None = None,
 ):
     dialect = conn.engine.dialect.name
     column_defs = []
@@ -272,8 +289,13 @@ def _create_staging_table(
         f"{hash_col} {_column_type_for_column(hash_col, column_types, conn.engine, preserve_mssql_types=preserve_mssql_types)} NOT NULL"
     )
     for extra in extra_columns or []:
+        extra_type = (
+            extra_column_type_overrides.get(extra)
+            if extra_column_type_overrides
+            else None
+        )
         column_defs.append(
-            f"{extra} {_column_type_for_column(extra, column_types, conn.engine, preserve_mssql_types=preserve_mssql_types)}"
+            f"{extra} {extra_type or _column_type_for_column(extra, column_types, conn.engine, preserve_mssql_types=preserve_mssql_types)}"
         )
     unique_clause = f", UNIQUE({', '.join(natural_key_cols)})" if natural_key_cols else ""
     create_sql = text(

@@ -6,7 +6,12 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from dataprepkit.scd2 import SCD2ValidationError
-from dataprepkit.scd2 import _insert_snapshot_rows, _insert_snapshot_rows_from_raw, apply_changes
+from dataprepkit.scd2 import (
+    _create_staging_table,
+    _insert_snapshot_rows,
+    _insert_snapshot_rows_from_raw,
+    apply_changes,
+)
 
 
 SYSTEM_COLUMNS = {
@@ -706,4 +711,42 @@ def test_insert_snapshot_rows_from_raw_uses_try_cast_for_mssql():
     assert "TRY_CAST(NULLIF(src.[Interval_Start_Date], '') AS DATETIME2(3))" in sql
     assert "TRY_CAST(NULLIF(src.[existing_join_numeric], '') AS BIGINT)" in sql
     assert "FROM stg_raw src" in sql
+    assert params == {}
+
+
+def test_create_staging_table_uses_override_type_for_existing_join_numeric():
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    class _FakeConn:
+        engine = _FakeEngine()
+
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, params=None):
+            self.calls.append((str(statement), dict(params or {})))
+
+    conn = _FakeConn()
+    _create_staging_table(
+        conn,
+        "temp_snapshot",
+        natural_key_cols=["Interval_Cd"],
+        data_cols=["Interval_Type"],
+        hash_col="row_hash",
+        column_types={
+            "interval_cd": "NVARCHAR(4000)",
+            "interval_type": "NVARCHAR(4000)",
+            "row_hash": "NVARCHAR(4000)",
+        },
+        extra_columns=["existing_join_numeric"],
+        extra_column_type_overrides={"existing_join_numeric": "BIGINT"},
+        preserve_mssql_types=True,
+    )
+
+    sql, params = conn.calls[0]
+    assert "existing_join_numeric BIGINT" in sql
     assert params == {}
