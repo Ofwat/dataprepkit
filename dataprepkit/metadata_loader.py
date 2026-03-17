@@ -93,6 +93,14 @@ ROOT = Path(__file__).resolve().parents[1]
 METADATA_REGISTRY: Dict[str, DimensionMetadata] = {}
 
 
+class DimensionDependencyError(ValueError):
+    """Raised when dimension dependency metadata is invalid."""
+
+
+class CircularDimensionDependencyError(DimensionDependencyError):
+    """Raised when registered dimensions contain a dependency cycle."""
+
+
 def _normalize_column_specs(
     raw: Sequence[str] | Mapping[str, Any]
 ) -> Mapping[str, ColumnSpec]:
@@ -225,6 +233,55 @@ def get_metadata(name: str) -> DimensionMetadata:
         return METADATA_REGISTRY[name]
     except KeyError as exc:
         raise KeyError(f"Unknown metadata entry: '{name}'") from exc
+
+
+def build_dimension_dependency_graph(
+    metadata_registry: Mapping[str, DimensionMetadata] | None = None,
+) -> dict[str, set[str]]:
+    registry = metadata_registry or METADATA_REGISTRY
+    table_index = _build_dimension_table_index(registry)
+    graph: dict[str, set[str]] = {name: set() for name in registry}
+    for name, metadata in registry.items():
+        for dependency in metadata.dependencies:
+            dependency_name = _resolve_dimension_dependency_name(
+                dependency,
+                table_index,
+            )
+            if dependency_name is not None:
+                graph[name].add(dependency_name)
+    return graph
+
+
+def resolve_dimension_execution_order(
+    metadata_registry: Mapping[str, DimensionMetadata] | None = None,
+) -> list[str]:
+    graph = build_dimension_dependency_graph(metadata_registry)
+    pending = {name: set(dependencies) for name, dependencies in graph.items()}
+    order: list[str] = []
+    ready = sorted(name for name, dependencies in pending.items() if not dependencies)
+
+    while ready:
+        current = ready.pop(0)
+        order.append(current)
+        pending.pop(current, None)
+        newly_ready = []
+        for name, dependencies in pending.items():
+            if current in dependencies:
+                dependencies.remove(current)
+                if not dependencies:
+                    newly_ready.append(name)
+        if newly_ready:
+            ready.extend(sorted(newly_ready))
+            ready.sort()
+
+    if pending:
+        cycle = _find_dimension_dependency_cycle(graph)
+        cycle_text = " -> ".join(cycle) if cycle else ", ".join(sorted(pending))
+        raise CircularDimensionDependencyError(
+            f"Circular dimension dependencies detected: {cycle_text}"
+        )
+
+    return order
 
 
 def run_dimension(
@@ -553,6 +610,87 @@ def _split_table_name(name: str) -> tuple[str | None, str]:
     schema = schema.strip("[]\"")
     table = table.strip("[]\"")
     return schema, table
+
+
+def _normalize_table_key(schema: str | None, table: str) -> tuple[str | None, str]:
+    normalized_schema = schema.casefold() if schema else None
+    return normalized_schema, table.casefold()
+
+
+def _build_dimension_table_index(
+    metadata_registry: Mapping[str, DimensionMetadata],
+) -> dict[tuple[str | None, str], list[str]]:
+    index: dict[tuple[str | None, str], list[str]] = {}
+    for name, metadata in metadata_registry.items():
+        schema, table = _split_table_name(metadata.target_table)
+        key = _normalize_table_key(schema, table)
+        index.setdefault(key, []).append(name)
+    return index
+
+
+def _resolve_dimension_dependency_name(
+    dependency: DependencyJoin,
+    table_index: Mapping[tuple[str | None, str], list[str]],
+) -> str | None:
+    schema = dependency.schema_name
+    table = dependency.table
+    if schema is None:
+        schema, table = _split_table_name(table)
+    key = _normalize_table_key(schema, table)
+    direct_matches = table_index.get(key, [])
+    if direct_matches:
+        if len(direct_matches) > 1:
+            raise DimensionDependencyError(
+                f"Dependency '{dependency.table}' is ambiguous across registered dimensions: {sorted(direct_matches)}"
+            )
+        return direct_matches[0]
+    if schema is not None:
+        return None
+
+    table_matches = sorted(
+        {
+            name
+            for (candidate_schema, candidate_table), names in table_index.items()
+            if candidate_table == table.casefold()
+            for name in names
+        }
+    )
+    if not table_matches:
+        return None
+    if len(table_matches) > 1:
+        raise DimensionDependencyError(
+            f"Dependency '{dependency.table}' is ambiguous across registered dimensions: {table_matches}"
+        )
+    return table_matches[0]
+
+
+def _find_dimension_dependency_cycle(graph: Mapping[str, set[str]]) -> list[str]:
+    visited: set[str] = set()
+    stack: list[str] = []
+    active: set[str] = set()
+
+    def _visit(node: str) -> list[str] | None:
+        visited.add(node)
+        active.add(node)
+        stack.append(node)
+        for dependency in sorted(graph[node]):
+            if dependency not in visited:
+                cycle = _visit(dependency)
+                if cycle:
+                    return cycle
+            elif dependency in active:
+                start = stack.index(dependency)
+                return stack[start:] + [dependency]
+        stack.pop()
+        active.remove(node)
+        return None
+
+    for node in sorted(graph):
+        if node not in visited:
+            cycle = _visit(node)
+            if cycle:
+                return cycle
+    return []
 
 
 

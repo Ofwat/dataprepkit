@@ -1,11 +1,15 @@
 from dataprepkit import metadata_loader
 from dataprepkit.metadata_loader import (
+    CircularDimensionDependencyError,
     ColumnSpec,
+    DimensionDependencyError,
     DependencyJoin,
     DimensionMetadata,
     _apply_table_and_column_comments,
     _apply_system_column_comments,
     _expected_column_names,
+    build_dimension_dependency_graph,
+    resolve_dimension_execution_order,
 )
 import pytest
 from sqlalchemy import create_engine, text
@@ -76,6 +80,154 @@ def test_expected_column_names_uses_configured_key_columns():
     assert "WRMP_Scheme_Classification_Id" in expected
     assert "surrogate_key" not in expected
     assert "join_numeric_key" not in expected
+
+
+def test_build_dimension_dependency_graph_orders_registered_dimensions():
+    upstream = DimensionMetadata(
+        name="dim_region",
+        target_table="Dimensions.dim_region",
+        natural_key_cols=["Region_Cd"],
+        data_columns={"Region_Name": ColumnSpec(type="TEXT", nullable=True)},
+        surrogate_key="Region_Instance_Id",
+        join_numeric_key="Region_Id",
+        filepath="region.xlsx",
+    )
+    downstream = DimensionMetadata(
+        name="dim_scheme",
+        target_table="Dimensions.dim_scheme",
+        natural_key_cols=["Scheme_Cd"],
+        data_columns={"Region_Instance_Id": ColumnSpec(type="BIGINT", nullable=True)},
+        surrogate_key="Scheme_Instance_Id",
+        join_numeric_key="Scheme_Id",
+        filepath="scheme.xlsx",
+        dependencies=[
+            DependencyJoin(
+                table="dim_region",
+                schema="Dimensions",
+                on=[{"source": "Region_Cd", "target": "Region_Cd"}],
+                select={"Region_Instance_Id": "Region_Instance_Id"},
+            )
+        ],
+    )
+
+    graph = build_dimension_dependency_graph(
+        {"dim_scheme": downstream, "dim_region": upstream}
+    )
+
+    assert graph == {"dim_scheme": {"dim_region"}, "dim_region": set()}
+    assert resolve_dimension_execution_order(
+        {"dim_scheme": downstream, "dim_region": upstream}
+    ) == ["dim_region", "dim_scheme"]
+
+
+def test_resolve_dimension_execution_order_ignores_external_dependencies():
+    metadata = DimensionMetadata(
+        name="dim_scheme",
+        target_table="Dimensions.dim_scheme",
+        natural_key_cols=["Scheme_Cd"],
+        data_columns={"Classification": ColumnSpec(type="TEXT", nullable=True)},
+        surrogate_key="Scheme_Instance_Id",
+        join_numeric_key="Scheme_Id",
+        filepath="scheme.xlsx",
+        dependencies=[
+            DependencyJoin(
+                table="dbo.reference_lookup",
+                on=[{"source": "Scheme_Cd", "target": "Scheme_Cd"}],
+                select={"Classification": "Classification"},
+            )
+        ],
+    )
+
+    graph = build_dimension_dependency_graph({"dim_scheme": metadata})
+
+    assert graph == {"dim_scheme": set()}
+    assert resolve_dimension_execution_order({"dim_scheme": metadata}) == ["dim_scheme"]
+
+
+def test_resolve_dimension_execution_order_detects_circular_dependencies():
+    dim_a = DimensionMetadata(
+        name="dim_a",
+        target_table="Dimensions.dim_a",
+        natural_key_cols=["A_Cd"],
+        data_columns={"B_Id": ColumnSpec(type="BIGINT", nullable=True)},
+        surrogate_key="A_Instance_Id",
+        join_numeric_key="A_Id",
+        filepath="a.xlsx",
+        dependencies=[
+            DependencyJoin(
+                table="dim_b",
+                schema="Dimensions",
+                on=[{"source": "B_Cd", "target": "B_Cd"}],
+                select={"B_Id": "B_Id"},
+            )
+        ],
+    )
+    dim_b = DimensionMetadata(
+        name="dim_b",
+        target_table="Dimensions.dim_b",
+        natural_key_cols=["B_Cd"],
+        data_columns={"A_Id": ColumnSpec(type="BIGINT", nullable=True)},
+        surrogate_key="B_Instance_Id",
+        join_numeric_key="B_Id",
+        filepath="b.xlsx",
+        dependencies=[
+            DependencyJoin(
+                table="dim_a",
+                schema="Dimensions",
+                on=[{"source": "A_Cd", "target": "A_Cd"}],
+                select={"A_Id": "A_Id"},
+            )
+        ],
+    )
+
+    with pytest.raises(CircularDimensionDependencyError, match="dim_a -> dim_b -> dim_a"):
+        resolve_dimension_execution_order({"dim_a": dim_a, "dim_b": dim_b})
+
+
+def test_build_dimension_dependency_graph_rejects_ambiguous_dependency():
+    dim_east = DimensionMetadata(
+        name="dim_region_east",
+        target_table="East.dim_region",
+        natural_key_cols=["Region_Cd"],
+        data_columns={"Region_Name": ColumnSpec(type="TEXT", nullable=True)},
+        surrogate_key="Region_Instance_Id",
+        join_numeric_key="Region_Id",
+        filepath="east.xlsx",
+    )
+    dim_west = DimensionMetadata(
+        name="dim_region_west",
+        target_table="West.dim_region",
+        natural_key_cols=["Region_Cd"],
+        data_columns={"Region_Name": ColumnSpec(type="TEXT", nullable=True)},
+        surrogate_key="Region_Instance_Id",
+        join_numeric_key="Region_Id",
+        filepath="west.xlsx",
+    )
+    dim_scheme = DimensionMetadata(
+        name="dim_scheme",
+        target_table="Dimensions.dim_scheme",
+        natural_key_cols=["Scheme_Cd"],
+        data_columns={"Region_Instance_Id": ColumnSpec(type="BIGINT", nullable=True)},
+        surrogate_key="Scheme_Instance_Id",
+        join_numeric_key="Scheme_Id",
+        filepath="scheme.xlsx",
+        dependencies=[
+            DependencyJoin(
+                table="dim_region",
+                on=[{"source": "Region_Cd", "target": "Region_Cd"}],
+                select={"Region_Instance_Id": "Region_Instance_Id"},
+            )
+        ],
+    )
+
+    with pytest.raises(DimensionDependencyError, match="ambiguous"):
+        build_dimension_dependency_graph(
+            {
+                "dim_scheme": dim_scheme,
+                "dim_region_east": dim_east,
+                "dim_region_west": dim_west,
+            }
+        )
 
 
 def test_dependency_where_clause_filters_join():
