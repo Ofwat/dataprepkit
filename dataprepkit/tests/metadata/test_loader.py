@@ -552,6 +552,64 @@ def test_stage_dataframe_copy_into_normalizes_mixed_object_columns(monkeypatch, 
     assert captured["values"] == ["A1", "10", None]
 
 
+def test_stage_dataframe_copy_into_normalizes_integer_like_object_floats(monkeypatch, tmp_path):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeConn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, params=None):
+            self.calls.append((str(statement), dict(params or {})))
+
+    class _FakeBegin:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def __enter__(self):
+            return self.conn
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+        def __init__(self):
+            self.conn = _FakeConn()
+
+        def begin(self):
+            return _FakeBegin(self.conn)
+
+    class _FakeInspector:
+        @staticmethod
+        def has_table(_table, schema=None):
+            return True
+
+    captured = {}
+
+    def fake_to_parquet(self, path, index=False):
+        captured["values"] = self["Measure_Instance_Id"].tolist()
+
+    monkeypatch.setattr("dataprepkit.helpers.staging.ensure_schema_exists", lambda *_: None)
+    monkeypatch.setattr("dataprepkit.helpers.staging.inspect", lambda _: _FakeInspector())
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", fake_to_parquet)
+    engine = _FakeEngine()
+
+    stage_dataframe(
+        engine,
+        "stage_table",
+        pd.DataFrame({"Measure_Instance_Id": pd.Series([350.0, None], dtype="object")}),
+        schema="dbo",
+        use_copy_into_parquet=True,
+        parquet_base_dir=str(tmp_path),
+        if_exists="append",
+    )
+
+    assert captured["values"] == ["350", None]
+
+
 def test_stage_dataframe_copy_into_normalizes_datetime_columns(monkeypatch, tmp_path):
     class _FakeDialect:
         name = "mssql"

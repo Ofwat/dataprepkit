@@ -67,6 +67,8 @@ def _normalize_for_parquet(df: pd.DataFrame) -> pd.DataFrame:
             lambda value: (
                 None
                 if pd.isna(value)
+                else str(int(value))
+                if isinstance(value, float) and value.is_integer()
                 else value.decode("utf-8", errors="replace")
                 if isinstance(value, (bytes, bytearray))
                 else str(value)

@@ -962,14 +962,15 @@ def _apply_dependency_joins(
             dep_map[key] = {alias: row[alias] for alias in select_aliases.values()}
 
         key_series = incoming[on_source].apply(lambda row: tuple(row[src] for src in on_source), axis=1)
+        matched_keys = key_series.map(lambda key: key in dep_map)
         for alias in select_aliases.values():
             incoming[alias] = key_series.map(lambda key: dep_map.get(key, {}).get(alias))
 
         if dep.how == "inner":
-            matched_mask = incoming[list(select_aliases.values())].notna().all(axis=1)
-            incoming = incoming.loc[matched_mask].copy()
+            incoming = incoming.loc[matched_keys].copy()
+            matched_keys = matched_keys.loc[incoming.index]
 
-        missing_mask = incoming[list(select_aliases.values())].isna().any(axis=1)
+        missing_mask = ~matched_keys
         if missing_mask.any():
             missing_rows = incoming.loc[missing_mask, on_source + list(select_aliases.values())]
             logger.info(
