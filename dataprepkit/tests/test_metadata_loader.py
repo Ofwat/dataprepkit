@@ -5,6 +5,7 @@ from dataprepkit.metadata_loader import (
     DimensionMetadata,
     _apply_table_and_column_comments,
     _apply_system_column_comments,
+    _expected_column_names,
 )
 from sqlalchemy import create_engine, text
 
@@ -53,6 +54,27 @@ def test_register_metadata_targets_schema_precedence():
     assert entry.target_schema == "preferred"
     assert entry.target_table.startswith("preferred.")
     metadata_loader.METADATA_REGISTRY.pop("schema_test", None)
+
+
+def test_expected_column_names_uses_configured_key_columns():
+    metadata = DimensionMetadata(
+        name="wrmp_scheme_classification",
+        target_table="Dimensions.dim_wrmp_scheme_classification",
+        natural_key_cols=["WRMP_Scheme_Classification_Cd"],
+        data_columns={
+            "Classification": ColumnSpec(type="NVARCHAR(4000)", nullable=True)
+        },
+        surrogate_key="WRMP_Scheme_Classification_Instance_Id",
+        join_numeric_key="WRMP_Scheme_Classification_Id",
+        filepath="dummy.xlsx",
+    )
+
+    expected = _expected_column_names(metadata)
+
+    assert "WRMP_Scheme_Classification_Instance_Id" in expected
+    assert "WRMP_Scheme_Classification_Id" in expected
+    assert "surrogate_key" not in expected
+    assert "join_numeric_key" not in expected
 
 
 def test_dependency_where_clause_filters_join():

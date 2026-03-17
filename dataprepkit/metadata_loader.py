@@ -549,7 +549,11 @@ def _expected_column_names(metadata: DimensionMetadata) -> set[str]:
     names = {metadata.surrogate_key, metadata.join_numeric_key}
     names.update(metadata.natural_key_cols)
     names.update(metadata.data_columns.keys())
-    names.update(DEFAULT_SYSTEM_COLUMNS.values())
+    names.update(
+        value
+        for key, value in DEFAULT_SYSTEM_COLUMNS.items()
+        if key not in {"surrogate_key", "join_numeric_key"}
+    )
     return names
 
 
