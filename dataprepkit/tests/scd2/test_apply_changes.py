@@ -13,6 +13,7 @@ from dataprepkit.scd2 import (
     _insert_snapshot_rows_from_raw,
     _normalize_existing_join_numeric_for_raw,
     apply_changes,
+    synchronize_current_row_hashes,
 )
 
 
@@ -326,6 +327,44 @@ def test_join_numeric_reused_for_existing_key():
     final = _read_table(engine)
     current = final.loc[(final.join_key == "x1") & (final.Current_Ind == 1)].iloc[0]
     assert current["join_numeric_key"] == 10
+
+
+def test_synchronize_current_row_hashes_enables_repair_of_poisoned_rows():
+    engine = create_engine("sqlite:///:memory:")
+    poisoned_row = _build_initial_row("b1", 11, None)
+    poisoned_row["row_hash"] = _hash_value("after")
+    _bootstrap_table(engine, [poisoned_row])
+
+    updated = synchronize_current_row_hashes(
+        engine=engine,
+        target_table="dimension",
+        data_cols=["data_column"],
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    assert updated == 1
+
+    changed = apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=pd.DataFrame([{"join_key": "b1", "data_column": "after"}]),
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+        nullable_columns=["data_column"],
+    )
+
+    assert changed is True
+    final = _read_table(engine)
+    historical = final.loc[(final.join_key == "b1") & (final.Current_Ind == 0)]
+    current = final.loc[(final.join_key == "b1") & (final.Current_Ind == 1)]
+    assert len(historical) == 1
+    assert len(current) == 1
+    assert pd.isna(historical.iloc[0]["data_column"])
+    assert current.iloc[0]["data_column"] == "after"
 
 
 def test_reinsert_grows_past_current_max():

@@ -288,6 +288,54 @@ def _compute_row_hash(row: pd.Series, data_columns: Sequence[str]) -> str:
     return hashlib.sha256("|".join(tokens).encode("utf-8")).hexdigest()
 
 
+def synchronize_current_row_hashes(
+    engine: Engine,
+    target_table: str,
+    data_cols: Sequence[str],
+    surrogate_key_col: str,
+    system_columns: Mapping[str, str] | None = None,
+) -> int:
+    cols = system_columns or DEFAULT_SYSTEM_COLUMNS
+    hash_col = cols["row_hash"]
+    current_col = cols["current_ind"]
+    select_columns = [surrogate_key_col, *data_cols, hash_col]
+
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text(
+                f"""
+                SELECT {', '.join(select_columns)}
+                FROM {target_table}
+                WHERE {current_col} = 1
+                """
+            )
+        ).fetchall()
+        mismatches = []
+        for row in rows:
+            row_data = dict(zip(select_columns, row))
+            expected_hash = _compute_row_hash(pd.Series(row_data), data_cols)
+            if row_data[hash_col] != expected_hash:
+                mismatches.append(
+                    {
+                        "surrogate_key": row_data[surrogate_key_col],
+                        "row_hash": expected_hash,
+                    }
+                )
+        if not mismatches:
+            return 0
+        conn.execute(
+            text(
+                f"""
+                UPDATE {target_table}
+                SET {hash_col} = :row_hash
+                WHERE {surrogate_key_col} = :surrogate_key
+                """
+            ),
+            mismatches,
+        )
+        return len(mismatches)
+
+
 def _create_staging_table(
     conn,
     table_name,
