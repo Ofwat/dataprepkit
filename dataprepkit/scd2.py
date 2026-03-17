@@ -361,6 +361,8 @@ def _insert_snapshot_rows(
     def _sanitize(value):
         if isinstance(value, float) and math.isnan(value):
             return None
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
         return value
 
     records = []

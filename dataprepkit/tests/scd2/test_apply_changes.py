@@ -680,6 +680,39 @@ def test_insert_snapshot_rows_sanitizes_nan():
         assert pd.isna(result.loc[0, "existing_join_numeric"])
 
 
+def test_insert_snapshot_rows_normalizes_integer_like_float_values():
+    class _FakeConn:
+        def __init__(self):
+            self.records = None
+
+        def execute(self, _statement, params=None):
+            self.records = list(params or [])
+
+    conn = _FakeConn()
+    incoming = pd.DataFrame(
+        {
+            "Measure_Cd": ["OUT4_19"],
+            "Measure_Instance_Id": [350.0],
+            "row_hash": ["hash-payload"],
+        }
+    )
+
+    _insert_snapshot_rows(
+        conn,
+        "stage_measure",
+        incoming,
+        natural_key_cols=["Measure_Cd"],
+        data_cols=["Measure_Instance_Id"],
+        hash_col="row_hash",
+    )
+
+    assert conn.records is not None
+    assert conn.records[0]["Measure_Cd"] == "OUT4_19"
+    assert conn.records[0]["Measure_Instance_Id"] == 350
+    assert type(conn.records[0]["Measure_Instance_Id"]) is int
+    assert conn.records[0]["row_hash"] == "hash-payload"
+
+
 def test_insert_snapshot_rows_from_raw_uses_try_cast_for_mssql():
     class _FakeDialect:
         name = "mssql"
