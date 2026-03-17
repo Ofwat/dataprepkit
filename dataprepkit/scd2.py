@@ -152,6 +152,25 @@ def apply_changes(
                 raw_schema, raw_table_name = _split_table_name(raw_staging_table)
                 snapshot_df = incoming_df[all_snapshot_columns].copy()
                 raw_snapshot_df = snapshot_df.astype("string")
+                raw_type_overrides = {
+                    "existing_join_numeric": _column_type_for_column(
+                        join_numeric_key_col,
+                        column_types,
+                        conn.engine,
+                        preserve_mssql_types=True,
+                    )
+                }
+                for column in all_snapshot_columns:
+                    target_type = raw_type_overrides.get(column) or _column_type_for_column(
+                        column,
+                        column_types,
+                        conn.engine,
+                        preserve_mssql_types=True,
+                    )
+                    if _is_integer_like_type(target_type):
+                        raw_snapshot_df[column] = snapshot_df[column].map(
+                            _normalize_integer_like_value_for_raw
+                        )
                 if "existing_join_numeric" in raw_snapshot_df.columns:
                     raw_snapshot_df["existing_join_numeric"] = snapshot_df[
                         "existing_join_numeric"
@@ -396,6 +415,10 @@ def _insert_snapshot_rows_from_raw(
 
 
 def _normalize_existing_join_numeric_for_raw(value) -> str | None:
+    return _normalize_integer_like_value_for_raw(value)
+
+
+def _normalize_integer_like_value_for_raw(value) -> str | None:
     if pd.isna(value):
         return None
     if isinstance(value, float):
@@ -404,6 +427,11 @@ def _normalize_existing_join_numeric_for_raw(value) -> str | None:
         if value.is_integer():
             return str(int(value))
     return str(value)
+
+
+def _is_integer_like_type(type_name: str) -> bool:
+    normalized = type_name.strip().upper()
+    return normalized.startswith(("BIGINT", "INT", "INTEGER", "SMALLINT", "TINYINT"))
 
 
 def _quote_identifier(engine: Engine, identifier: str) -> str:
