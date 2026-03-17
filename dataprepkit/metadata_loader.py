@@ -222,11 +222,6 @@ def _default_csv_reader(filepath: str) -> pd.DataFrame:
         )
     )
 
-
-
-_register_default_metadata()
-
-
 def get_metadata(name: str) -> DimensionMetadata:
     """Return metadata record by name."""
     try:

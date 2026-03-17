@@ -16,6 +16,21 @@ from dataprepkit.helpers.staging import drop_tables_by_name_regex
 from dataprepkit.helpers.schema import ensure_schema_exists
 
 
+def _register_dummy_dimension_metadata():
+    METADATA_REGISTRY.pop("dummy_dimension", None)
+    register_metadata(
+        "dummy_dimension",
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": {"data_column": {"type": "TEXT"}},
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+        },
+    )
+
+
 def _create_scd2_table(engine):
     create_sql = """
     CREATE TABLE dimension (
@@ -37,6 +52,7 @@ def _create_scd2_table(engine):
 def test_run_dimension_uses_metadata(engine=None):
     engine = engine or create_engine("sqlite:///:memory:")
     _create_scd2_table(engine)
+    _register_dummy_dimension_metadata()
     df = pd.DataFrame(
         [
             {"natural_key": "a1", "data_column": "a2", "join_numeric_key": 1},
@@ -50,6 +66,7 @@ def test_run_dimension_uses_metadata(engine=None):
         result = conn.execute(text("SELECT COUNT(*) FROM dimension")).scalar()
 
     assert result == 2
+    METADATA_REGISTRY.pop("dummy_dimension", None)
 
 
 def test_get_metadata_unknown_key_raises():
@@ -72,6 +89,7 @@ def test_dimension_model_requires_columns():
 
 def test_schema_mismatch_raises(engine=None):
     engine = engine or create_engine("sqlite:///:memory:")
+    _register_dummy_dimension_metadata()
     # missing data_column to force mismatch
     with engine.begin() as conn:
         conn.execute(
@@ -93,6 +111,7 @@ def test_schema_mismatch_raises(engine=None):
 
     with pytest.raises(RuntimeError):
         run_dimension(engine, "dummy_dimension", override_df=pd.DataFrame([{"natural_key": "x", "data_column": "v"}]))
+    METADATA_REGISTRY.pop("dummy_dimension", None)
 
 
 def test_stage_dataframe_creates_table():

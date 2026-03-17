@@ -16,6 +16,21 @@ import pytest
 from sqlalchemy import create_engine, text
 
 
+def _register_dummy_dimension_metadata() -> None:
+    metadata_loader.METADATA_REGISTRY.pop("dummy_dimension", None)
+    metadata_loader.register_metadata(
+        "dummy_dimension",
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": {"data_column": {"type": "TEXT"}},
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+        },
+    )
+
+
 def test_register_metadata_accepts_schema_alias():
     metadata_loader.METADATA_REGISTRY.pop("schema_test", None)
 
@@ -524,6 +539,7 @@ def test_default_csv_reader_rejects_duplicate_column_names_after_trim(tmp_path):
 
 
 def test_run_dimension_copy_into_writes_parquet_and_executes_copy(tmp_path, monkeypatch):
+    _register_dummy_dimension_metadata()
     class DummyConn:
         def __init__(self):
             self.calls = []
@@ -576,9 +592,11 @@ def test_run_dimension_copy_into_writes_parquet_and_executes_copy(tmp_path, monk
     assert "COPY INTO dbo.stage_dimension" in sql
     assert "FILE_TYPE = 'PARQUET'" in sql
     assert params["source_url"] == source_url
+    metadata_loader.METADATA_REGISTRY.pop("dummy_dimension", None)
 
 
 def test_run_dimension_copy_into_accepts_extra_options(tmp_path, monkeypatch):
+    _register_dummy_dimension_metadata()
     class DummyConn:
         def __init__(self):
             self.calls = []
@@ -619,6 +637,7 @@ def test_run_dimension_copy_into_accepts_extra_options(tmp_path, monkeypatch):
 
     sql, _ = engine.conn.calls[0]
     assert "MAXERRORS = 10" in sql
+    metadata_loader.METADATA_REGISTRY.pop("dummy_dimension", None)
 
 
 def test_cast_data_columns_uses_default_format(tmp_path):

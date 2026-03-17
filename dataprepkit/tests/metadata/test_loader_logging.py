@@ -13,6 +13,21 @@ from dataprepkit.metadata_loader import (
 )
 
 
+def _register_dummy_dimension_metadata():
+    METADATA_REGISTRY.pop("dummy_dimension", None)
+    register_metadata(
+        "dummy_dimension",
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": {"data_column": {"type": "TEXT"}},
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+        },
+    )
+
+
 def test_run_dimension_logs_row_count(caplog):
     engine = create_engine("sqlite:///:memory:")
     with engine.begin() as conn:
@@ -34,6 +49,7 @@ def test_run_dimension_logs_row_count(caplog):
             )
         )
     stub_df = pd.DataFrame([{"natural_key": "x", "data_column": "v"}])
+    _register_dummy_dimension_metadata()
     caplog.set_level(logging.INFO)
 
     run_dimension(engine, "dummy_dimension", override_df=stub_df)
@@ -42,6 +58,7 @@ def test_run_dimension_logs_row_count(caplog):
         "Loaded dimension 'dummy_dimension'" in record.message for record in caplog.records
     )
     assert any("1 rows" in record.message or "1 row" in record.message for record in caplog.records)
+    METADATA_REGISTRY.pop("dummy_dimension", None)
 
 
 def test_schema_drift_logs_safe_write_set(monkeypatch, caplog):
@@ -146,6 +163,7 @@ def _create_dimension_table(engine):
 def test_run_dimension_logs_execution_time(monkeypatch, caplog):
     engine = create_engine("sqlite:///:memory:")
     _create_dimension_table(engine)
+    _register_dummy_dimension_metadata()
     captured = {}
 
     def fake_apply_changes(*args, **kwargs):
@@ -163,11 +181,13 @@ def test_run_dimension_logs_execution_time(monkeypatch, caplog):
     assert "Execution timestamp" in caplog.text
     assert "SCD2 classification counts: not available" in caplog.text
     assert captured.get("execution_time") is not None
+    METADATA_REGISTRY.pop("dummy_dimension", None)
 
 
 def test_run_dimension_passes_openrowset_staging_options(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
     _create_dimension_table(engine)
+    _register_dummy_dimension_metadata()
     captured = {}
 
     def fake_apply_changes(*args, **kwargs):
@@ -197,6 +217,7 @@ def test_run_dimension_passes_openrowset_staging_options(monkeypatch):
     assert captured["staging_parquet_base_dir"] == "/tmp/stage"
     assert captured["staging_copy_source_base_url"] == "abfss://workspace@onelake/path"
     assert captured["staging_copy_into_options"] == ", MAXERRORS = 10"
+    METADATA_REGISTRY.pop("dummy_dimension", None)
 
 
 def _insert_row(engine, natural_key, join_numeric, current_ind=1, update_date=None):
@@ -464,6 +485,7 @@ def test_processing_class_applied(monkeypatch):
 def test_metrics_logged(caplog, monkeypatch):
     engine = create_engine("sqlite:///:memory:")
     _create_dimension_table(engine)
+    _register_dummy_dimension_metadata()
     caplog.set_level(logging.INFO)
 
     run_dimension(
@@ -473,6 +495,7 @@ def test_metrics_logged(caplog, monkeypatch):
     )
 
     assert "Table dimension completed in" in caplog.text
+    METADATA_REGISTRY.pop("dummy_dimension", None)
 
 
 def test_archive_snapshot(tmp_path, caplog):
