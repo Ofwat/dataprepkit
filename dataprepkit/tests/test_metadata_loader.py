@@ -10,6 +10,7 @@ from dataprepkit.metadata_loader import (
     _expected_column_names,
     build_dimension_dependency_graph,
     resolve_dimension_execution_order,
+    run_dimensions_in_dependency_order,
 )
 import pytest
 from sqlalchemy import create_engine, text
@@ -228,6 +229,93 @@ def test_build_dimension_dependency_graph_rejects_ambiguous_dependency():
                 "dim_region_west": dim_west,
             }
         )
+
+
+def test_run_dimensions_in_dependency_order_runs_in_resolved_order(monkeypatch):
+    upstream = DimensionMetadata(
+        name="dim_region",
+        target_table="Dimensions.dim_region",
+        natural_key_cols=["Region_Cd"],
+        data_columns={"Region_Name": ColumnSpec(type="TEXT", nullable=True)},
+        surrogate_key="Region_Instance_Id",
+        join_numeric_key="Region_Id",
+        filepath="region.xlsx",
+    )
+    downstream = DimensionMetadata(
+        name="dim_scheme",
+        target_table="Dimensions.dim_scheme",
+        natural_key_cols=["Scheme_Cd"],
+        data_columns={"Region_Instance_Id": ColumnSpec(type="BIGINT", nullable=True)},
+        surrogate_key="Scheme_Instance_Id",
+        join_numeric_key="Scheme_Id",
+        filepath="scheme.xlsx",
+        dependencies=[
+            DependencyJoin(
+                table="dim_region",
+                schema="Dimensions",
+                on=[{"source": "Region_Cd", "target": "Region_Cd"}],
+                select={"Region_Instance_Id": "Region_Instance_Id"},
+            )
+        ],
+    )
+    engine = object()
+    calls = []
+
+    monkeypatch.setattr(
+        metadata_loader,
+        "run_dimension",
+        lambda actual_engine, name, **kwargs: calls.append((actual_engine, name, kwargs)) or name,
+    )
+
+    result = run_dimensions_in_dependency_order(
+        engine,
+        names=["dim_scheme", "dim_region"],
+        metadata_registry={"dim_scheme": downstream, "dim_region": upstream},
+        staging_use_openrowset_parquet=True,
+    )
+
+    assert result == ["dim_region", "dim_scheme"]
+    assert calls == [
+        (engine, "dim_region", {"staging_use_openrowset_parquet": True}),
+        (engine, "dim_scheme", {"staging_use_openrowset_parquet": True}),
+    ]
+
+
+def test_run_dimensions_in_dependency_order_uses_selected_names(monkeypatch):
+    dim_a = DimensionMetadata(
+        name="dim_a",
+        target_table="Dimensions.dim_a",
+        natural_key_cols=["A_Cd"],
+        data_columns={"A_Name": ColumnSpec(type="TEXT", nullable=True)},
+        surrogate_key="A_Instance_Id",
+        join_numeric_key="A_Id",
+        filepath="a.xlsx",
+    )
+    dim_b = DimensionMetadata(
+        name="dim_b",
+        target_table="Dimensions.dim_b",
+        natural_key_cols=["B_Cd"],
+        data_columns={"B_Name": ColumnSpec(type="TEXT", nullable=True)},
+        surrogate_key="B_Instance_Id",
+        join_numeric_key="B_Id",
+        filepath="b.xlsx",
+    )
+    executed = []
+
+    monkeypatch.setattr(
+        metadata_loader,
+        "run_dimension",
+        lambda _engine, name, **_kwargs: executed.append(name) or name,
+    )
+
+    result = run_dimensions_in_dependency_order(
+        object(),
+        names=["dim_b"],
+        metadata_registry={"dim_a": dim_a, "dim_b": dim_b},
+    )
+
+    assert result == ["dim_b"]
+    assert executed == ["dim_b"]
 
 
 def test_dependency_where_clause_filters_join():

@@ -284,6 +284,25 @@ def resolve_dimension_execution_order(
     return order
 
 
+def run_dimensions_in_dependency_order(
+    engine: Engine,
+    names: Sequence[str] | None = None,
+    metadata_registry: Mapping[str, DimensionMetadata] | None = None,
+    **run_dimension_kwargs,
+) -> list[pd.DataFrame]:
+    registry = metadata_registry or METADATA_REGISTRY
+    selected_registry = (
+        {name: registry[name] for name in names}
+        if names is not None
+        else registry
+    )
+    execution_order = resolve_dimension_execution_order(selected_registry)
+    return [
+        run_dimension(engine, name, **run_dimension_kwargs)
+        for name in execution_order
+    ]
+
+
 def run_dimension(
     engine: Engine,
     metadata_name: str,
