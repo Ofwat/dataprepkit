@@ -919,6 +919,8 @@ def _apply_dependency_joins(
 ) -> pd.DataFrame:
     for dep in dependencies:
         schema, table = dep.schema_name, dep.table
+        if schema is None:
+            schema, table = _split_table_name(table)
         table_ref = f"[{schema}].[{table}]" if schema else f"[{table}]"
         on_source = [relation["source"] for relation in dep.on]
         on_target = [relation["target"] for relation in dep.on]
@@ -946,6 +948,14 @@ def _apply_dependency_joins(
         dep_df = dep_df.rename(columns=dict(zip(on_target, on_source)))
         dep_df = dep_df.rename(columns=select_aliases)
 
+        duplicate_keys = dep_df.duplicated(subset=on_source, keep=False)
+        if duplicate_keys.any():
+            samples = dep_df.loc[duplicate_keys, on_source].drop_duplicates().head(5)
+            raise RuntimeError(
+                f"Dependency join {dep.table} produced duplicate matches for keys "
+                f"{samples.to_dict(orient='records')}"
+            )
+
         dep_map = {}
         for _, row in dep_df.iterrows():
             key = tuple(row[src] for src in on_source)
@@ -954,6 +964,10 @@ def _apply_dependency_joins(
         key_series = incoming[on_source].apply(lambda row: tuple(row[src] for src in on_source), axis=1)
         for alias in select_aliases.values():
             incoming[alias] = key_series.map(lambda key: dep_map.get(key, {}).get(alias))
+
+        if dep.how == "inner":
+            matched_mask = incoming[list(select_aliases.values())].notna().all(axis=1)
+            incoming = incoming.loc[matched_mask].copy()
 
         missing_mask = incoming[list(select_aliases.values())].isna().any(axis=1)
         if missing_mask.any():

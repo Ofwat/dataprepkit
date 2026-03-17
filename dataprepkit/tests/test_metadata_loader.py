@@ -444,6 +444,107 @@ def test_dependency_where_clause_filters_join():
     ).iloc[0]
 
 
+def test_dependency_join_inner_filters_unmatched_rows():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_service (
+                    Service_Type_Cd TEXT NOT NULL,
+                    Current_Ind INTEGER NOT NULL,
+                    Policy_Flag TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_service (Service_Type_Cd, Current_Ind, Policy_Flag)
+                VALUES ('S1', 1, 'flag-yes')
+                """
+            )
+        )
+
+    incoming = metadata_loader.pd.DataFrame({"Service_Type_Cd": ["S1", "S2"]})
+    dependency = DependencyJoin(
+        table="dim_service",
+        how="inner",
+        on=[{"source": "Service_Type_Cd", "target": "Service_Type_Cd"}],
+        select={"Policy_Flag": "Policy_Flag"},
+        on_missing="null",
+    )
+
+    joined = metadata_loader._apply_dependency_joins(incoming, [dependency], engine)
+
+    assert joined.to_dict("records") == [
+        {"Service_Type_Cd": "S1", "Policy_Flag": "flag-yes"}
+    ]
+
+
+def test_dependency_join_rejects_duplicate_matches():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_service (
+                    Service_Type_Cd TEXT NOT NULL,
+                    Current_Ind INTEGER NOT NULL,
+                    Policy_Flag TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_service (Service_Type_Cd, Current_Ind, Policy_Flag)
+                VALUES
+                    ('S1', 1, 'flag-a'),
+                    ('S1', 1, 'flag-b')
+                """
+            )
+        )
+
+    incoming = metadata_loader.pd.DataFrame({"Service_Type_Cd": ["S1"]})
+    dependency = DependencyJoin(
+        table="dim_service",
+        on=[{"source": "Service_Type_Cd", "target": "Service_Type_Cd"}],
+        select={"Policy_Flag": "Policy_Flag"},
+        on_missing="error",
+    )
+
+    with pytest.raises(RuntimeError, match="duplicate matches"):
+        metadata_loader._apply_dependency_joins(incoming, [dependency], engine)
+
+
+def test_dependency_join_parses_schema_qualified_table_names(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    captured = {}
+
+    def fake_read_sql_query(query, con):
+        captured["query"] = str(query)
+        return metadata_loader.pd.DataFrame(
+            [{"Scheme_Cd": "S1", "Classification": "flag-yes"}]
+        )
+
+    monkeypatch.setattr(metadata_loader.pd, "read_sql_query", fake_read_sql_query)
+
+    incoming = metadata_loader.pd.DataFrame({"Scheme_Cd": ["S1"]})
+    dependency = DependencyJoin(
+        table="dbo.reference_lookup",
+        on=[{"source": "Scheme_Cd", "target": "Scheme_Cd"}],
+        select={"Classification": "Classification"},
+        on_missing="null",
+    )
+
+    metadata_loader._apply_dependency_joins(incoming, [dependency], engine)
+
+    assert "FROM [dbo].[reference_lookup]" in captured["query"]
+
+
 def test_cast_data_columns_parses_datetime():
     metadata_loader.METADATA_REGISTRY.pop("cast_test", None)
 
