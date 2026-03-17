@@ -7,6 +7,7 @@ from dataprepkit.metadata_loader import (
     _apply_system_column_comments,
     _expected_column_names,
 )
+import pytest
 from sqlalchemy import create_engine, text
 
 
@@ -179,6 +180,15 @@ def test_default_csv_reader_handles_csv(tmp_path):
     assert result["col"].tolist() == ["a", "b"]
 
 
+def test_default_csv_reader_trims_csv_column_names(tmp_path):
+    src = tmp_path / "data_trimmed_headers.csv"
+    src.write_text(" col , num \n a ,1\n b ,2\n", encoding="utf-8")
+
+    result = metadata_loader._default_csv_reader(str(src))
+
+    assert list(result.columns) == ["col", "num"]
+
+
 def test_default_csv_reader_handles_excel(tmp_path):
     try:
         import openpyxl  # noqa: F401
@@ -194,6 +204,21 @@ def test_default_csv_reader_handles_excel(tmp_path):
     assert list(result["num"]) == [1, 2]
     result_with_missing = metadata_loader._default_csv_reader(str(src))
     assert metadata_loader.pd.isna(result_with_missing["col"]).sum() == 0
+
+
+def test_default_csv_reader_trims_excel_column_names(tmp_path):
+    try:
+        import openpyxl  # noqa: F401
+    except ImportError:
+        pytest.skip("openpyxl is required to test Excel input")
+
+    data = metadata_loader.pd.DataFrame({" col ": ["x"], " num ": [1]})
+    src = tmp_path / "data_trimmed_headers.xlsx"
+    data.to_excel(src, index=False)
+
+    result = metadata_loader._default_csv_reader(str(src))
+
+    assert list(result.columns) == ["col", "num"]
 
 
 def test_default_csv_reader_drops_fully_blank_excel_rows(tmp_path):
@@ -236,6 +261,26 @@ def test_default_csv_reader_handles_parquet(tmp_path, monkeypatch):
 
     assert called["filepath"] == str(src)
     assert result.equals(expected)
+
+
+def test_default_csv_reader_trims_parquet_column_names(tmp_path, monkeypatch):
+    src = tmp_path / "data_trimmed_headers.parquet"
+    src.touch()
+    expected = metadata_loader.pd.DataFrame({" col ": ["p1"], " num ": [2]})
+
+    monkeypatch.setattr(metadata_loader.pd, "read_parquet", lambda _filepath: expected)
+
+    result = metadata_loader._default_csv_reader(str(src))
+
+    assert list(result.columns) == ["col", "num"]
+
+
+def test_default_csv_reader_rejects_duplicate_column_names_after_trim(tmp_path):
+    src = tmp_path / "duplicate_headers.csv"
+    src.write_text("col, col \n1,2\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="duplicate column names after trimming"):
+        metadata_loader._default_csv_reader(str(src))
 
 
 def test_run_dimension_copy_into_writes_parquet_and_executes_copy(tmp_path, monkeypatch):

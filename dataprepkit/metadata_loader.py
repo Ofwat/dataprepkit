@@ -185,23 +185,34 @@ def _read_excel_one_sheet_openpyxl(filepath: str) -> pd.DataFrame:
     df = pd.DataFrame(data, columns=header)
     df = df.dropna(how="all")
     df = df.fillna("")
-    return df
+    return _normalize_input_column_names(df)
+
+
+def _normalize_input_column_names(df: pd.DataFrame) -> pd.DataFrame:
+    normalized = [str(column).strip() for column in df.columns]
+    if len(normalized) != len(set(normalized)):
+        raise ValueError("Input data contains duplicate column names after trimming whitespace.")
+    renamed = df.copy()
+    renamed.columns = normalized
+    return renamed
 
 
 def _default_csv_reader(filepath: str) -> pd.DataFrame:
     if filepath.lower().endswith(".xlsx"):
         return _read_excel_one_sheet_openpyxl(filepath)
     if filepath.lower().endswith(".parquet"):
-        return pd.read_parquet(filepath)
+        return _normalize_input_column_names(pd.read_parquet(filepath))
 
-    return pd.read_csv(
-        filepath,
-        header=0,
-        encoding="utf-8",
-        dtype=str,
-        keep_default_na=False,
-        na_values=["NULL"],
-)
+    return _normalize_input_column_names(
+        pd.read_csv(
+            filepath,
+            header=0,
+            encoding="utf-8",
+            dtype=str,
+            keep_default_na=False,
+            na_values=["NULL"],
+        )
+    )
 
 
 
