@@ -77,6 +77,29 @@ def test_register_metadata_targets_schema_precedence():
     metadata_loader.METADATA_REGISTRY.pop("schema_test", None)
 
 
+def test_register_and_resolve_metadata_with_explicit_registry():
+    registry = {}
+
+    metadata_loader.register_metadata(
+        "schema_test",
+        {
+            "target_table": "dimtable",
+            "target_schema": "myschema",
+            "natural_key_cols": ["id"],
+            "data_columns": {"value": {"type": "TEXT"}},
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+        metadata_registry=registry,
+    )
+
+    entry = metadata_loader.get_metadata("schema_test", metadata_registry=registry)
+
+    assert entry.target_table == "myschema.dimtable"
+    assert "schema_test" not in metadata_loader.METADATA_REGISTRY
+
+
 def test_expected_column_names_uses_configured_key_columns():
     metadata = DimensionMetadata(
         name="wrmp_scheme_classification",
@@ -290,9 +313,24 @@ def test_run_dimensions_in_dependency_order_runs_in_resolved_order(monkeypatch):
     )
 
     assert result == ["dim_region", "dim_scheme"]
+    expected_registry = {"dim_scheme": downstream, "dim_region": upstream}
     assert calls == [
-        (engine, "dim_region", {"staging_use_openrowset_parquet": True}),
-        (engine, "dim_scheme", {"staging_use_openrowset_parquet": True}),
+        (
+            engine,
+            "dim_region",
+            {
+                "metadata_registry": expected_registry,
+                "staging_use_openrowset_parquet": True,
+            },
+        ),
+        (
+            engine,
+            "dim_scheme",
+            {
+                "metadata_registry": expected_registry,
+                "staging_use_openrowset_parquet": True,
+            },
+        ),
     ]
 
 
@@ -331,6 +369,37 @@ def test_run_dimensions_in_dependency_order_uses_selected_names(monkeypatch):
 
     assert result == ["dim_b"]
     assert executed == ["dim_b"]
+
+
+def test_run_dimensions_in_dependency_order_passes_explicit_registry_to_run_dimension(monkeypatch):
+    registry = {}
+    metadata_loader.register_metadata(
+        "dim_a",
+        {
+            "target_table": "Dimensions.dim_a",
+            "natural_key_cols": ["A_Cd"],
+            "data_columns": {"A_Name": {"type": "TEXT", "nullable": True}},
+            "surrogate_key": "A_Instance_Id",
+            "join_numeric_key": "A_Id",
+            "filepath": "a.xlsx",
+        },
+        metadata_registry=registry,
+    )
+
+    captured = []
+    monkeypatch.setattr(
+        metadata_loader,
+        "run_dimension",
+        lambda _engine, name, **kwargs: captured.append(kwargs["metadata_registry"]) or name,
+    )
+
+    result = run_dimensions_in_dependency_order(
+        object(),
+        metadata_registry=registry,
+    )
+
+    assert result == ["dim_a"]
+    assert captured == [registry]
 
 
 def test_dependency_where_clause_filters_join():

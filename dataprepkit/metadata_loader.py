@@ -122,6 +122,7 @@ def register_metadata(
     name: str,
     metadata: Dict[str, object],
     *,
+    metadata_registry: Dict[str, DimensionMetadata] | None = None,
     archive_base_dir: str | None = None,
     archive_batch_id: str | None = None,
     batch_id: str | None = None,
@@ -158,7 +159,8 @@ def register_metadata(
             base_dir=archive_config.get("base_dir", ""),
         )
         metadata["archive_path"] = path_info.file_path
-    METADATA_REGISTRY[name] = DimensionMetadata(name=name, **metadata)
+    registry = metadata_registry if metadata_registry is not None else METADATA_REGISTRY
+    registry[name] = DimensionMetadata(name=name, **metadata)
 
 
 def _register_default_metadata() -> None:
@@ -222,10 +224,14 @@ def _default_csv_reader(filepath: str) -> pd.DataFrame:
         )
     )
 
-def get_metadata(name: str) -> DimensionMetadata:
+def get_metadata(
+    name: str,
+    metadata_registry: Mapping[str, DimensionMetadata] | None = None,
+) -> DimensionMetadata:
     """Return metadata record by name."""
+    registry = metadata_registry if metadata_registry is not None else METADATA_REGISTRY
     try:
-        return METADATA_REGISTRY[name]
+        return registry[name]
     except KeyError as exc:
         raise KeyError(f"Unknown metadata entry: '{name}'") from exc
 
@@ -293,7 +299,12 @@ def run_dimensions_in_dependency_order(
     )
     execution_order = resolve_dimension_execution_order(selected_registry)
     return [
-        run_dimension(engine, name, **run_dimension_kwargs)
+        run_dimension(
+            engine,
+            name,
+            metadata_registry=selected_registry,
+            **run_dimension_kwargs,
+        )
         for name in execution_order
     ]
 
@@ -302,6 +313,7 @@ def run_dimension(
     engine: Engine,
     metadata_name: str,
     *,
+    metadata_registry: Mapping[str, DimensionMetadata] | None = None,
     override_df: pd.DataFrame | None = None,
     csv_reader: callable = _default_csv_reader,
     staging_use_openrowset_parquet: bool = False,
@@ -331,7 +343,7 @@ def run_dimension(
     staging_copy_into_options
         Optional OPENROWSET options suffix (for example ", MAXERRORS = 10").
     """
-    metadata = get_metadata(metadata_name)
+    metadata = get_metadata(metadata_name, metadata_registry=metadata_registry)
     incoming = (
         override_df.copy()
         if override_df is not None
@@ -478,6 +490,7 @@ def run_dimension_copy_into(
     engine: Engine,
     metadata_name: str,
     *,
+    metadata_registry: Mapping[str, DimensionMetadata] | None = None,
     destination_table: str,
     copy_source_base_url: str,
     parquet_base_dir: str,
@@ -490,7 +503,7 @@ def run_dimension_copy_into(
 
     Returns the external source URL used in the COPY INTO command.
     """
-    metadata = get_metadata(metadata_name)
+    metadata = get_metadata(metadata_name, metadata_registry=metadata_registry)
     incoming = (
         override_df.copy()
         if override_df is not None
