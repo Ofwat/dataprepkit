@@ -183,6 +183,7 @@ def _read_excel_one_sheet_openpyxl(filepath: str) -> pd.DataFrame:
     header, data = rows[0], rows[1:]
 
     df = pd.DataFrame(data, columns=header)
+    df = df.dropna(how="all")
     df = df.fillna("")
     return df
 

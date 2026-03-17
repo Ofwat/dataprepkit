@@ -174,6 +174,29 @@ def test_default_csv_reader_handles_excel(tmp_path):
     assert metadata_loader.pd.isna(result_with_missing["col"]).sum() == 0
 
 
+def test_default_csv_reader_drops_fully_blank_excel_rows(tmp_path):
+    try:
+        import openpyxl  # noqa: F401
+    except ImportError:
+        pytest.skip("openpyxl is required to test Excel input")
+
+    data = metadata_loader.pd.DataFrame(
+        {
+            "col": ["x", None, None, "y"],
+            "num": [1, None, None, 2],
+        }
+    )
+    src = tmp_path / "data_with_blank_rows.xlsx"
+    data.to_excel(src, index=False)
+
+    result = metadata_loader._default_csv_reader(str(src))
+
+    assert result.to_dict("records") == [
+        {"col": "x", "num": 1},
+        {"col": "y", "num": 2},
+    ]
+
+
 def test_default_csv_reader_handles_parquet(tmp_path, monkeypatch):
     src = tmp_path / "data.parquet"
     src.touch()
