@@ -17,6 +17,7 @@ from dataprepkit.fact_loader import (
     MissingStageFileError,
     StageFileSpec,
     TableRef,
+    _fact_pk_clause,
     assert_columns_have_single_distinct_row,
     assert_columns_not_null,
     assert_columns_unique,
@@ -27,6 +28,16 @@ from dataprepkit.fact_loader import (
 
 def _create_file(path: Path, *, content: bytes) -> None:
     path.write_bytes(content)
+
+
+def test_fact_pk_clause_defaults_to_int_for_mssql():
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    assert _fact_pk_clause(_FakeEngine(), "fact_id") == "fact_id INT IDENTITY(1,1) PRIMARY KEY"
 
 
 def _create_engine_with_table(engine):

@@ -279,10 +279,10 @@ def _render_column_defs(
 
 def _fact_pk_clause(engine: Engine, column_name: str) -> str:
     if engine.dialect.name == "mssql":
-        return f"{column_name} BIGINT IDENTITY(1,1) PRIMARY KEY"
+        return f"{column_name} INT IDENTITY(1,1) PRIMARY KEY"
     if engine.dialect.name == "sqlite":
         return f"{column_name} INTEGER PRIMARY KEY AUTOINCREMENT"
-    return f"{column_name} BIGINT PRIMARY KEY"
+    return f"{column_name} INT PRIMARY KEY"
 
 
 def _ensure_temp_table(
@@ -685,18 +685,18 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
         surrogate_col = spec.surrogate_column or _default_surrogate_column_name(
             spec.dim_table
         )
-        temp_columns.setdefault(surrogate_col, "BIGINT")
+        temp_columns.setdefault(surrogate_col, "INT")
         for col in spec.add_columns:
-            temp_columns.setdefault(col, "BIGINT")
+            temp_columns.setdefault(col, "INT")
         for col in spec.internal_columns:
-            temp_columns.setdefault(col, "BIGINT")
+            temp_columns.setdefault(col, "INT")
         for chained in spec.join_chain:
             _register_dimension_columns(chained)
 
     for dimension in config.dimensions:
         _register_dimension_columns(dimension)
     for extra in config.extra_columns:
-        temp_columns.setdefault(extra.column, "BIGINT")
+        temp_columns.setdefault(extra.column, "INT")
     _ensure_temp_table(engine, config.temp_table, temp_columns)
     if not base_cols:
         raise RuntimeError("No base columns defined for temp table copy")
