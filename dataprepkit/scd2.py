@@ -105,7 +105,7 @@ def apply_changes(
             rows = conn.execute(
                 text(
                     f"SELECT {select_cols} FROM {target_table} "
-                    f"WHERE {cols['current_ind']} = 1 AND {cols['deleted_ind']} = 0"
+                    f"WHERE {cols['current_ind']} = 1"
                 )
             ).fetchall()
             for row in rows:

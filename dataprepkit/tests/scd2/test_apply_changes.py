@@ -367,7 +367,7 @@ def test_synchronize_current_row_hashes_enables_repair_of_poisoned_rows():
     assert current.iloc[0]["data_column"] == "after"
 
 
-def test_reinsert_grows_past_current_max():
+def test_reinsert_reuses_deleted_current_join_numeric_even_if_lower_than_max():
     engine = create_engine("sqlite:///:memory:")
     initial_rows = [
         _build_initial_row("z1", 10, "old"),
@@ -387,7 +387,7 @@ def test_reinsert_grows_past_current_max():
         system_columns=SYSTEM_COLUMNS,
     )
 
-    # Reinsert z1 and expect join numeric to exceed previous max (20)
+    # Reinsert z1 and expect the original join numeric to be reused.
     reinsert = pd.DataFrame([{"join_key": "z1", "join_numeric_key": 10, "data_column": "new"}])
     apply_changes(
         engine=engine,
@@ -403,10 +403,10 @@ def test_reinsert_grows_past_current_max():
     final = _read_table(engine)
     current = final.loc[(final.join_key == "z1") & (final.Current_Ind == 1)]
     assert not current.empty
-    assert current.iloc[0]["join_numeric_key"] > 20
+    assert current.iloc[0]["join_numeric_key"] == 10
 
 
-def test_reinsert_gets_new_join_numeric():
+def test_reinsert_reuses_deleted_current_join_numeric():
     engine = create_engine("sqlite:///:memory:")
     initial_rows = [
         _build_initial_row("z1", 1, "old"),
@@ -445,11 +445,10 @@ def test_reinsert_gets_new_join_numeric():
     final = _read_table(engine)
     reinserted = final.loc[(final.join_key == "z1") & (final.Current_Ind == 1)]
     assert not reinserted.empty
-    # Join numeric should have advanced from previous max
-    assert reinserted.iloc[0]["join_numeric_key"] > 1
+    assert reinserted.iloc[0]["join_numeric_key"] == 1
 
 
-def test_reinsert_after_delete_uses_new_join_numeric():
+def test_reinsert_after_delete_reuses_existing_join_numeric():
     engine = create_engine("sqlite:///:memory:")
     initial_rows = [
         _build_initial_row("a1", 1, "a2"),
@@ -473,9 +472,6 @@ def test_reinsert_after_delete_uses_new_join_numeric():
         surrogate_key_col="surrogate_key",
         system_columns=SYSTEM_COLUMNS,
     )
-
-    updated = _read_table(engine)
-    max_join_after_update = updated["join_numeric_key"].max()
 
     # Delete the current b1 so we can reinsert it.
     apply_changes(
@@ -503,7 +499,7 @@ def test_reinsert_after_delete_uses_new_join_numeric():
 
     final = _read_table(engine)
     current = final.loc[(final.join_key == "b1") & (final.Current_Ind == 1)].iloc[0]
-    assert current["join_numeric_key"] > max_join_after_update
+    assert current["join_numeric_key"] == 2
 
 
 def test_apply_changes_returns_flag_for_no_delta():
