@@ -349,6 +349,7 @@ def run_dimension(
         if override_df is not None
         else csv_reader(metadata.filepath)
     )
+    archive_snapshot = incoming.copy()
     logger.info(
         "Read raw snapshot for %s from %s (%d rows, columns=%s)",
         metadata_name,
@@ -473,7 +474,7 @@ def run_dimension(
         if archive_dest:
             if {"batch_id", "archive_filename"} <= system_columns.keys():
                 if changes_applied:
-                    _archive_snapshot(incoming, metadata, archive_dest)
+                    _archive_snapshot(archive_snapshot, metadata, archive_dest)
             else:
                 missing_cols = {"batch_id", "archive_filename"} - set(system_columns.keys())
                 logger.warning(
@@ -627,6 +628,15 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
     logger.info("Creating target table %s with DDL:\n%s", metadata.target_table, create_sql)
     with engine.begin() as conn:
         conn.execute(text(create_sql))
+        conn.execute(
+            text(
+                _current_business_key_index_sql(
+                    metadata.target_table,
+                    metadata.natural_key_cols,
+                    DEFAULT_SYSTEM_COLUMNS["current_ind"],
+                )
+            )
+        )
 
 
 def _split_table_name(name: str) -> tuple[str | None, str]:
@@ -637,6 +647,15 @@ def _split_table_name(name: str) -> tuple[str | None, str]:
     schema = schema.strip("[]\"")
     table = table.strip("[]\"")
     return schema, table
+
+
+def _current_business_key_index_sql(
+    target_table: str, natural_key_cols: Sequence[str], current_ind: str
+) -> str:
+    _, table = _split_table_name(target_table)
+    index_columns = [*natural_key_cols, current_ind]
+    index_name = f"ix_{table}_{'_'.join(index_columns)}"
+    return f"CREATE INDEX {index_name} ON {target_table} ({', '.join(index_columns)})"
 
 
 def _normalize_table_key(schema: str | None, table: str) -> tuple[str | None, str]:
@@ -891,14 +910,14 @@ def _evolve_table_columns(
 def _surrogate_column_clause(engine: Engine, name: str) -> str:
     dialect = engine.dialect.name
     if dialect == "mssql":
-        return f"{name} BIGINT IDENTITY(1,1) PRIMARY KEY"
+        return f"{name} INT IDENTITY(1,1) PRIMARY KEY"
     return f"{name} INTEGER PRIMARY KEY AUTOINCREMENT"
 
 
 def _join_numeric_clause(engine: Engine, name: str) -> str:
     dialect = engine.dialect.name
     if dialect == "mssql":
-        return f"{name} BIGINT NOT NULL"
+        return f"{name} INT NOT NULL"
     return f"{name} INTEGER NOT NULL"
 
 

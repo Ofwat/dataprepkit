@@ -5,9 +5,12 @@ from dataprepkit.metadata_loader import (
     DimensionDependencyError,
     DependencyJoin,
     DimensionMetadata,
+    _current_business_key_index_sql,
+    _join_numeric_clause,
     _apply_table_and_column_comments,
     _apply_system_column_comments,
     _expected_column_names,
+    _surrogate_column_clause,
     build_dimension_dependency_graph,
     resolve_dimension_execution_order,
     run_dimensions_in_dependency_order,
@@ -119,6 +122,32 @@ def test_expected_column_names_uses_configured_key_columns():
     assert "WRMP_Scheme_Classification_Id" in expected
     assert "surrogate_key" not in expected
     assert "join_numeric_key" not in expected
+
+
+def test_mssql_key_column_clauses_default_to_int():
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    engine = _FakeEngine()
+
+    assert _surrogate_column_clause(engine, "dim_id") == "dim_id INT IDENTITY(1,1) PRIMARY KEY"
+    assert _join_numeric_clause(engine, "join_id") == "join_id INT NOT NULL"
+
+
+def test_current_business_key_index_sql_uses_business_keys_and_current_ind():
+    sql = _current_business_key_index_sql(
+        "Dimensions.dim_measure",
+        ["Measure_Cd", "Region_Cd"],
+        "Current_Ind",
+    )
+
+    assert (
+        sql
+        == "CREATE INDEX ix_dim_measure_Measure_Cd_Region_Cd_Current_Ind ON Dimensions.dim_measure (Measure_Cd, Region_Cd, Current_Ind)"
+    )
 
 
 def test_build_dimension_dependency_graph_orders_registered_dimensions():
@@ -647,6 +676,106 @@ def test_register_metadata_applies_archive_defaults(tmp_path):
     assert "dimtable__" in entry.archive_path
     assert entry.archive_path.startswith(str(tmp_path / "archive"))
     metadata_loader.METADATA_REGISTRY.pop("archive_default", None)
+
+
+def test_run_dimension_archives_raw_input_snapshot_before_dependency_joins(tmp_path, monkeypatch):
+    registry = {}
+    metadata_loader.register_metadata(
+        "archive_snapshot_test",
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": {"data_column": {"type": "TEXT"}},
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+            "dependencies": [
+                {
+                    "table": "dep_dim",
+                    "on": [{"source": "dep_key", "target": "dep_key"}],
+                    "select": {"joined_value": "joined_value"},
+                    "on_missing": "null",
+                }
+            ],
+        },
+        metadata_registry=registry,
+        archive_base_dir=str(tmp_path / "archive"),
+        archive_batch_id="batch1",
+    )
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dep_dim (
+                    dep_key TEXT NOT NULL,
+                    Current_Ind INTEGER NOT NULL,
+                    joined_value TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dep_dim (dep_key, Current_Ind, joined_value)
+                VALUES ('D1', 1, 'joined')
+                """
+            )
+        )
+
+    raw_input = metadata_loader.pd.DataFrame(
+        [
+            {
+                "natural_key": "k1",
+                "data_column": "v1",
+                "dep_key": "D1",
+                "raw_extra": "keep-me",
+            }
+        ]
+    )
+    captured = {}
+
+    monkeypatch.setattr(metadata_loader, "_ensure_target_table", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(metadata_loader, "_apply_table_description", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(metadata_loader, "_post_scd2_validation", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        metadata_loader,
+        "_get_target_columns",
+        lambda *_args, **_kwargs: {
+            "data_column",
+            metadata_loader.DEFAULT_SYSTEM_COLUMNS["batch_id"],
+            metadata_loader.DEFAULT_SYSTEM_COLUMNS["archive_filename"],
+        },
+    )
+    monkeypatch.setattr(metadata_loader, "apply_changes", lambda **_kwargs: True)
+    monkeypatch.setattr(
+        metadata_loader,
+        "_archive_snapshot",
+        lambda incoming, _metadata, _path: captured.setdefault("archived", incoming.copy()),
+    )
+
+    metadata_loader.run_dimension(
+        engine,
+        "archive_snapshot_test",
+        metadata_registry=registry,
+        override_df=raw_input,
+    )
+
+    archived = captured["archived"]
+    assert list(archived.columns) == ["natural_key", "data_column", "dep_key", "raw_extra"]
+    assert archived.iloc[0].to_dict() == {
+        "natural_key": "k1",
+        "data_column": "v1",
+        "dep_key": "D1",
+        "raw_extra": "keep-me",
+    }
+    assert "joined_value" not in archived.columns
+
+
+def test_cast_data_columns_parses_datetime():
+    metadata_loader.METADATA_REGISTRY.pop("cast_test", None)
     metadata_loader.register_metadata(
         "cast_test",
         {
