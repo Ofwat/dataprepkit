@@ -114,6 +114,7 @@ def _validate_insert(result):
     assert current == {"a1", "b1", "c1"}
     assert result.shape[0] == 3
     assert not result.loc[result.join_key == "c1", "Deleted_Ind"].any()
+    assert result.loc[result.join_key == "c1", "Effective_Date_Start"].iloc[0] == EFFECTIVE_DATE_MIN
     assert result.loc[result.join_key == "c1", "Effective_Date_End"].iloc[0] == EFFECTIVE_DATE_MAX
 
 

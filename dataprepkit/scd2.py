@@ -602,7 +602,7 @@ def _apply_snapshot_to_target(
             f"s.{hash_col}",
             ":execution_time",
             "NULL",
-            ":execution_time",
+            "CASE WHEN s.existing_join_numeric IS NULL THEN :effective_date_min ELSE :execution_time END",
             ":effective_date_max",
             "1",
             "0",
@@ -632,6 +632,7 @@ def _apply_snapshot_to_target(
     params = {
         "join_numeric_base": max_join_numeric,
         "execution_time": execution_time,
+        "effective_date_min": EFFECTIVE_DATE_MIN,
         "effective_date_max": EFFECTIVE_DATE_MAX,
     }
     if has_batch_id and batch_id is not None:
