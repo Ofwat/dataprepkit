@@ -107,10 +107,10 @@ def _validate_insert(result):
 def _validate_delete(result):
     deleted = result.loc[(result.join_key == "d1") & (result.Deleted_Ind == 1)]
     assert not deleted.empty
-    assert deleted.iloc[0]["Current_Ind"] == 0
+    assert deleted.iloc[0]["Current_Ind"] == 1
     assert deleted.iloc[0]["Update_Date"] is not None
     current = set(result.loc[result.Current_Ind == 1, "join_key"])
-    assert current == {"a1", "b1", "c1"}
+    assert current == {"a1", "b1", "c1", "d1"}
 
 
 def _validate_update(result):
@@ -273,7 +273,7 @@ def test_delete_marks_row_as_historical():
     final = _read_table(engine)
     deleted = final.loc[final.join_key == "d1"]
     assert not deleted.empty
-    assert deleted.iloc[0]["Current_Ind"] == 0
+    assert deleted.iloc[0]["Current_Ind"] == 1
     assert deleted.iloc[0]["Deleted_Ind"] == 1
     assert pd.notna(deleted.iloc[0]["Update_Date"])
 

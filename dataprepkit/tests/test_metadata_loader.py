@@ -651,6 +651,45 @@ def test_dependency_join_inner_keeps_matched_rows_with_null_selected_values():
     ]
 
 
+def test_dependency_join_filters_out_deleted_current_rows():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_service (
+                    Service_Type_Cd TEXT NOT NULL,
+                    Current_Ind INTEGER NOT NULL,
+                    Deleted_Ind INTEGER NOT NULL,
+                    Policy_Flag TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_service (Service_Type_Cd, Current_Ind, Deleted_Ind, Policy_Flag)
+                VALUES ('S1', 1, 1, 'deleted-current')
+                """
+            )
+        )
+
+    incoming = metadata_loader.pd.DataFrame({"Service_Type_Cd": ["S1"]})
+    dependency = DependencyJoin(
+        table="dim_service",
+        on=[{"source": "Service_Type_Cd", "target": "Service_Type_Cd"}],
+        select={"Policy_Flag": "Policy_Flag"},
+        on_missing="null",
+    )
+
+    joined = metadata_loader._apply_dependency_joins(incoming, [dependency], engine)
+
+    assert joined.to_dict("records") == [
+        {"Service_Type_Cd": "S1", "Policy_Flag": None}
+    ]
+
+
 def test_cast_data_columns_parses_datetime():
     metadata_loader.METADATA_REGISTRY.pop("cast_test", None)
 

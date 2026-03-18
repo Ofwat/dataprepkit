@@ -949,6 +949,15 @@ def _apply_dependency_joins(
         where_clauses = []
         if dep.filter_target_current:
             where_clauses.append("[Current_Ind] = 1")
+            try:
+                inspector = inspect(engine)
+                dep_columns = {
+                    column["name"] for column in inspector.get_columns(table, schema=schema)
+                }
+            except Exception:
+                dep_columns = set()
+            if "Deleted_Ind" in dep_columns:
+                where_clauses.append("[Deleted_Ind] = 0")
         for expressions in dep.where.values():
             where_clauses.extend(expressions)
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
@@ -1115,13 +1124,7 @@ def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence
     validation_checks = [
         (
             text(
-                f"SELECT {top}1 FROM {table} WHERE Current_Ind = 1 AND Deleted_Ind = 1{limit}"
-            ),
-            "row has Current_Ind=1 and Deleted_Ind=1",
-        ),
-        (
-            text(
-                f"SELECT {top}1 FROM {table} WHERE Current_Ind = 1 AND Update_Date IS NOT NULL{limit}"
+                f"SELECT {top}1 FROM {table} WHERE Current_Ind = 1 AND Deleted_Ind = 0 AND Update_Date IS NOT NULL{limit}"
             ),
             "current row has Update_Date not NULL",
         ),

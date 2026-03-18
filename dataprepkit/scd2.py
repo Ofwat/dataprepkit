@@ -104,7 +104,8 @@ def apply_changes(
             select_cols = ", ".join(natural_key_cols + [join_numeric_key_col])
             rows = conn.execute(
                 text(
-                    f"SELECT {select_cols} FROM {target_table} WHERE {cols['current_ind']} = 1"
+                    f"SELECT {select_cols} FROM {target_table} "
+                    f"WHERE {cols['current_ind']} = 1 AND {cols['deleted_ind']} = 0"
                 )
             ).fetchall()
             for row in rows:
@@ -514,10 +515,10 @@ def _apply_snapshot_to_target(
     delete_sql = text(
         f"""
         UPDATE {target_table}
-        SET {columns['current_ind']} = 0,
-            {columns['deleted_ind']} = 1,
+        SET {columns['deleted_ind']} = 1,
             {columns['update_date']} = :execution_time
         WHERE {columns['current_ind']} = 1
+          AND {columns['deleted_ind']} = 0
           AND NOT EXISTS (
             SELECT 1 FROM {staging_table} s
             WHERE {join_condition}
@@ -530,13 +531,15 @@ def _apply_snapshot_to_target(
         f"""
         UPDATE {target_table}
         SET {columns['current_ind']} = 0,
-            {columns['update_date']} = :execution_time,
-            {columns['deleted_ind']} = 0
+            {columns['update_date']} = :execution_time
         WHERE {columns['current_ind']} = 1
           AND EXISTS (
             SELECT 1 FROM {staging_table} s
             WHERE {join_condition}
-              AND s.{hash_col} != {target_table}.{hash_col}
+              AND (
+                s.{hash_col} != {target_table}.{hash_col}
+                OR {target_table}.{columns['deleted_ind']} = 1
+              )
           )
         """
     )
@@ -597,6 +600,7 @@ def _apply_snapshot_to_target(
             LEFT JOIN {target_table} t ON {current_join_condition}
             WHERE t.{columns['current_ind']} IS NULL
                OR s.{hash_col} != t.{hash_col}
+               OR t.{columns['deleted_ind']} = 1
         )
         INSERT INTO {target_table} ({', '.join(insert_columns)})
         SELECT
