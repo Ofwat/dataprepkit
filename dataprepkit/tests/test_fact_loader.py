@@ -388,7 +388,8 @@ def test_ingest_fact_creates_fact_table_when_missing(fact_engine):
         columns = conn.execute(text("PRAGMA table_info(fact)")).fetchall()
     assert count == 1
     pk_columns = [row[1] for row in columns if row[5] == 1]
-    assert pk_columns == ["fact_id"]
+    assert pk_columns == []
+    assert "fact_id" not in [row[1] for row in columns]
     not_null_flags = {row[1]: row[3] for row in columns}
     assert not_null_flags["batch_id"] == 1
     assert not_null_flags["Insert_Date"] == 1
@@ -706,7 +707,7 @@ def test_ingest_fact_same_batch_id_preserves_existing_pk_and_values(fact_engine)
     ingest_fact(fact_engine, config, batch_id="B9P")
     with fact_engine.connect() as conn:
         first = conn.execute(
-            text("SELECT fact_id, measure_value FROM fact WHERE batch_id='B9P'")
+            text("SELECT measure_value FROM fact WHERE batch_id='B9P'")
         ).one()
 
     with fact_engine.begin() as conn:
@@ -720,7 +721,7 @@ def test_ingest_fact_same_batch_id_preserves_existing_pk_and_values(fact_engine)
     ingest_fact(fact_engine, config, batch_id="B9P")
     with fact_engine.connect() as conn:
         second = conn.execute(
-            text("SELECT fact_id, measure_value FROM fact WHERE batch_id='B9P'")
+            text("SELECT measure_value FROM fact WHERE batch_id='B9P'")
         ).one()
 
     assert second == first
@@ -760,7 +761,7 @@ def test_ingest_fact_skips_duplicate_rows_across_different_batches(fact_engine):
 
     with fact_engine.connect() as conn:
         rows = conn.execute(
-            text("SELECT batch_id, measure_value FROM fact ORDER BY fact_id")
+            text("SELECT batch_id, measure_value FROM fact ORDER BY batch_id")
         ).fetchall()
     assert rows == [("B14", 14.5)]
 
@@ -799,7 +800,7 @@ def test_ingest_fact_inserts_changed_rows_across_different_batches(fact_engine):
 
     with fact_engine.connect() as conn:
         rows = conn.execute(
-            text("SELECT batch_id, measure_value FROM fact ORDER BY fact_id")
+            text("SELECT batch_id, measure_value FROM fact ORDER BY batch_id")
         ).fetchall()
     assert rows == [("B16", 16.5), ("B17", 17.5)]
 

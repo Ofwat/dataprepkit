@@ -80,7 +80,7 @@ class FactConfig:
     batch_id_column_type: Optional[str] = "NVARCHAR(4000)"
     archive_filename_column_name: str = "Archive_Filename"
     archive_filename_column_type: Optional[str] = "NVARCHAR(4000)"
-    fact_pk_column_name: str = "fact_id"
+    fact_pk_column_name: str | None = None
 
 
 @dataclass
@@ -326,7 +326,7 @@ def _ensure_fact_table(
     table_name: str | TableRef,
     columns: Mapping[str, Optional[str] | Mapping[str, object]],
     *,
-    fact_pk_column_name: str = "fact_id",
+    fact_pk_column_name: str | None = None,
 ) -> None:
     if not columns:
         return
@@ -338,12 +338,17 @@ def _ensure_fact_table(
     existing = _get_existing_columns(engine, table_name)
     if not existing:
         non_pk_columns = {
-            name: dtype for name, dtype in columns.items() if name != fact_pk_column_name
+            name: dtype
+            for name, dtype in columns.items()
+            if not fact_pk_column_name or name != fact_pk_column_name
         }
-        rendered_non_pk = _render_column_defs(non_pk_columns, engine)
-        column_defs = _fact_pk_clause(engine, fact_pk_column_name)
-        if rendered_non_pk:
-            column_defs = f"{column_defs}, {rendered_non_pk}"
+        column_defs = _render_column_defs(non_pk_columns, engine)
+        if fact_pk_column_name:
+            pk_clause = _fact_pk_clause(engine, fact_pk_column_name)
+            if column_defs:
+                column_defs = f"{pk_clause}, {column_defs}"
+            else:
+                column_defs = pk_clause
         try:
             with engine.begin() as conn:
                 conn.execute(text(f"CREATE TABLE {table_name_sql} ({column_defs})"))
@@ -362,7 +367,8 @@ def _ensure_fact_table(
     new_columns = {
         name: dtype
         for name, dtype in columns.items()
-        if name.lower() not in existing_lower and name != fact_pk_column_name
+        if name.lower() not in existing_lower
+        and (not fact_pk_column_name or name != fact_pk_column_name)
     }
     if not new_columns:
         return
