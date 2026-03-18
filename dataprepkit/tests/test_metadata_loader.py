@@ -10,6 +10,7 @@ from dataprepkit.metadata_loader import (
     _apply_table_and_column_comments,
     _apply_system_column_comments,
     _expected_column_names,
+    _post_scd2_validation,
     _surrogate_column_clause,
     build_dimension_dependency_graph,
     resolve_dimension_execution_order,
@@ -688,6 +689,36 @@ def test_dependency_join_filters_out_deleted_current_rows():
     assert joined.to_dict("records") == [
         {"Service_Type_Cd": "S1", "Policy_Flag": None}
     ]
+
+
+def test_post_scd2_validation_rejects_multiple_current_rows_for_same_key():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_service (
+                    Service_Type_Cd TEXT NOT NULL,
+                    Current_Ind INTEGER NOT NULL,
+                    Deleted_Ind INTEGER NOT NULL,
+                    Update_Date TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_service (Service_Type_Cd, Current_Ind, Deleted_Ind, Update_Date)
+                VALUES
+                    ('S1', 1, 1, '2026-03-18T10:00:00'),
+                    ('S1', 1, 0, NULL)
+                """
+            )
+        )
+
+    with pytest.raises(RuntimeError, match="Multiple current rows found for a natural key"):
+        _post_scd2_validation(engine, "dim_service", ["Service_Type_Cd"])
 
 
 def test_cast_data_columns_parses_datetime():

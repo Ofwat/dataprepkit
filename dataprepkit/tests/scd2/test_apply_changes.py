@@ -502,6 +502,39 @@ def test_reinsert_after_delete_reuses_existing_join_numeric():
     assert current["join_numeric_key"] == 2
 
 
+def test_delete_then_reinsert_keeps_exactly_one_current_row_per_business_key():
+    engine = create_engine("sqlite:///:memory:")
+    _bootstrap_table(engine, [_build_initial_row("b1", 2, "b2")])
+
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=pd.DataFrame([{"join_key": "other", "data_column": "placeholder"}]),
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=pd.DataFrame([{"join_key": "b1", "data_column": "b2-reinsert"}]),
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    final = _read_table(engine)
+    current_rows = final.loc[(final.join_key == "b1") & (final.Current_Ind == 1)]
+    assert len(current_rows) == 1
+    assert current_rows.iloc[0]["Deleted_Ind"] == 0
+    assert current_rows.iloc[0]["data_column"] == "b2-reinsert"
+
+
 def test_apply_changes_returns_flag_for_no_delta():
     engine = create_engine("sqlite:///:memory:")
     _bootstrap_table(engine, [_build_initial_row("x1", 1, "a")])
