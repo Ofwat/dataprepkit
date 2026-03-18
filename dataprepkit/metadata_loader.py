@@ -586,14 +586,21 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
         expected_columns = _expected_column_names(metadata)
         missing = expected_columns - current_columns
         if missing:
-            logger.warning(
-                "Existing table '%s' is missing metadata columns %s; schema handling=%s",
-                metadata.target_table,
-                missing,
-                metadata.schema_handling.mode,
-            )
             if metadata.schema_handling.mode == "evolve":
+                logger.info(
+                    "Existing table '%s' is missing metadata columns %s; schema handling=%s",
+                    metadata.target_table,
+                    missing,
+                    metadata.schema_handling.mode,
+                )
                 _evolve_table_columns(engine, metadata, missing)
+            else:
+                logger.warning(
+                    "Existing table '%s' is missing metadata columns %s; schema handling=%s",
+                    metadata.target_table,
+                    missing,
+                    metadata.schema_handling.mode,
+                )
         return
     natural_specs = {
         **{col: spec for col, spec in metadata.natural_key_specs.items()},

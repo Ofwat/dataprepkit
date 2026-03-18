@@ -42,6 +42,8 @@ def test_run_dimension_logs_row_count(caplog):
                     row_hash TEXT NOT NULL,
                     Insert_Date TEXT NOT NULL,
                     Update_Date TEXT,
+                    Effective_Date_Start TEXT NOT NULL,
+                    Effective_Date_End TEXT NOT NULL,
                     Current_Ind INTEGER NOT NULL,
                     Deleted_Ind INTEGER NOT NULL
                 )
@@ -75,6 +77,8 @@ def test_schema_drift_logs_safe_write_set(monkeypatch, caplog):
                     row_hash TEXT NOT NULL,
                     Insert_Date TEXT NOT NULL,
                     Update_Date TEXT,
+                    Effective_Date_Start TEXT NOT NULL,
+                    Effective_Date_End TEXT NOT NULL,
                     Current_Ind INTEGER NOT NULL,
                     Deleted_Ind INTEGER NOT NULL
                 )
@@ -101,7 +105,7 @@ def test_schema_drift_logs_safe_write_set(monkeypatch, caplog):
         captured["data_cols"] = kwargs["data_cols"]
 
     monkeypatch.setattr("dataprepkit.metadata_loader.apply_changes", fake_apply_changes)
-    caplog.set_level(logging.WARNING)
+    caplog.set_level(logging.INFO)
 
     run_dimension(
         engine,
@@ -152,6 +156,8 @@ def _create_dimension_table(engine):
                     row_hash TEXT NOT NULL,
                     Insert_Date TEXT NOT NULL,
                     Update_Date TEXT,
+                    Effective_Date_Start TEXT NOT NULL,
+                    Effective_Date_End TEXT NOT NULL,
                     Current_Ind INTEGER NOT NULL,
                     Deleted_Ind INTEGER NOT NULL
                 )
@@ -232,6 +238,8 @@ def _insert_row(engine, natural_key, join_numeric, current_ind=1, update_date=No
                     row_hash,
                     Insert_Date,
                     Update_Date,
+                    Effective_Date_Start,
+                    Effective_Date_End,
                     Current_Ind,
                     Deleted_Ind
                 ) VALUES (
@@ -241,6 +249,8 @@ def _insert_row(engine, natural_key, join_numeric, current_ind=1, update_date=No
                     'hash',
                     :insert_ts,
                     :update_ts,
+                    :effective_start,
+                    :effective_end,
                     :current_ind,
                     :deleted_ind
                 )
@@ -251,6 +261,8 @@ def _insert_row(engine, natural_key, join_numeric, current_ind=1, update_date=No
                 "join_numeric": join_numeric,
                 "insert_ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "update_ts": update_date,
+                "effective_start": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "effective_end": "9999-12-31T23:59:59.999" if current_ind else (update_date or "9999-12-31T23:59:59.999"),
                 "current_ind": current_ind,
                 "deleted_ind": 0 if current_ind else 1,
             },
@@ -545,6 +557,8 @@ def _create_dimension_table_with_archive(engine, table_name: str):
                     row_hash TEXT NOT NULL,
                     Insert_Date TEXT NOT NULL,
                     Update_Date TEXT,
+                    Effective_Date_Start TEXT NOT NULL,
+                    Effective_Date_End TEXT NOT NULL,
                     Current_Ind INTEGER NOT NULL,
                     Deleted_Ind INTEGER NOT NULL,
                     Batch_Id TEXT NOT NULL,
