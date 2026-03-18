@@ -35,11 +35,16 @@ DEFAULT_SYSTEM_COLUMNS = {
     "row_hash": "row_hash",
     "insert_date": "Insert_Date",
     "update_date": "Update_Date",
+    "effective_date_start": "Effective_Date_Start",
+    "effective_date_end": "Effective_Date_End",
     "current_ind": "Current_Ind",
     "deleted_ind": "Deleted_Ind",
     "batch_id": "Batch_Id",
     "archive_filename": "Archive_Filename",
 }
+
+EFFECTIVE_DATE_MIN = "1900-01-01T00:00:00.000"
+EFFECTIVE_DATE_MAX = "9999-12-31T23:59:59.999"
 
 
 class SCD2ValidationError(ValueError):
@@ -74,7 +79,15 @@ def apply_changes(
     columns. All writes happen within a single transaction for atomicity.
     """
     cols = system_columns or DEFAULT_SYSTEM_COLUMNS
-    required_keys = {"row_hash", "insert_date", "update_date", "current_ind", "deleted_ind"}
+    required_keys = {
+        "row_hash",
+        "insert_date",
+        "update_date",
+        "effective_date_start",
+        "effective_date_end",
+        "current_ind",
+        "deleted_ind",
+    }
     missing = required_keys - cols.keys()
     if missing:
         raise SCD2ValidationError(f"Missing system column configuration: {missing}")
@@ -516,7 +529,8 @@ def _apply_snapshot_to_target(
         f"""
         UPDATE {target_table}
         SET {columns['deleted_ind']} = 1,
-            {columns['update_date']} = :execution_time
+            {columns['update_date']} = :execution_time,
+            {columns['effective_date_end']} = :execution_time
         WHERE {columns['current_ind']} = 1
           AND {columns['deleted_ind']} = 0
           AND NOT EXISTS (
@@ -531,7 +545,8 @@ def _apply_snapshot_to_target(
         f"""
         UPDATE {target_table}
         SET {columns['current_ind']} = 0,
-            {columns['update_date']} = :execution_time
+            {columns['update_date']} = :execution_time,
+            {columns['effective_date_end']} = :execution_time
         WHERE {columns['current_ind']} = 1
           AND EXISTS (
             SELECT 1 FROM {staging_table} s
@@ -560,6 +575,8 @@ def _apply_snapshot_to_target(
             hash_col,
             columns["insert_date"],
             columns["update_date"],
+            columns["effective_date_start"],
+            columns["effective_date_end"],
             columns["current_ind"],
             columns["deleted_ind"],
         ]
@@ -585,6 +602,8 @@ def _apply_snapshot_to_target(
             f"s.{hash_col}",
             ":execution_time",
             "NULL",
+            ":execution_time",
+            ":effective_date_max",
             "1",
             "0",
         ]
@@ -610,7 +629,11 @@ def _apply_snapshot_to_target(
         """
     )
 
-    params = {"join_numeric_base": max_join_numeric, "execution_time": execution_time}
+    params = {
+        "join_numeric_base": max_join_numeric,
+        "execution_time": execution_time,
+        "effective_date_max": EFFECTIVE_DATE_MAX,
+    }
     if has_batch_id and batch_id is not None:
         params["batch_id"] = batch_id
     if has_archive_filename and archive_filename is not None:

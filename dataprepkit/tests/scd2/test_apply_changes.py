@@ -8,6 +8,8 @@ from sqlalchemy.exc import IntegrityError
 
 from dataprepkit.scd2 import SCD2ValidationError
 from dataprepkit.scd2 import (
+    EFFECTIVE_DATE_MAX,
+    EFFECTIVE_DATE_MIN,
     _create_staging_table,
     _insert_snapshot_rows,
     _insert_snapshot_rows_from_raw,
@@ -23,6 +25,8 @@ SYSTEM_COLUMNS = {
     "row_hash": "row_hash",
     "insert_date": "Insert_Date",
     "update_date": "Update_Date",
+    "effective_date_start": "Effective_Date_Start",
+    "effective_date_end": "Effective_Date_End",
     "current_ind": "Current_Ind",
     "deleted_ind": "Deleted_Ind",
 }
@@ -42,6 +46,8 @@ def _bootstrap_table(engine, rows):
         row_hash TEXT NOT NULL,
         Insert_Date TEXT NOT NULL,
         Update_Date TEXT,
+        Effective_Date_Start TEXT NOT NULL,
+        Effective_Date_End TEXT NOT NULL,
         Current_Ind INTEGER NOT NULL,
         Deleted_Ind INTEGER NOT NULL
     )
@@ -60,6 +66,8 @@ def _bootstrap_table(engine, rows):
                         row_hash,
                         Insert_Date,
                         Update_Date,
+                        Effective_Date_Start,
+                        Effective_Date_End,
                         Current_Ind,
                         Deleted_Ind
                     )
@@ -70,6 +78,8 @@ def _bootstrap_table(engine, rows):
                         :row_hash,
                         :Insert_Date,
                         :Update_Date,
+                        :Effective_Date_Start,
+                        :Effective_Date_End,
                         :Current_Ind,
                         :Deleted_Ind
                     )
@@ -92,6 +102,8 @@ def _build_initial_row(join_key, join_numeric_key, data_column, current_ind=1, d
         "row_hash": _hash_value(data_column),
         "Insert_Date": insert_ts.isoformat(),
         "Update_Date": update_ts.isoformat() if update_ts else None,
+        "Effective_Date_Start": insert_ts.isoformat(),
+        "Effective_Date_End": EFFECTIVE_DATE_MAX if current_ind else (update_ts.isoformat() if update_ts else EFFECTIVE_DATE_MAX),
         "Current_Ind": current_ind,
         "Deleted_Ind": deleted_ind,
     }
@@ -102,6 +114,7 @@ def _validate_insert(result):
     assert current == {"a1", "b1", "c1"}
     assert result.shape[0] == 3
     assert not result.loc[result.join_key == "c1", "Deleted_Ind"].any()
+    assert result.loc[result.join_key == "c1", "Effective_Date_End"].iloc[0] == EFFECTIVE_DATE_MAX
 
 
 def _validate_delete(result):
@@ -109,6 +122,7 @@ def _validate_delete(result):
     assert not deleted.empty
     assert deleted.iloc[0]["Current_Ind"] == 1
     assert deleted.iloc[0]["Update_Date"] is not None
+    assert deleted.iloc[0]["Effective_Date_End"] == deleted.iloc[0]["Update_Date"]
     current = set(result.loc[result.Current_Ind == 1, "join_key"])
     assert current == {"a1", "b1", "c1", "d1"}
 
@@ -120,6 +134,8 @@ def _validate_update(result):
     assert len(history) == 1
     assert history.iloc[0]["Deleted_Ind"] == 0
     assert current_rows.iloc[0]["data_column"] == "c2222"
+    assert current_rows.iloc[0]["Effective_Date_End"] == EFFECTIVE_DATE_MAX
+    assert history.iloc[0]["Effective_Date_End"] == history.iloc[0]["Update_Date"]
 
 
 def _validate_reinsert(result):
@@ -681,6 +697,8 @@ def test_nullable_data_column_allows_null_staging():
                     row_hash TEXT NOT NULL,
                     Insert_Date TEXT NOT NULL,
                     Update_Date TEXT,
+                    Effective_Date_Start TEXT NOT NULL,
+                    Effective_Date_End TEXT NOT NULL,
                     Current_Ind INTEGER NOT NULL,
                     Deleted_Ind INTEGER NOT NULL
                 )

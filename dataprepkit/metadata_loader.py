@@ -15,7 +15,11 @@ from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection, Engine
 
 from dataprepkit.helpers.schema import ensure_schema_exists
-from dataprepkit.scd2 import DEFAULT_SYSTEM_COLUMNS, apply_changes
+from dataprepkit.scd2 import (
+    DEFAULT_SYSTEM_COLUMNS,
+    EFFECTIVE_DATE_MAX,
+    apply_changes,
+)
 from dataprepkit.storage import archive_dataframe_path
 
 
@@ -611,6 +615,8 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
         f"{DEFAULT_SYSTEM_COLUMNS['row_hash']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['row_hash'], engine)} NOT NULL",
         f"{DEFAULT_SYSTEM_COLUMNS['insert_date']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['insert_date'], engine)} NOT NULL",
         f"{DEFAULT_SYSTEM_COLUMNS['update_date']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['update_date'], engine)}",
+        f"{DEFAULT_SYSTEM_COLUMNS['effective_date_start']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['effective_date_start'], engine)} NOT NULL",
+        f"{DEFAULT_SYSTEM_COLUMNS['effective_date_end']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['effective_date_end'], engine)} NOT NULL",
         f"{DEFAULT_SYSTEM_COLUMNS['current_ind']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['current_ind'], engine)} NOT NULL",
         f"{DEFAULT_SYSTEM_COLUMNS['deleted_ind']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['deleted_ind'], engine)} NOT NULL",
         f"{DEFAULT_SYSTEM_COLUMNS['batch_id']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['batch_id'], engine)} NOT NULL",
@@ -761,6 +767,8 @@ def _system_column_comments(metadata: DimensionMetadata | None = None) -> dict[s
         DEFAULT_SYSTEM_COLUMNS["deleted_ind"]: "Indicates whether row is marked deleted",
         DEFAULT_SYSTEM_COLUMNS["insert_date"]: "Insert timestamp",
         DEFAULT_SYSTEM_COLUMNS["update_date"]: "Last update timestamp",
+        DEFAULT_SYSTEM_COLUMNS["effective_date_start"]: "Effective start timestamp",
+        DEFAULT_SYSTEM_COLUMNS["effective_date_end"]: "Effective end timestamp",
     }
     if metadata:
         comments.setdefault(
@@ -1130,6 +1138,12 @@ def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence
         ),
         (
             text(
+                f"SELECT {top}1 FROM {table} WHERE Current_Ind = 1 AND {DEFAULT_SYSTEM_COLUMNS['effective_date_end']} != :effective_date_max{limit}"
+            ),
+            "current row has Effective_Date_End not at max",
+        ),
+        (
+            text(
                 f"SELECT {top}1 FROM {table} WHERE Current_Ind = 0 AND Update_Date IS NULL{limit}"
             ),
             "historical row missing Update_Date",
@@ -1140,7 +1154,7 @@ def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence
         if conn.execute(current_dups_sql).first():
             raise RuntimeError("Multiple current rows found for a natural key.")
         for sql_stmt, message in validation_checks:
-            if conn.execute(sql_stmt).first():
+            if conn.execute(sql_stmt, {"effective_date_max": EFFECTIVE_DATE_MAX}).first():
                 raise RuntimeError(f"Post-SCD2 validation failed: {message}")
 
 
