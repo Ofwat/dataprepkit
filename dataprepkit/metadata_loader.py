@@ -895,6 +895,11 @@ def _column_spec_for_missing(name: str, metadata: DimensionMetadata) -> ColumnSp
         return metadata.natural_key_specs[name]
     if name in metadata.natural_key_cols:
         return ColumnSpec(type=None, nullable=False)
+    if name in {
+        DEFAULT_SYSTEM_COLUMNS["effective_date_start"],
+        DEFAULT_SYSTEM_COLUMNS["effective_date_end"],
+    }:
+        return ColumnSpec(type="DATETIME2(3)", nullable=False)
     return metadata.data_columns.get(name)
 
 
@@ -903,9 +908,20 @@ def _evolve_table_columns(
     metadata: DimensionMetadata,
     missing_columns: set[str],
 ) -> None:
-    dialect = engine.dialect.name
     with engine.begin() as conn:
         for column in sorted(missing_columns):
+            if column in {
+                DEFAULT_SYSTEM_COLUMNS["effective_date_start"],
+                DEFAULT_SYSTEM_COLUMNS["effective_date_end"],
+            }:
+                _evolve_effective_date_column(conn, engine, metadata.target_table, column)
+                logger.info(
+                    "Evolved table %s by adding column %s for mode=%s",
+                    metadata.target_table,
+                    column,
+                    metadata.schema_handling.mode,
+                )
+                continue
             spec = _column_spec_for_missing(column, metadata)
             if spec is None:
                 logger.warning("Cannot evolve column '%s': no spec defined", column)
@@ -914,6 +930,39 @@ def _evolve_table_columns(
             add_sql = text(f"ALTER TABLE {metadata.target_table} ADD {clause}")
             conn.execute(add_sql)
             logger.info("Evolved table %s by adding column %s for mode=%s", metadata.target_table, column, metadata.schema_handling.mode)
+
+
+def _evolve_effective_date_column(conn: Connection, engine: Engine, table_name: str, column: str) -> None:
+    column_type = _system_column_type(column, engine)
+    conn.execute(text(f"ALTER TABLE {table_name} ADD {column} {column_type}"))
+    if column == DEFAULT_SYSTEM_COLUMNS["effective_date_start"]:
+        conn.execute(
+            text(
+                f"""
+                UPDATE {table_name}
+                SET {column} = {DEFAULT_SYSTEM_COLUMNS['insert_date']}
+                WHERE {column} IS NULL
+                """
+            )
+        )
+    else:
+        conn.execute(
+            text(
+                f"""
+                UPDATE {table_name}
+                SET {column} = CASE
+                    WHEN {DEFAULT_SYSTEM_COLUMNS['current_ind']} = 1
+                         AND {DEFAULT_SYSTEM_COLUMNS['deleted_ind']} = 0
+                    THEN :effective_date_max
+                    ELSE COALESCE({DEFAULT_SYSTEM_COLUMNS['update_date']}, :effective_date_max)
+                END
+                WHERE {column} IS NULL
+                """
+            ),
+            {"effective_date_max": EFFECTIVE_DATE_MAX},
+        )
+    if engine.dialect.name == "mssql":
+        conn.execute(text(f"ALTER TABLE {table_name} ALTER COLUMN {column} {column_type} NOT NULL"))
 
 def _surrogate_column_clause(engine: Engine, name: str) -> str:
     dialect = engine.dialect.name

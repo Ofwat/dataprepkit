@@ -9,6 +9,7 @@ from dataprepkit.metadata_loader import (
     _join_numeric_clause,
     _apply_table_and_column_comments,
     _apply_system_column_comments,
+    _evolve_table_columns,
     _expected_column_names,
     _post_scd2_validation,
     _surrogate_column_clause,
@@ -719,6 +720,87 @@ def test_post_scd2_validation_rejects_multiple_current_rows_for_same_key():
 
     with pytest.raises(RuntimeError, match="Multiple current rows found for a natural key"):
         _post_scd2_validation(engine, "dim_service", ["Service_Type_Cd"])
+
+
+def test_evolve_table_columns_backfills_effective_dates_for_existing_rows():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_service (
+                    Service_Type_Cd TEXT NOT NULL,
+                    Service_Name TEXT,
+                    surrogate_key INTEGER PRIMARY KEY,
+                    join_numeric_key INTEGER NOT NULL,
+                    row_hash TEXT NOT NULL,
+                    Insert_Date TEXT NOT NULL,
+                    Update_Date TEXT,
+                    Current_Ind INTEGER NOT NULL,
+                    Deleted_Ind INTEGER NOT NULL,
+                    Batch_Id TEXT NOT NULL,
+                    Archive_Filename TEXT NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_service (
+                    Service_Type_Cd,
+                    Service_Name,
+                    surrogate_key,
+                    join_numeric_key,
+                    row_hash,
+                    Insert_Date,
+                    Update_Date,
+                    Current_Ind,
+                    Deleted_Ind,
+                    Batch_Id,
+                    Archive_Filename
+                )
+                VALUES
+                    ('S1', 'Active', 1, 10, 'h1', '2026-03-18T10:00:00.000', NULL, 1, 0, 'b1', 'a1'),
+                    ('S2', 'Historic', 2, 20, 'h2', '2026-03-17T10:00:00.000', '2026-03-18T09:00:00.000', 0, 0, 'b1', 'a1')
+                """
+            )
+        )
+
+    metadata = DimensionMetadata(
+        name="dim_service",
+        target_table="dim_service",
+        natural_key_cols=["Service_Type_Cd"],
+        data_columns={"Service_Name": ColumnSpec(type="TEXT", nullable=True)},
+        surrogate_key="surrogate_key",
+        join_numeric_key="join_numeric_key",
+        filepath="dummy.csv",
+    )
+
+    _evolve_table_columns(
+        engine,
+        metadata,
+        {
+            metadata_loader.DEFAULT_SYSTEM_COLUMNS["effective_date_start"],
+            metadata_loader.DEFAULT_SYSTEM_COLUMNS["effective_date_end"],
+        },
+    )
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT Service_Type_Cd, Effective_Date_Start, Effective_Date_End
+                FROM dim_service
+                ORDER BY Service_Type_Cd
+                """
+            )
+        ).fetchall()
+
+    assert rows == [
+        ("S1", "2026-03-18T10:00:00.000", metadata_loader.EFFECTIVE_DATE_MAX),
+        ("S2", "2026-03-17T10:00:00.000", "2026-03-18T09:00:00.000"),
+    ]
 
 
 def test_cast_data_columns_parses_datetime():
