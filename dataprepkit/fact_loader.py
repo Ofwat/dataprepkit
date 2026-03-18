@@ -78,6 +78,8 @@ class FactConfig:
     extra_columns: Sequence[ExtraColumnSpec] = field(default_factory=list[ExtraColumnSpec])
     batch_id_column_name: str = "batch_id"
     batch_id_column_type: Optional[str] = "NVARCHAR(4000)"
+    archive_filename_column_name: str = "Archive_Filename"
+    archive_filename_column_type: Optional[str] = "NVARCHAR(4000)"
     fact_pk_column_name: str = "fact_id"
 
 
@@ -817,6 +819,11 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
         "type": config.batch_id_column_type,
         "nullable": False,
     }
+    if config.batch.input_archive_base_dir:
+        fact_columns_types[config.archive_filename_column_name] = {
+            "type": config.archive_filename_column_type,
+            "nullable": False,
+        }
     fact_columns_types["Insert_Date"] = {
         "type": "DATETIME2(3)",
         "nullable": False,
@@ -849,9 +856,18 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
 
     try:
         with engine.begin() as conn:
-            insert_cols = ", ".join(
-                [config.batch_id_column_name] + resolved_fact_columns + ["Insert_Date"]
+            insert_columns = [config.batch_id_column_name]
+            select_values = [":batch_id"]
+            if config.batch.input_archive_base_dir:
+                insert_columns.append(config.archive_filename_column_name)
+                select_values.append(":archive_filename")
+            insert_columns.extend(resolved_fact_columns)
+            insert_columns.append("Insert_Date")
+            select_values.extend(
+                f"s.{_quote_identifier(engine, col)}" for col in resolved_fact_columns
             )
+            select_values.append("CURRENT_TIMESTAMP")
+            insert_cols = ", ".join(insert_columns)
             select_cols = ", ".join(
                 f"s.{_quote_identifier(engine, col)}" for col in resolved_fact_columns
             )
@@ -859,7 +875,7 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
                 engine, "e", "s", resolved_fact_columns
             )
             select_clause = (
-                f"SELECT :batch_id, {select_cols}, CURRENT_TIMESTAMP "
+                f"SELECT {', '.join(select_values)} "
                 f"FROM {temp_table_sql} s "
                 f"WHERE NOT EXISTS ("
                 f"SELECT 1 FROM {fact_table_sql} e WHERE {duplicate_predicate}"
@@ -871,6 +887,9 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
                 {select_clause}
                 """
             )
-            conn.execute(insert_sql, {"batch_id": batch_id})
+            params = {"batch_id": batch_id}
+            if config.batch.input_archive_base_dir:
+                params["archive_filename"] = config.batch.input_archive_filename
+            conn.execute(insert_sql, params)
     except SQLAlchemyError as exc:
         raise RuntimeError("fact insert failed") from exc

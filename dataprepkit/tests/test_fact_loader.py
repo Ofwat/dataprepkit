@@ -847,6 +847,13 @@ def test_ingest_fact_archives_input_table_and_updates_metadata(
     assert archived_path.exists()
     assert archived_path.suffix == ".parquet"
     assert "staging__" in batch_metadata.input_archive_filename
+    with fact_engine.begin() as conn:
+        archive_value = conn.execute(
+            text(
+                "SELECT Archive_Filename FROM fact WHERE batch_id = 'B13'"
+            )
+        ).scalar_one()
+    assert archive_value == batch_metadata.input_archive_filename
 
 
 def test_ingest_fact_temp_columns_support_explicit_nullability(fact_engine):
