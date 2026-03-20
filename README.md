@@ -20,6 +20,7 @@ Each metadata entry registered via `register_metadata(name, metadata)` must incl
 | `dependencies` | Optional dependency definitions (see below). |
 | `run_policy` | Determines failure handling (`continue` or `abort`). |
 | `archive_path` | Optional location for parquet archives. |
+| `reserved_members` | Optional fixed-key dimension members such as `NA`; each member declares natural key values and a reserved surrogate key. |
 
 `ColumnSpec` fields:
 * `type`: SQL type (e.g., `NVARCHAR(4000)`, `DATETIME2(3)`).
@@ -27,6 +28,11 @@ Each metadata entry registered via `register_metadata(name, metadata)` must incl
 * `unique`: boolean flag.
 * `default`: SQL default expression.
 * `parse_format`: optional format string for datetime parsing before staging.
+
+Reserved member convention:
+* Use `reserved_members` when a dimension must carry fixed special members.
+* A reserved member must appear exactly once in the incoming snapshot or the load fails.
+* The current warehouse convention is `-1 = NA`.
 
 Example:
 

@@ -41,8 +41,12 @@ def _create_scd2_table(engine):
         row_hash TEXT,
         Insert_Date TEXT NOT NULL,
         Update_Date TEXT,
+        Effective_Date_Start TEXT NOT NULL,
+        Effective_Date_End TEXT NOT NULL,
         Current_Ind INTEGER NOT NULL,
-        Deleted_Ind INTEGER NOT NULL
+        Deleted_Ind INTEGER NOT NULL,
+        Batch_Id TEXT NOT NULL DEFAULT '',
+        Archive_Filename TEXT NOT NULL DEFAULT ''
     )
     """
     with engine.begin() as conn:
@@ -67,6 +71,132 @@ def test_run_dimension_uses_metadata(engine=None):
 
     assert result == 2
     METADATA_REGISTRY.pop("dummy_dimension", None)
+
+
+def test_run_dimension_reserved_member_missing_raises():
+    engine = create_engine("sqlite:///:memory:")
+    METADATA_REGISTRY.pop("reserved_dimension", None)
+    register_metadata(
+        "reserved_dimension",
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": {"data_column": {"type": "TEXT"}},
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+            "reserved_members": [
+                {
+                    "surrogate_key": -1,
+                    "natural_key_values": {"natural_key": "NA"},
+                }
+            ],
+        },
+    )
+
+    incoming = pd.DataFrame([{"natural_key": "A1", "data_column": "Alpha"}])
+
+    with pytest.raises(ValueError, match="Reserved member missing from input"):
+        run_dimension(engine, "reserved_dimension", override_df=incoming)
+
+    METADATA_REGISTRY.pop("reserved_dimension", None)
+
+
+def test_run_dimension_reserved_member_uses_fixed_surrogate_key():
+    engine = create_engine("sqlite:///:memory:")
+    METADATA_REGISTRY.pop("reserved_dimension", None)
+    register_metadata(
+        "reserved_dimension",
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": {"data_column": {"type": "TEXT"}},
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+            "reserved_members": [
+                {
+                    "surrogate_key": -1,
+                    "natural_key_values": {"natural_key": "NA"},
+                }
+            ],
+        },
+    )
+
+    incoming = pd.DataFrame(
+        [
+            {"natural_key": "NA", "data_column": "Not Applicable"},
+            {"natural_key": "A1", "data_column": "Alpha"},
+        ]
+    )
+
+    run_dimension(engine, "reserved_dimension", override_df=incoming)
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT surrogate_key, natural_key, join_numeric_key, data_column, Current_Ind
+                FROM dimension
+                ORDER BY surrogate_key
+                """
+            )
+        ).fetchall()
+
+    assert rows == [
+        (-1, "NA", 2, "Not Applicable", 1),
+        (1, "A1", 1, "Alpha", 1),
+    ]
+    METADATA_REGISTRY.pop("reserved_dimension", None)
+
+
+def test_run_dimension_reserved_member_is_idempotent():
+    engine = create_engine("sqlite:///:memory:")
+    METADATA_REGISTRY.pop("reserved_dimension", None)
+    register_metadata(
+        "reserved_dimension",
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": {"data_column": {"type": "TEXT"}},
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+            "reserved_members": [
+                {
+                    "surrogate_key": -1,
+                    "natural_key_values": {"natural_key": "NA"},
+                }
+            ],
+        },
+    )
+
+    incoming = pd.DataFrame(
+        [
+            {"natural_key": "NA", "data_column": "Not Applicable"},
+            {"natural_key": "A1", "data_column": "Alpha"},
+        ]
+    )
+
+    run_dimension(engine, "reserved_dimension", override_df=incoming)
+    run_dimension(engine, "reserved_dimension", override_df=incoming)
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT surrogate_key, natural_key, join_numeric_key, data_column, Current_Ind
+                FROM dimension
+                ORDER BY surrogate_key
+                """
+            )
+        ).fetchall()
+
+    assert rows == [
+        (-1, "NA", 2, "Not Applicable", 1),
+        (1, "A1", 1, "Alpha", 1),
+    ]
+    METADATA_REGISTRY.pop("reserved_dimension", None)
 
 
 def test_get_metadata_unknown_key_raises():
