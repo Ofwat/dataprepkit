@@ -105,34 +105,6 @@ def test_register_and_resolve_metadata_with_explicit_registry():
     assert "schema_test" not in metadata_loader.METADATA_REGISTRY
 
 
-def test_register_metadata_accepts_reserved_members():
-    registry = {}
-
-    metadata_loader.register_metadata(
-        "reserved_member_test",
-        {
-            "target_table": "dimtable",
-            "natural_key_cols": ["id"],
-            "data_columns": {"value": {"type": "TEXT"}},
-            "surrogate_key": "surrogate",
-            "join_numeric_key": "join_key",
-            "filepath": "dummy",
-            "reserved_members": [
-                {
-                    "surrogate_key": -1,
-                    "natural_key_values": {"id": "NA"},
-                }
-            ],
-        },
-        metadata_registry=registry,
-    )
-
-    entry = metadata_loader.get_metadata("reserved_member_test", metadata_registry=registry)
-
-    assert entry.reserved_members[0].surrogate_key == -1
-    assert entry.reserved_members[0].natural_key_values == {"id": "NA"}
-
-
 def test_expected_column_names_uses_configured_key_columns():
     metadata = DimensionMetadata(
         name="wrmp_scheme_classification",

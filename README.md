@@ -20,7 +20,6 @@ Each metadata entry registered via `register_metadata(name, metadata)` must incl
 | `dependencies` | Optional dependency definitions (see below). |
 | `run_policy` | Determines failure handling (`continue` or `abort`). |
 | `archive_path` | Optional location for parquet archives. |
-| `reserved_members` | Optional fixed-key dimension members such as `NA`; each member declares natural key values and a reserved surrogate key. |
 
 `ColumnSpec` fields:
 * `type`: SQL type (e.g., `NVARCHAR(4000)`, `DATETIME2(3)`).
@@ -29,10 +28,11 @@ Each metadata entry registered via `register_metadata(name, metadata)` must incl
 * `default`: SQL default expression.
 * `parse_format`: optional format string for datetime parsing before staging.
 
-Reserved member convention:
-* Use `reserved_members` when a dimension must carry fixed special members.
-* A reserved member must appear exactly once in the incoming snapshot or the load fails.
-* The current warehouse convention is `-1 = NA`.
+Reserved `NA` convention:
+* Any row whose natural key columns are all `"NA"` is treated as the reserved `NA` member automatically.
+* The reserved `NA` member always uses `-1` for both the surrogate key and the join numeric key.
+* If multiple `NA` rows appear for the same dimension snapshot, the load fails.
+* The reserved `NA` member does not participate in SCD2 history; it is stored as a single latest-value row and overwritten in place.
 
 Example:
 
@@ -85,7 +85,7 @@ Joins run inside SQL; pandas only reads the filtered result set, renames columns
    * cast datetimes using optional `parse_format`;
    * ensure schema/table exist (auto-create/evolve if needed);
    * run SQL dependency joins;
-   * call `scd2.apply_changes` with computed hashes and nullable columns.
+   * apply SCD2 history for normal rows and latest-only handling for the reserved `NA` row.
 
 ## Tests
 

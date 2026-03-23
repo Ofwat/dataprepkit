@@ -10,7 +10,7 @@ import logging
 import pandas as pd
 import uuid
 import warnings
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection, Engine
 
@@ -26,6 +26,8 @@ from dataprepkit.storage import archive_dataframe_path
 
 
 logger = logging.getLogger(__name__)
+RESERVED_NA_VALUE = "NA"
+RESERVED_NA_KEY = -1
 
 class DependencyJoin(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -61,14 +63,6 @@ class ColumnSpec(BaseModel):
     comment: str | None = None
 
 
-class ReservedMember(BaseModel):
-    """Defines a reserved dimension member with a fixed surrogate key."""
-
-    surrogate_key: int
-    natural_key_values: Mapping[str, Any]
-    join_numeric_key: int | None = None
-
-
 class DimensionMetadata(BaseModel):
     """Defines the metadata required to load a single dimension table."""
 
@@ -89,7 +83,6 @@ class DimensionMetadata(BaseModel):
     archive_path: str | None = None
     target_schema: str | None = None
     archive_batch_id: str | None = None
-    reserved_members: Sequence[ReservedMember] = Field(default_factory=list)
 
     @field_validator("natural_key_cols")
     def must_define_key_columns(cls, value: Sequence[str]) -> Sequence[str]:
@@ -102,34 +95,6 @@ class DimensionMetadata(BaseModel):
         if not value:
             raise ValueError("Must provide at least one column.")
         return value
-
-    @model_validator(mode="after")
-    def validate_reserved_members(self) -> "DimensionMetadata":
-        expected_keys = set(self.natural_key_cols)
-        seen_surrogate_keys: set[int] = set()
-        seen_member_keys: set[tuple[tuple[str, Any], ...]] = set()
-        for member in self.reserved_members:
-            member_keys = set(member.natural_key_values)
-            if member_keys != expected_keys:
-                raise ValueError(
-                    "Reserved members must define exactly the natural key columns: "
-                    f"{sorted(expected_keys)}"
-                )
-            if member.surrogate_key in seen_surrogate_keys:
-                raise ValueError(
-                    f"Duplicate reserved surrogate key configured: {member.surrogate_key}"
-                )
-            normalized_key = tuple(
-                (column, member.natural_key_values[column]) for column in self.natural_key_cols
-            )
-            if normalized_key in seen_member_keys:
-                raise ValueError(
-                    "Duplicate reserved member natural key configured: "
-                    f"{dict(normalized_key)}"
-                )
-            seen_surrogate_keys.add(member.surrogate_key)
-            seen_member_keys.add(normalized_key)
-        return self
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -352,53 +317,41 @@ def run_dimensions_in_dependency_order(
     ]
 
 
-def _split_reserved_member_rows(
+def _split_reserved_na_rows(
     metadata: DimensionMetadata,
     incoming: pd.DataFrame,
-) -> tuple[pd.DataFrame, list[tuple[ReservedMember, pd.Series]]]:
-    if not metadata.reserved_members:
-        return incoming, []
-
-    remaining = incoming.copy()
-    reserved_rows: list[tuple[ReservedMember, pd.Series]] = []
-    for member in metadata.reserved_members:
-        mask = _reserved_member_mask(remaining, member)
-        matches = int(mask.sum())
-        if matches == 0:
-            raise ValueError(
-                "Reserved member missing from input for "
-                f"{metadata.name}: surrogate_key={member.surrogate_key}, "
-                f"natural_key_values={dict(member.natural_key_values)}"
-            )
-        if matches > 1:
-            raise ValueError(
-                "Reserved member appears multiple times in input for "
-                f"{metadata.name}: surrogate_key={member.surrogate_key}, "
-                f"natural_key_values={dict(member.natural_key_values)}"
-            )
-        reserved_row = remaining.loc[mask].iloc[0]
-        reserved_rows.append((member, reserved_row.copy()))
-        remaining = remaining.loc[~mask].copy()
-    return remaining, reserved_rows
+) -> tuple[pd.DataFrame, pd.Series | None]:
+    if not metadata.natural_key_cols:
+        return incoming, None
+    mask = _reserved_na_mask(incoming, metadata.natural_key_cols)
+    matches = int(mask.sum())
+    if matches == 0:
+        return incoming, None
+    if matches > 1:
+        natural_key_values = {column: RESERVED_NA_VALUE for column in metadata.natural_key_cols}
+        raise ValueError(
+            "Reserved NA member appears multiple times in input for "
+            f"{metadata.name}: surrogate_key={RESERVED_NA_KEY}, "
+            f"natural_key_values={natural_key_values}"
+        )
+    reserved_row = incoming.loc[mask].iloc[0].copy()
+    remaining = incoming.loc[~mask].copy()
+    return remaining, reserved_row
 
 
-def _reserved_member_mask(
+def _reserved_na_mask(
     incoming: pd.DataFrame,
-    member: ReservedMember,
+    natural_key_cols: Sequence[str],
 ) -> pd.Series:
     mask = pd.Series(True, index=incoming.index)
-    for column, value in member.natural_key_values.items():
-        if pd.isna(value):
-            mask &= incoming[column].isna()
-        else:
-            mask &= incoming[column] == value
+    for column in natural_key_cols:
+        mask &= incoming[column] == RESERVED_NA_VALUE
     return mask
 
 
-def _upsert_reserved_member(
+def _upsert_reserved_na_member(
     engine: Engine,
     metadata: DimensionMetadata,
-    reserved_member: ReservedMember,
     row: pd.Series,
     data_columns: Sequence[str],
     execution_time: str,
@@ -423,23 +376,14 @@ def _upsert_reserved_member(
                 WHERE {metadata.surrogate_key} = :surrogate_key
                 """
             ),
-            {"surrogate_key": reserved_member.surrogate_key},
+            {"surrogate_key": RESERVED_NA_KEY},
         ).fetchone()
-        _raise_on_reserved_member_conflict(conn, metadata, reserved_member)
-        join_numeric_key = (
-            reserved_member.join_numeric_key
-            if reserved_member.join_numeric_key is not None
-            else (
-                existing[1]
-                if existing is not None
-                else _next_join_numeric_key(conn, metadata.target_table, metadata.join_numeric_key)
-            )
-        )
+        _raise_on_reserved_na_conflict(conn, metadata)
+        join_numeric_key = RESERVED_NA_KEY
         if existing is None:
-            _insert_reserved_member(
+            _insert_reserved_na_member(
                 conn=conn,
                 metadata=metadata,
-                reserved_member=reserved_member,
                 natural_key_values=natural_key_values,
                 data_values=data_values,
                 row_hash=row_hash,
@@ -451,10 +395,9 @@ def _upsert_reserved_member(
                 archive_filename=archive_filename,
             )
             return
-        _update_reserved_member(
+        _update_reserved_na_member(
             conn=conn,
             metadata=metadata,
-            reserved_member=reserved_member,
             natural_key_values=natural_key_values,
             data_values=data_values,
             row_hash=row_hash,
@@ -468,20 +411,19 @@ def _upsert_reserved_member(
         )
 
 
-def _raise_on_reserved_member_conflict(
+def _raise_on_reserved_na_conflict(
     conn: Connection,
     metadata: DimensionMetadata,
-    reserved_member: ReservedMember,
 ) -> None:
     predicates = [
         f"{column} = :nk_{index}"
         for index, column in enumerate(metadata.natural_key_cols)
     ]
     params = {
-        f"nk_{index}": reserved_member.natural_key_values[column]
+        f"nk_{index}": RESERVED_NA_VALUE
         for index, column in enumerate(metadata.natural_key_cols)
     }
-    params["surrogate_key"] = reserved_member.surrogate_key
+    params["surrogate_key"] = RESERVED_NA_KEY
     conflict = conn.execute(
         text(
             f"""
@@ -496,27 +438,16 @@ def _raise_on_reserved_member_conflict(
     ).fetchone()
     if conflict is not None:
         raise RuntimeError(
-            "Reserved member conflicts with an existing current row in "
-            f"{metadata.target_table}: natural_key_values={dict(reserved_member.natural_key_values)}, "
-            f"existing_surrogate_key={conflict[0]}, reserved_surrogate_key={reserved_member.surrogate_key}"
+            "Reserved NA member conflicts with an existing current row in "
+            f"{metadata.target_table}: natural_key_values="
+            f"{ {column: RESERVED_NA_VALUE for column in metadata.natural_key_cols} }, "
+            f"existing_surrogate_key={conflict[0]}, reserved_surrogate_key={RESERVED_NA_KEY}"
         )
 
 
-def _next_join_numeric_key(
-    conn: Connection,
-    target_table: str,
-    join_numeric_key: str,
-) -> int:
-    current_max = conn.execute(
-        text(f"SELECT COALESCE(MAX({join_numeric_key}), 0) FROM {target_table}")
-    ).scalar()
-    return int(current_max or 0) + 1
-
-
-def _insert_reserved_member(
+def _insert_reserved_na_member(
     conn: Connection,
     metadata: DimensionMetadata,
-    reserved_member: ReservedMember,
     natural_key_values: Mapping[str, Any],
     data_values: Mapping[str, Any],
     row_hash: str,
@@ -528,7 +459,7 @@ def _insert_reserved_member(
     archive_filename: str,
 ) -> None:
     column_values = [
-        (metadata.surrogate_key, reserved_member.surrogate_key),
+        (metadata.surrogate_key, RESERVED_NA_KEY),
         *[(column, natural_key_values[column]) for column in metadata.natural_key_cols],
         (metadata.join_numeric_key, join_numeric_key),
         *[(column, data_values[column]) for column in data_values],
@@ -567,10 +498,9 @@ def _insert_reserved_member(
     )
 
 
-def _update_reserved_member(
+def _update_reserved_na_member(
     conn: Connection,
     metadata: DimensionMetadata,
-    reserved_member: ReservedMember,
     natural_key_values: Mapping[str, Any],
     data_values: Mapping[str, Any],
     row_hash: str,
@@ -599,7 +529,7 @@ def _update_reserved_member(
     if has_archive_filename:
         value_items.append((DEFAULT_SYSTEM_COLUMNS["archive_filename"], archive_filename))
     set_clauses: list[str] = []
-    params: dict[str, Any] = {"reserved_surrogate_key": reserved_member.surrogate_key}
+    params: dict[str, Any] = {"reserved_surrogate_key": RESERVED_NA_KEY}
     for index, (column, value) in enumerate(value_items):
         param_name = f"update_value_{index}"
         set_clauses.append(f"{column} = :{param_name}")
@@ -631,6 +561,29 @@ def _execute_identity_insert(
         conn.execute(statement, params)
     finally:
         conn.execute(text(f"SET IDENTITY_INSERT {table_name} OFF"))
+
+
+def _delete_reserved_na_member(engine: Engine, metadata: DimensionMetadata) -> int:
+    inspector = inspect(engine)
+    schema, table = _split_table_name(metadata.target_table)
+    if not inspector.has_table(table, schema=schema):
+        return 0
+    params = {
+        f"nk_{index}": RESERVED_NA_VALUE
+        for index, _column in enumerate(metadata.natural_key_cols)
+    }
+    predicate = " AND ".join(
+        f"{column} = :nk_{index}"
+        for index, column in enumerate(metadata.natural_key_cols)
+    )
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(f"DELETE FROM {metadata.target_table} WHERE {predicate}"),
+            params,
+        )
+    return result.rowcount or 0
+
+
 
 
 def run_dimension(
@@ -737,7 +690,7 @@ def run_dimension(
             missing,
             safe_data_columns,
         )
-    incoming, reserved_rows = _split_reserved_member_rows(
+    incoming, reserved_na_row = _split_reserved_na_rows(
         metadata=metadata,
         incoming=incoming,
     )
@@ -791,12 +744,11 @@ def run_dimension(
         logger.info("Continuing despite table failure per policy.")
         return incoming
     else:
-        for reserved_member, reserved_row in reserved_rows:
-            _upsert_reserved_member(
+        if reserved_na_row is not None:
+            _upsert_reserved_na_member(
                 engine=engine,
                 metadata=metadata,
-                reserved_member=reserved_member,
-                row=reserved_row,
+                row=reserved_na_row,
                 data_columns=safe_data_columns,
                 execution_time=execution_time_iso,
                 has_batch_id=has_batch_id,
@@ -804,6 +756,11 @@ def run_dimension(
                 batch_id=metadata_batch_id,
                 archive_filename=archive_filename,
             )
+            changes_applied = True
+        else:
+            changes_applied = bool(
+                _delete_reserved_na_member(engine, metadata)
+            ) or changes_applied
         duration = (datetime.now(timezone.utc) - start_ts).total_seconds()
         logger.info("Run policy on success: %s", metadata.run_policy.on_table_failure)
         logger.info(
