@@ -683,6 +683,45 @@ def test_dependency_join_inner_keeps_matched_rows_with_null_selected_values():
     ]
 
 
+def test_dependency_join_normalizes_numeric_like_source_keys_to_match_text_targets():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_interval (
+                    Interval_Cd TEXT NOT NULL,
+                    Current_Ind INTEGER NOT NULL,
+                    Interval_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_interval (Interval_Cd, Current_Ind, Interval_Instance_Id)
+                VALUES ('1980', 1, 42)
+                """
+            )
+        )
+
+    incoming = metadata_loader.pd.DataFrame({"Interval_Cd": [1980, "NA"]})
+    dependency = DependencyJoin(
+        table="dim_interval",
+        on=[{"source": "Interval_Cd", "target": "Interval_Cd"}],
+        select={"Interval_Instance_Id": "Interval_Instance_Id"},
+        on_missing="null",
+    )
+
+    joined = metadata_loader._apply_dependency_joins(incoming, [dependency], engine)
+
+    assert joined.loc[0, "Interval_Cd"] == 1980
+    assert joined.loc[0, "Interval_Instance_Id"] == 42.0
+    assert joined.loc[1, "Interval_Cd"] == "NA"
+    assert metadata_loader.pd.isna(joined.loc[1, "Interval_Instance_Id"])
+
+
 def test_dependency_join_filters_out_deleted_current_rows():
     engine = create_engine("sqlite:///:memory:")
     with engine.begin() as conn:

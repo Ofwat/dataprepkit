@@ -1422,10 +1422,13 @@ def _apply_dependency_joins(
 
         dep_map = {}
         for _, row in dep_df.iterrows():
-            key = tuple(row[src] for src in on_source)
+            key = tuple(_normalize_dependency_join_key(row[src]) for src in on_source)
             dep_map[key] = {alias: row[alias] for alias in select_aliases.values()}
 
-        key_series = incoming[on_source].apply(lambda row: tuple(row[src] for src in on_source), axis=1)
+        key_series = incoming[on_source].apply(
+            lambda row: tuple(_normalize_dependency_join_key(row[src]) for src in on_source),
+            axis=1,
+        )
         matched_keys = key_series.map(lambda key: key in dep_map)
         for alias in select_aliases.values():
             incoming[alias] = key_series.map(lambda key: dep_map.get(key, {}).get(alias))
@@ -1447,6 +1450,19 @@ def _apply_dependency_joins(
                 raise RuntimeError(f"Dependency join {dep.table} produced missing values.")
 
     return incoming
+
+
+def _normalize_dependency_join_key(value: Any) -> str | None:
+    if pd.isna(value):
+        return None
+    value = _normalize_value_for_sql(value)
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
 
 
 def _cast_data_columns(incoming: pd.DataFrame, metadata: DimensionMetadata) -> pd.DataFrame:
