@@ -126,6 +126,12 @@ def test_expected_column_names_uses_configured_key_columns():
     assert "join_numeric_key" not in expected
 
 
+def test_normalize_value_for_sql_maps_pandas_missing_to_none():
+    assert metadata_loader._normalize_value_for_sql(metadata_loader.pd.NA) is None
+    assert metadata_loader._normalize_value_for_sql(float("nan")) is None
+    assert metadata_loader._normalize_value_for_sql("NA") == "NA"
+
+
 def test_mssql_key_column_clauses_default_to_int():
     class _FakeDialect:
         name = "mssql"
@@ -985,8 +991,22 @@ def test_default_csv_reader_handles_excel(tmp_path):
     result = metadata_loader._default_csv_reader(str(src))
     assert list(result["col"]) == ["x", "y"]
     assert list(result["num"]) == [1, 2]
-    result_with_missing = metadata_loader._default_csv_reader(str(src))
-    assert metadata_loader.pd.isna(result_with_missing["col"]).sum() == 0
+
+
+def test_default_csv_reader_preserves_excel_missing_cells_as_nulls(tmp_path):
+    try:
+        import openpyxl  # noqa: F401
+    except ImportError:
+        pytest.skip("openpyxl is required to test Excel input")
+
+    data = metadata_loader.pd.DataFrame({"col": ["x", None], "num": [1, 2]})
+    src = tmp_path / "data_missing.xlsx"
+    data.to_excel(src, index=False)
+
+    result = metadata_loader._default_csv_reader(str(src))
+
+    assert result.loc[0, "col"] == "x"
+    assert metadata_loader.pd.isna(result.loc[1, "col"])
 
 
 def test_default_csv_reader_trims_excel_column_names(tmp_path):

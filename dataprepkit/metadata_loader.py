@@ -202,7 +202,6 @@ def _read_excel_one_sheet_openpyxl(filepath: str) -> pd.DataFrame:
 
     df = pd.DataFrame(data, columns=header)
     df = df.dropna(how="all")
-    df = df.fillna("")
     return _normalize_input_column_names(df)
 
 
@@ -362,10 +361,13 @@ def _upsert_reserved_na_member(
 ) -> None:
     row_hash = _compute_row_hash(row, data_columns)
     natural_key_values = {
-        column: row[column]
+        column: _normalize_value_for_sql(row[column])
         for column in metadata.natural_key_cols
     }
-    data_values = {column: row.get(column) for column in data_columns}
+    data_values = {
+        column: _normalize_value_for_sql(row.get(column))
+        for column in data_columns
+    }
 
     with engine.begin() as conn:
         existing = conn.execute(
@@ -561,6 +563,12 @@ def _execute_identity_insert(
         conn.execute(statement, params)
     finally:
         conn.execute(text(f"SET IDENTITY_INSERT {table_name} OFF"))
+
+
+def _normalize_value_for_sql(value: Any) -> Any:
+    if pd.isna(value):
+        return None
+    return value
 
 
 def _delete_reserved_na_member(engine: Engine, metadata: DimensionMetadata) -> int:
