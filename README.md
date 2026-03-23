@@ -30,8 +30,10 @@ Each metadata entry registered via `register_metadata(name, metadata)` must incl
 
 Reserved `NA` convention:
 * Any row whose natural key columns are all `"NA"` is treated as the reserved `NA` member automatically.
-* The reserved `NA` member always uses `-1` for both the surrogate key and the join numeric key.
-* If multiple `NA` rows appear for the same dimension snapshot, the load fails.
+* By default the reserved `NA` member uses `-1` for both the surrogate key and the join numeric key.
+* Duplicate `NA` rows fail the load.
+* Use `required_reserved_source_values` to require special source rows like `NA` or `UNKNOWN` to appear in a given dimension snapshot.
+* Use `reserved_source_members` when your pipeline contract needs different reserved key mappings, for example `NA -> -1` and `UNKNOWN -> -2`.
 * The reserved `NA` member does not participate in SCD2 history; it is stored as a single latest-value row and overwritten in place.
 
 Example:

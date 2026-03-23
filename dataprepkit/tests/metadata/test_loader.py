@@ -104,7 +104,82 @@ def test_run_dimension_na_row_is_optional():
         ).fetchall()
 
     assert rows == [(1, "A1", 1, "Alpha")]
+
     METADATA_REGISTRY.pop("na_dimension", None)
+
+
+def test_run_dimension_required_na_row_raises_when_missing():
+    engine = create_engine("sqlite:///:memory:")
+    METADATA_REGISTRY.pop("na_dimension_required", None)
+    register_metadata(
+        "na_dimension_required",
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": {"data_column": {"type": "TEXT"}},
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+            "required_reserved_source_values": ["NA"],
+        },
+    )
+
+    incoming = pd.DataFrame([{"natural_key": "A1", "data_column": "Alpha"}])
+
+    with pytest.raises(ValueError, match="Reserved member missing from input"):
+        run_dimension(engine, "na_dimension_required", override_df=incoming)
+
+    METADATA_REGISTRY.pop("na_dimension_required", None)
+
+
+def test_run_dimension_uses_configured_reserved_source_member_mapping():
+    engine = create_engine("sqlite:///:memory:")
+    METADATA_REGISTRY.pop("na_dimension_custom", None)
+    register_metadata(
+        "na_dimension_custom",
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": {"data_column": {"type": "TEXT"}},
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+            "reserved_source_members": [
+                {
+                    "source_value": "NA",
+                    "surrogate_key": -10,
+                    "join_numeric_key": -20,
+                }
+            ],
+        },
+    )
+
+    incoming = pd.DataFrame(
+        [
+            {"natural_key": "NA", "data_column": "Not Applicable"},
+            {"natural_key": "A1", "data_column": "Alpha"},
+        ]
+    )
+
+    run_dimension(engine, "na_dimension_custom", override_df=incoming)
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT surrogate_key, natural_key, join_numeric_key, data_column, Current_Ind
+                FROM dimension
+                ORDER BY surrogate_key
+                """
+            )
+        ).fetchall()
+
+    assert rows == [
+        (-10, "NA", -20, "Not Applicable", 1),
+        (1, "A1", 1, "Alpha", 1),
+    ]
+
+    METADATA_REGISTRY.pop("na_dimension_custom", None)
 
 
 def test_run_dimension_na_row_uses_fixed_negative_keys():
@@ -214,7 +289,7 @@ def test_run_dimension_duplicate_na_rows_raise():
         ]
     )
 
-    with pytest.raises(ValueError, match="Reserved NA member appears multiple times"):
+    with pytest.raises(ValueError, match="Reserved member appears multiple times"):
         run_dimension(engine, "na_dimension", override_df=incoming)
 
     METADATA_REGISTRY.pop("na_dimension", None)

@@ -26,8 +26,21 @@ from dataprepkit.storage import archive_dataframe_path
 
 
 logger = logging.getLogger(__name__)
-RESERVED_NA_VALUE = "NA"
-RESERVED_NA_KEY = -1
+
+
+class ReservedSourceMember(BaseModel):
+    source_value: str
+    surrogate_key: int
+    join_numeric_key: int
+
+
+DEFAULT_RESERVED_SOURCE_MEMBERS = (
+    ReservedSourceMember(
+        source_value="NA",
+        surrogate_key=-1,
+        join_numeric_key=-1,
+    ),
+)
 
 class DependencyJoin(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -75,6 +88,10 @@ class DimensionMetadata(BaseModel):
     join_numeric_key: str
     filepath: str
     column_renames: Mapping[str, str] = Field(default_factory=dict[str, str])
+    reserved_source_members: Sequence[ReservedSourceMember] = Field(
+        default_factory=lambda: list(DEFAULT_RESERVED_SOURCE_MEMBERS)
+    )
+    required_reserved_source_values: Sequence[str] = Field(default_factory=list)
     description: str | None = None
     schema_handling: SchemaHandling = Field(default_factory=SchemaHandling)
     dependencies: Sequence[DependencyJoin] = Field(default_factory=list)
@@ -316,35 +333,57 @@ def run_dimensions_in_dependency_order(
     ]
 
 
-def _split_reserved_na_rows(
+def _split_reserved_member_rows(
     metadata: DimensionMetadata,
     incoming: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.Series | None]:
+) -> tuple[pd.DataFrame, dict[str, pd.Series]]:
     if not metadata.natural_key_cols:
-        return incoming, None
-    mask = _reserved_na_mask(incoming, metadata.natural_key_cols)
-    matches = int(mask.sum())
-    if matches == 0:
-        return incoming, None
-    if matches > 1:
-        natural_key_values = {column: RESERVED_NA_VALUE for column in metadata.natural_key_cols}
-        raise ValueError(
-            "Reserved NA member appears multiple times in input for "
-            f"{metadata.name}: surrogate_key={RESERVED_NA_KEY}, "
-            f"natural_key_values={natural_key_values}"
+        return incoming, {}
+    remaining = incoming.copy()
+    reserved_rows: dict[str, pd.Series] = {}
+    required_values = set(metadata.required_reserved_source_values)
+    for member in metadata.reserved_source_members:
+        mask = _reserved_member_mask(
+            remaining,
+            metadata.natural_key_cols,
+            member.source_value,
         )
-    reserved_row = incoming.loc[mask].iloc[0].copy()
-    remaining = incoming.loc[~mask].copy()
-    return remaining, reserved_row
+        matches = int(mask.sum())
+        if matches == 0:
+            if member.source_value in required_values:
+                natural_key_values = {
+                    column: member.source_value
+                    for column in metadata.natural_key_cols
+                }
+                raise ValueError(
+                    "Reserved member missing from input for "
+                    f"{metadata.name}: surrogate_key={member.surrogate_key}, "
+                    f"natural_key_values={natural_key_values}"
+                )
+            continue
+        if matches > 1:
+            natural_key_values = {
+                column: member.source_value
+                for column in metadata.natural_key_cols
+            }
+            raise ValueError(
+                "Reserved member appears multiple times in input for "
+                f"{metadata.name}: surrogate_key={member.surrogate_key}, "
+                f"natural_key_values={natural_key_values}"
+            )
+        reserved_rows[member.source_value] = remaining.loc[mask].iloc[0].copy()
+        remaining = remaining.loc[~mask].copy()
+    return remaining, reserved_rows
 
 
-def _reserved_na_mask(
+def _reserved_member_mask(
     incoming: pd.DataFrame,
     natural_key_cols: Sequence[str],
+    source_value: str,
 ) -> pd.Series:
     mask = pd.Series(True, index=incoming.index)
     for column in natural_key_cols:
-        mask &= incoming[column] == RESERVED_NA_VALUE
+        mask &= incoming[column] == source_value
     return mask
 
 
@@ -359,6 +398,7 @@ def _upsert_reserved_na_member(
     batch_id: str,
     archive_filename: str,
 ) -> None:
+    reserved_na = _get_reserved_member(metadata, "NA")
     row_hash = _compute_row_hash(row, data_columns)
     natural_key_values = {
         column: _normalize_value_for_sql(row[column])
@@ -378,10 +418,10 @@ def _upsert_reserved_na_member(
                 WHERE {metadata.surrogate_key} = :surrogate_key
                 """
             ),
-            {"surrogate_key": RESERVED_NA_KEY},
+            {"surrogate_key": reserved_na.surrogate_key},
         ).fetchone()
         _raise_on_reserved_na_conflict(conn, metadata)
-        join_numeric_key = RESERVED_NA_KEY
+        join_numeric_key = reserved_na.join_numeric_key
         if existing is None:
             _insert_reserved_na_member(
                 conn=conn,
@@ -417,15 +457,16 @@ def _raise_on_reserved_na_conflict(
     conn: Connection,
     metadata: DimensionMetadata,
 ) -> None:
+    reserved_na = _get_reserved_member(metadata, "NA")
     predicates = [
         f"{column} = :nk_{index}"
         for index, column in enumerate(metadata.natural_key_cols)
     ]
     params = {
-        f"nk_{index}": RESERVED_NA_VALUE
+        f"nk_{index}": reserved_na.source_value
         for index, column in enumerate(metadata.natural_key_cols)
     }
-    params["surrogate_key"] = RESERVED_NA_KEY
+    params["surrogate_key"] = reserved_na.surrogate_key
     conflict = conn.execute(
         text(
             f"""
@@ -442,8 +483,8 @@ def _raise_on_reserved_na_conflict(
         raise RuntimeError(
             "Reserved NA member conflicts with an existing current row in "
             f"{metadata.target_table}: natural_key_values="
-            f"{ {column: RESERVED_NA_VALUE for column in metadata.natural_key_cols} }, "
-            f"existing_surrogate_key={conflict[0]}, reserved_surrogate_key={RESERVED_NA_KEY}"
+            f"{ {column: reserved_na.source_value for column in metadata.natural_key_cols} }, "
+            f"existing_surrogate_key={conflict[0]}, reserved_surrogate_key={reserved_na.surrogate_key}"
         )
 
 
@@ -460,8 +501,9 @@ def _insert_reserved_na_member(
     batch_id: str,
     archive_filename: str,
 ) -> None:
+    reserved_na = _get_reserved_member(metadata, "NA")
     column_values = [
-        (metadata.surrogate_key, RESERVED_NA_KEY),
+        (metadata.surrogate_key, reserved_na.surrogate_key),
         *[(column, natural_key_values[column]) for column in metadata.natural_key_cols],
         (metadata.join_numeric_key, join_numeric_key),
         *[(column, data_values[column]) for column in data_values],
@@ -514,6 +556,7 @@ def _update_reserved_na_member(
     batch_id: str,
     archive_filename: str,
 ) -> None:
+    reserved_na = _get_reserved_member(metadata, "NA")
     value_items = [
         (metadata.join_numeric_key, join_numeric_key),
         (DEFAULT_SYSTEM_COLUMNS["row_hash"], row_hash),
@@ -531,7 +574,7 @@ def _update_reserved_na_member(
     if has_archive_filename:
         value_items.append((DEFAULT_SYSTEM_COLUMNS["archive_filename"], archive_filename))
     set_clauses: list[str] = []
-    params: dict[str, Any] = {"reserved_surrogate_key": RESERVED_NA_KEY}
+    params: dict[str, Any] = {"reserved_surrogate_key": reserved_na.surrogate_key}
     for index, (column, value) in enumerate(value_items):
         param_name = f"update_value_{index}"
         set_clauses.append(f"{column} = :{param_name}")
@@ -571,13 +614,29 @@ def _normalize_value_for_sql(value: Any) -> Any:
     return value
 
 
-def _delete_reserved_na_member(engine: Engine, metadata: DimensionMetadata) -> int:
+def _get_reserved_member(
+    metadata: DimensionMetadata,
+    source_value: str,
+) -> ReservedSourceMember:
+    for member in metadata.reserved_source_members:
+        if member.source_value == source_value:
+            return member
+    raise ValueError(
+        f"Reserved source value '{source_value}' is not configured for {metadata.name}"
+    )
+
+
+def _delete_reserved_member(
+    engine: Engine,
+    metadata: DimensionMetadata,
+    source_value: str,
+) -> int:
     inspector = inspect(engine)
     schema, table = _split_table_name(metadata.target_table)
     if not inspector.has_table(table, schema=schema):
         return 0
     params = {
-        f"nk_{index}": RESERVED_NA_VALUE
+        f"nk_{index}": source_value
         for index, _column in enumerate(metadata.natural_key_cols)
     }
     predicate = " AND ".join(
@@ -698,7 +757,7 @@ def run_dimension(
             missing,
             safe_data_columns,
         )
-    incoming, reserved_na_row = _split_reserved_na_rows(
+    incoming, reserved_rows = _split_reserved_member_rows(
         metadata=metadata,
         incoming=incoming,
     )
@@ -752,6 +811,8 @@ def run_dimension(
         logger.info("Continuing despite table failure per policy.")
         return incoming
     else:
+        reserved_na = _get_reserved_member(metadata, "NA")
+        reserved_na_row = reserved_rows.get(reserved_na.source_value)
         if reserved_na_row is not None:
             _upsert_reserved_na_member(
                 engine=engine,
@@ -765,9 +826,13 @@ def run_dimension(
                 archive_filename=archive_filename,
             )
             changes_applied = True
-        else:
+        elif reserved_na.source_value not in metadata.required_reserved_source_values:
             changes_applied = bool(
-                _delete_reserved_na_member(engine, metadata)
+                _delete_reserved_member(
+                    engine,
+                    metadata,
+                    reserved_na.source_value,
+                )
             ) or changes_applied
         duration = (datetime.now(timezone.utc) - start_ts).total_seconds()
         logger.info("Run policy on success: %s", metadata.run_policy.on_table_failure)
