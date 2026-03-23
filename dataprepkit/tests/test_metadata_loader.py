@@ -140,6 +140,22 @@ def test_normalize_value_for_sql_maps_numpy_scalars_to_python_scalars():
     assert metadata_loader._normalize_value_for_sql(np.float64(1.5)) == 1.5
 
 
+def test_prepare_archive_snapshot_stringifies_mixed_object_columns():
+    incoming = metadata_loader.pd.DataFrame(
+        {
+            "mixed": ["A", 1, None],
+            "uniform_text": ["x", "y", None],
+            "uniform_int": [1, 2, 3],
+        }
+    )
+
+    archive_df = metadata_loader._prepare_archive_snapshot(incoming)
+
+    assert archive_df["mixed"].tolist() == ["A", "1", None]
+    assert archive_df["uniform_text"].tolist() == ["x", "y", None]
+    assert archive_df["uniform_int"].tolist() == [1, 2, 3]
+
+
 def test_mssql_key_column_clauses_default_to_int():
     class _FakeDialect:
         name = "mssql"

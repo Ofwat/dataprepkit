@@ -1610,7 +1610,25 @@ def _archive_snapshot(
 
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        incoming.to_parquet(archive_path, index=False)
+        _prepare_archive_snapshot(incoming).to_parquet(archive_path, index=False)
         logger.info("Archived snapshot to %s", archive_path)
     except Exception as exc:
         logger.warning("Failed to archive snapshot to %s: %s", archive_path, exc)
+
+
+def _prepare_archive_snapshot(incoming: pd.DataFrame) -> pd.DataFrame:
+    archive_df = incoming.copy()
+    for column in archive_df.columns:
+        series = archive_df[column]
+        if series.dtype != "object":
+            continue
+        non_null = series.dropna()
+        if non_null.empty:
+            continue
+        value_types = {type(value) for value in non_null}
+        if len(value_types) <= 1:
+            continue
+        archive_df[column] = series.map(
+            lambda value: None if pd.isna(value) else str(value)
+        )
+    return archive_df
