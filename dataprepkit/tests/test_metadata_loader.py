@@ -132,6 +132,14 @@ def test_normalize_value_for_sql_maps_pandas_missing_to_none():
     assert metadata_loader._normalize_value_for_sql("NA") == "NA"
 
 
+def test_normalize_value_for_sql_maps_numpy_scalars_to_python_scalars():
+    np = pytest.importorskip("numpy")
+
+    assert metadata_loader._normalize_value_for_sql(np.int64(1)) == 1
+    assert isinstance(metadata_loader._normalize_value_for_sql(np.int64(1)), int)
+    assert metadata_loader._normalize_value_for_sql(np.float64(1.5)) == 1.5
+
+
 def test_mssql_key_column_clauses_default_to_int():
     class _FakeDialect:
         name = "mssql"

@@ -611,6 +611,11 @@ def _execute_identity_insert(
 def _normalize_value_for_sql(value: Any) -> Any:
     if pd.isna(value):
         return None
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except (AttributeError, ValueError, TypeError):
+            pass
     return value
 
 
