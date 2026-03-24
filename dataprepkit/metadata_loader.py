@@ -1475,12 +1475,20 @@ def _cast_data_columns(incoming: pd.DataFrame, metadata: DimensionMetadata) -> p
                     "ignore",
                     message="Could not infer format, so each element will be parsed individually.*",
                 )
-                df[name] = pd.to_datetime(
+                parsed = pd.to_datetime(
                     df[name],
                     format=fmt,
                     errors="coerce",
                     dayfirst=spec.dayfirst,
                 )
+                retry_mask = df[name].notna() & parsed.isna()
+                if retry_mask.any():
+                    parsed.loc[retry_mask] = pd.to_datetime(
+                        df.loc[retry_mask, name],
+                        errors="coerce",
+                        dayfirst=spec.dayfirst,
+                    )
+                df[name] = parsed
     return df
 
 

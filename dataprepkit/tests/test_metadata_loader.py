@@ -1378,3 +1378,65 @@ def test_apply_table_comments_includes_description():
     casted = metadata_loader._cast_data_columns(incoming, metadata)
     assert metadata_loader.pd.notna(casted["started_at"]).sum() == 1
     metadata_loader.METADATA_REGISTRY.pop("default_format_test", None)
+
+
+def test_cast_data_columns_falls_back_to_iso_datetime_strings():
+    metadata_loader.METADATA_REGISTRY.pop("iso_format_test", None)
+    metadata_loader.register_metadata(
+        "iso_format_test",
+        {
+            "target_table": "dimtable",
+            "natural_key_cols": ["id"],
+            "data_columns": {
+                "ended_at": {
+                    "type": "DATETIME2(3)",
+                    "nullable": True,
+                }
+            },
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+    )
+
+    metadata = metadata_loader.get_metadata("iso_format_test")
+    incoming = metadata_loader.pd.DataFrame(
+        {"ended_at": ["1980-12-31 00:00:00.000", None]}
+    )
+
+    casted = metadata_loader._cast_data_columns(incoming, metadata)
+
+    assert casted.loc[0, "ended_at"] == metadata_loader.pd.Timestamp("1980-12-31 00:00:00")
+    assert metadata_loader.pd.isna(casted.loc[1, "ended_at"])
+    metadata_loader.METADATA_REGISTRY.pop("iso_format_test", None)
+
+
+def test_cast_data_columns_falls_back_to_additional_iso_datetime_strings():
+    metadata_loader.METADATA_REGISTRY.pop("iso_format_test_2", None)
+    metadata_loader.register_metadata(
+        "iso_format_test_2",
+        {
+            "target_table": "dimtable",
+            "natural_key_cols": ["id"],
+            "data_columns": {
+                "ended_at": {
+                    "type": "DATETIME2(3)",
+                    "nullable": True,
+                }
+            },
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+    )
+
+    metadata = metadata_loader.get_metadata("iso_format_test_2")
+    incoming = metadata_loader.pd.DataFrame(
+        {"ended_at": ["2014-04-01 00:00:00.000", None]}
+    )
+
+    casted = metadata_loader._cast_data_columns(incoming, metadata)
+
+    assert casted.loc[0, "ended_at"] == metadata_loader.pd.Timestamp("2014-04-01 00:00:00")
+    assert metadata_loader.pd.isna(casted.loc[1, "ended_at"])
+    metadata_loader.METADATA_REGISTRY.pop("iso_format_test_2", None)
