@@ -122,12 +122,18 @@ def apply_changes(
                 )
             ).fetchall()
             for row in rows:
-                key = tuple(row[:-1])
+                key = tuple(_normalize_natural_key_value(value) for value in row[:-1])
                 existing_join_map[key] = row[-1]
         incoming_df = incoming_df.copy()
         if natural_key_cols:
             incoming_df["existing_join_numeric"] = incoming_df.apply(
-                lambda row: existing_join_map.get(tuple(row[col] for col in natural_key_cols)), axis=1
+                lambda row: existing_join_map.get(
+                    tuple(
+                        _normalize_natural_key_value(row[col])
+                        for col in natural_key_cols
+                    )
+                ),
+                axis=1,
             )
         else:
             incoming_df["existing_join_numeric"] = None
@@ -480,6 +486,23 @@ def _insert_snapshot_rows_from_raw(
 
 def _normalize_existing_join_numeric_for_raw(value) -> str | None:
     return _normalize_integer_like_value_for_raw(value)
+
+
+def _normalize_natural_key_value(value):
+    if pd.isna(value):
+        return None
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, float):
+        if math.isnan(value):
+            return None
+        if value.is_integer():
+            return str(int(value))
+    if isinstance(value, int):
+        return str(value)
+    return str(value)
 
 
 def _normalize_integer_like_value_for_raw(value) -> str | None:

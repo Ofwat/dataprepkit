@@ -1043,6 +1043,92 @@ def test_apply_changes_openrowset_normalizes_existing_join_numeric_for_reuse(mon
     assert captured["raw_existing"] == ["7084"]
 
 
+def test_apply_changes_openrowset_reuses_join_numeric_when_natural_key_is_numeric_like_text(
+    monkeypatch,
+):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeConn:
+        def __init__(self, engine):
+            self.engine = engine
+
+        def execute(self, _statement, _params=None):
+            class _Result:
+                rowcount = 0
+
+                @staticmethod
+                def fetchall():
+                    return [("1980", 5001)]
+
+                @staticmethod
+                def scalar():
+                    return 0
+
+            return _Result()
+
+    class _FakeBegin:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def __enter__(self):
+            return self.conn
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+        def __init__(self):
+            self.conn = _FakeConn(self)
+
+        def begin(self):
+            return _FakeBegin(self.conn)
+
+    captured = {}
+
+    def fake_stage_dataframe(_engine, _table_name, df, **_kwargs):
+        captured["interval_cd"] = df["Interval_Cd"].tolist()
+        captured["raw_existing"] = df["existing_join_numeric"].tolist()
+
+    monkeypatch.setattr("dataprepkit.scd2.stage_dataframe", fake_stage_dataframe)
+    monkeypatch.setattr(
+        "dataprepkit.scd2._get_column_types",
+        lambda *_: {
+            "interval_cd": "NVARCHAR(4000)",
+            "interval_end_date": "DATETIME2(3)",
+            "interval_id": "BIGINT",
+            "row_hash": "NVARCHAR(4000)",
+        },
+    )
+    monkeypatch.setattr("dataprepkit.scd2._count_rows", lambda *_: 0)
+    monkeypatch.setattr("dataprepkit.scd2._validate_row_growth", lambda *_: None)
+    monkeypatch.setattr("dataprepkit.scd2._create_staging_table", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("dataprepkit.scd2._insert_snapshot_rows_from_raw", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("dataprepkit.scd2._apply_snapshot_to_target", lambda *_args, **_kwargs: False)
+
+    engine = _FakeEngine()
+    incoming = pd.DataFrame(
+        [{"Interval_Cd": 1980, "Interval_End_Date": pd.Timestamp("1980-12-31 00:00:00.000")}]
+    )
+    apply_changes(
+        engine=engine,
+        target_table="Dimensions.dim_interval",
+        incoming=incoming,
+        natural_key_cols=["Interval_Cd"],
+        data_cols=["Interval_End_Date"],
+        join_numeric_key_col="Interval_Id",
+        surrogate_key_col="Interval_Instance_Id",
+        system_columns=SYSTEM_COLUMNS,
+        staging_use_openrowset_parquet=True,
+        staging_parquet_base_dir="/tmp/stage",
+    )
+
+    assert captured["interval_cd"] == ["1980"]
+    assert captured["raw_existing"] == ["5001"]
+
+
 def test_apply_changes_openrowset_normalizes_integer_like_data_columns(monkeypatch):
     class _FakeDialect:
         name = "mssql"
