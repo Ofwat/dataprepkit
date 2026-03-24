@@ -1582,7 +1582,7 @@ def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence
         ),
         (
             text(
-                f"SELECT {top}1 FROM {table} WHERE Current_Ind = 1 AND {DEFAULT_SYSTEM_COLUMNS['effective_date_end']} != :effective_date_max{limit}"
+                f"SELECT {top}1 FROM {table} WHERE Current_Ind = 1 AND Deleted_Ind = 0 AND {DEFAULT_SYSTEM_COLUMNS['effective_date_end']} != :effective_date_max{limit}"
             ),
             "current row has Effective_Date_End not at max",
         ),

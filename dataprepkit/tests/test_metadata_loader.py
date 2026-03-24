@@ -791,6 +791,40 @@ def test_post_scd2_validation_rejects_multiple_current_rows_for_same_key():
         _post_scd2_validation(engine, "dim_service", ["Service_Type_Cd"])
 
 
+def test_post_scd2_validation_allows_deleted_current_row_with_closed_end_date():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_service (
+                    Service_Type_Cd TEXT NOT NULL,
+                    Current_Ind INTEGER NOT NULL,
+                    Deleted_Ind INTEGER NOT NULL,
+                    Update_Date TEXT,
+                    Effective_Date_End TEXT NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_service (
+                    Service_Type_Cd,
+                    Current_Ind,
+                    Deleted_Ind,
+                    Update_Date,
+                    Effective_Date_End
+                )
+                VALUES ('S1', 1, 1, '2026-03-18T10:00:00.000', '2026-03-18T10:00:00.000')
+                """
+            )
+        )
+
+    _post_scd2_validation(engine, "dim_service", ["Service_Type_Cd"])
+
+
 def test_evolve_table_columns_backfills_effective_dates_for_existing_rows():
     engine = create_engine("sqlite:///:memory:")
     with engine.begin() as conn:
