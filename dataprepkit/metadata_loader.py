@@ -387,9 +387,10 @@ def _reserved_member_mask(
     return mask
 
 
-def _upsert_reserved_na_member(
+def _upsert_reserved_member(
     engine: Engine,
     metadata: DimensionMetadata,
+    member: ReservedSourceMember,
     row: pd.Series,
     data_columns: Sequence[str],
     execution_time: str,
@@ -398,7 +399,6 @@ def _upsert_reserved_na_member(
     batch_id: str,
     archive_filename: str,
 ) -> None:
-    reserved_na = _get_reserved_member(metadata, "NA")
     row_hash = _compute_row_hash(row, data_columns)
     natural_key_values = {
         column: _normalize_value_for_sql(row[column])
@@ -418,14 +418,15 @@ def _upsert_reserved_na_member(
                 WHERE {metadata.surrogate_key} = :surrogate_key
                 """
             ),
-            {"surrogate_key": reserved_na.surrogate_key},
+            {"surrogate_key": member.surrogate_key},
         ).fetchone()
-        _raise_on_reserved_na_conflict(conn, metadata)
-        join_numeric_key = reserved_na.join_numeric_key
+        _raise_on_reserved_member_conflict(conn, metadata, member)
+        join_numeric_key = member.join_numeric_key
         if existing is None:
-            _insert_reserved_na_member(
+            _insert_reserved_member(
                 conn=conn,
                 metadata=metadata,
+                member=member,
                 natural_key_values=natural_key_values,
                 data_values=data_values,
                 row_hash=row_hash,
@@ -437,9 +438,10 @@ def _upsert_reserved_na_member(
                 archive_filename=archive_filename,
             )
             return
-        _update_reserved_na_member(
+        _update_reserved_member(
             conn=conn,
             metadata=metadata,
+            member=member,
             natural_key_values=natural_key_values,
             data_values=data_values,
             row_hash=row_hash,
@@ -453,20 +455,20 @@ def _upsert_reserved_na_member(
         )
 
 
-def _raise_on_reserved_na_conflict(
+def _raise_on_reserved_member_conflict(
     conn: Connection,
     metadata: DimensionMetadata,
+    member: ReservedSourceMember,
 ) -> None:
-    reserved_na = _get_reserved_member(metadata, "NA")
     predicates = [
         f"{column} = :nk_{index}"
         for index, column in enumerate(metadata.natural_key_cols)
     ]
     params = {
-        f"nk_{index}": reserved_na.source_value
+        f"nk_{index}": member.source_value
         for index, column in enumerate(metadata.natural_key_cols)
     }
-    params["surrogate_key"] = reserved_na.surrogate_key
+    params["surrogate_key"] = member.surrogate_key
     conflict = conn.execute(
         text(
             f"""
@@ -481,16 +483,17 @@ def _raise_on_reserved_na_conflict(
     ).fetchone()
     if conflict is not None:
         raise RuntimeError(
-            "Reserved NA member conflicts with an existing current row in "
+            "Reserved member conflicts with an existing current row in "
             f"{metadata.target_table}: natural_key_values="
-            f"{ {column: reserved_na.source_value for column in metadata.natural_key_cols} }, "
-            f"existing_surrogate_key={conflict[0]}, reserved_surrogate_key={reserved_na.surrogate_key}"
+            f"{ {column: member.source_value for column in metadata.natural_key_cols} }, "
+            f"existing_surrogate_key={conflict[0]}, reserved_surrogate_key={member.surrogate_key}"
         )
 
 
-def _insert_reserved_na_member(
+def _insert_reserved_member(
     conn: Connection,
     metadata: DimensionMetadata,
+    member: ReservedSourceMember,
     natural_key_values: Mapping[str, Any],
     data_values: Mapping[str, Any],
     row_hash: str,
@@ -501,9 +504,8 @@ def _insert_reserved_na_member(
     batch_id: str,
     archive_filename: str,
 ) -> None:
-    reserved_na = _get_reserved_member(metadata, "NA")
     column_values = [
-        (metadata.surrogate_key, reserved_na.surrogate_key),
+        (metadata.surrogate_key, member.surrogate_key),
         *[(column, natural_key_values[column]) for column in metadata.natural_key_cols],
         (metadata.join_numeric_key, join_numeric_key),
         *[(column, data_values[column]) for column in data_values],
@@ -542,9 +544,10 @@ def _insert_reserved_na_member(
     )
 
 
-def _update_reserved_na_member(
+def _update_reserved_member(
     conn: Connection,
     metadata: DimensionMetadata,
+    member: ReservedSourceMember,
     natural_key_values: Mapping[str, Any],
     data_values: Mapping[str, Any],
     row_hash: str,
@@ -556,7 +559,6 @@ def _update_reserved_na_member(
     batch_id: str,
     archive_filename: str,
 ) -> None:
-    reserved_na = _get_reserved_member(metadata, "NA")
     value_items = [
         (metadata.join_numeric_key, join_numeric_key),
         (DEFAULT_SYSTEM_COLUMNS["row_hash"], row_hash),
@@ -574,7 +576,7 @@ def _update_reserved_na_member(
     if has_archive_filename:
         value_items.append((DEFAULT_SYSTEM_COLUMNS["archive_filename"], archive_filename))
     set_clauses: list[str] = []
-    params: dict[str, Any] = {"reserved_surrogate_key": reserved_na.surrogate_key}
+    params: dict[str, Any] = {"reserved_surrogate_key": member.surrogate_key}
     for index, (column, value) in enumerate(value_items):
         param_name = f"update_value_{index}"
         set_clauses.append(f"{column} = :{param_name}")
@@ -816,29 +818,31 @@ def run_dimension(
         logger.info("Continuing despite table failure per policy.")
         return incoming
     else:
-        reserved_na = _get_reserved_member(metadata, "NA")
-        reserved_na_row = reserved_rows.get(reserved_na.source_value)
-        if reserved_na_row is not None:
-            _upsert_reserved_na_member(
-                engine=engine,
-                metadata=metadata,
-                row=reserved_na_row,
-                data_columns=safe_data_columns,
-                execution_time=execution_time_iso,
-                has_batch_id=has_batch_id,
-                has_archive_filename=has_archive_filename,
-                batch_id=metadata_batch_id,
-                archive_filename=archive_filename,
-            )
-            changes_applied = True
-        elif reserved_na.source_value not in metadata.required_reserved_source_values:
-            changes_applied = bool(
-                _delete_reserved_member(
-                    engine,
-                    metadata,
-                    reserved_na.source_value,
+        required_reserved_values = set(metadata.required_reserved_source_values)
+        for member in metadata.reserved_source_members:
+            reserved_row = reserved_rows.get(member.source_value)
+            if reserved_row is not None:
+                _upsert_reserved_member(
+                    engine=engine,
+                    metadata=metadata,
+                    member=member,
+                    row=reserved_row,
+                    data_columns=safe_data_columns,
+                    execution_time=execution_time_iso,
+                    has_batch_id=has_batch_id,
+                    has_archive_filename=has_archive_filename,
+                    batch_id=metadata_batch_id,
+                    archive_filename=archive_filename,
                 )
-            ) or changes_applied
+                changes_applied = True
+            elif member.source_value not in required_reserved_values:
+                changes_applied = bool(
+                    _delete_reserved_member(
+                        engine,
+                        metadata,
+                        member.source_value,
+                    )
+                ) or changes_applied
         duration = (datetime.now(timezone.utc) - start_ts).total_seconds()
         logger.info("Run policy on success: %s", metadata.run_policy.on_table_failure)
         logger.info(

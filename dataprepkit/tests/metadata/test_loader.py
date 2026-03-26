@@ -182,6 +182,61 @@ def test_run_dimension_uses_configured_reserved_source_member_mapping():
     METADATA_REGISTRY.pop("na_dimension_custom", None)
 
 
+def test_run_dimension_writes_unknown_reserved_member_to_configured_negative_keys():
+    engine = create_engine("sqlite:///:memory:")
+    METADATA_REGISTRY.pop("dimension_with_unknown", None)
+    register_metadata(
+        "dimension_with_unknown",
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": {"data_column": {"type": "TEXT"}},
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+            "reserved_source_members": [
+                {
+                    "source_value": "NA",
+                    "surrogate_key": -1,
+                    "join_numeric_key": -1,
+                },
+                {
+                    "source_value": "UNKNOWN",
+                    "surrogate_key": -2,
+                    "join_numeric_key": -2,
+                },
+            ],
+        },
+    )
+
+    incoming = pd.DataFrame(
+        [
+            {"natural_key": "UNKNOWN", "data_column": "Unknown Label"},
+            {"natural_key": "A1", "data_column": "Alpha"},
+        ]
+    )
+
+    run_dimension(engine, "dimension_with_unknown", override_df=incoming)
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT surrogate_key, natural_key, join_numeric_key, data_column, Current_Ind
+                FROM dimension
+                ORDER BY surrogate_key
+                """
+            )
+        ).fetchall()
+
+    assert rows == [
+        (-2, "UNKNOWN", -2, "Unknown Label", 1),
+        (1, "A1", 1, "Alpha", 1),
+    ]
+
+    METADATA_REGISTRY.pop("dimension_with_unknown", None)
+
+
 def test_run_dimension_na_row_uses_fixed_negative_keys():
     engine = create_engine("sqlite:///:memory:")
     METADATA_REGISTRY.pop("na_dimension", None)
