@@ -279,6 +279,43 @@ def _render_column_defs(
     return ", ".join(defs)
 
 
+def _format_missing_lookup_error(
+    engine: Engine,
+    *,
+    base_table: str,
+    dim_table: str,
+    staging_columns: Sequence[str],
+    dim_columns: Sequence[str],
+    required_columns: Sequence[str],
+) -> str:
+    quoted_staging_columns = [_quote_identifier(engine, col) for col in staging_columns]
+    quoted_required_columns = [_quote_identifier(engine, col) for col in required_columns]
+    where_clause = " OR ".join(f"{column} IS NULL" for column in quoted_required_columns)
+    select_clause = ", ".join(quoted_staging_columns)
+    sample_query = text(
+        f"""
+        SELECT DISTINCT {select_clause}
+        FROM {base_table}
+        WHERE {where_clause}
+        """
+    )
+    with engine.connect() as conn:
+        count = conn.execute(
+            text(f"SELECT COUNT(1) FROM {base_table} WHERE {where_clause}")
+        ).scalar()
+        rows = conn.execute(sample_query).mappings().fetchmany(10)
+    missing_keys = [
+        {column: row[column] for column in staging_columns}
+        for row in rows
+    ]
+    return (
+        f"Missing dimension match in {dim_table} for staging columns "
+        f"{list(staging_columns)} -> dimension columns {list(dim_columns)}. "
+        f"Required columns {list(required_columns)} were null for {count} row(s). "
+        f"Example missing source keys: {missing_keys}"
+    )
+
+
 def _fact_pk_clause(engine: Engine, column_name: str) -> str:
     if engine.dialect.name == "mssql":
         return f"{column_name} INT IDENTITY(1,1) PRIMARY KEY"
@@ -771,7 +808,14 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
                 ).scalar()
             if result:
                 raise RuntimeError(
-                    f"Null values found for required columns {spec.require_not_null}"
+                    _format_missing_lookup_error(
+                        engine,
+                        base_table=base_table,
+                        dim_table=spec.dim_table,
+                        staging_columns=spec.staging_columns,
+                        dim_columns=spec.dim_columns,
+                        required_columns=spec.require_not_null,
+                    )
                 )
 
     def _apply_extra_column(base_table: str, spec: ExtraColumnSpec) -> None:
@@ -804,7 +848,14 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
                 ).scalar()
             if result:
                 raise RuntimeError(
-                    f"Null values found for required column {spec.column}"
+                    _format_missing_lookup_error(
+                        engine,
+                        base_table=base_table,
+                        dim_table=spec.dim_table,
+                        staging_columns=spec.staging_columns,
+                        dim_columns=spec.dim_columns,
+                        required_columns=[spec.column],
+                    )
                 )
 
     for dimension in config.dimensions:

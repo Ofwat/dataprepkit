@@ -341,7 +341,14 @@ def test_ingest_fact_missing_dimension(fact_engine):
             "measure_value": None,
         },
     )
-    with pytest.raises(RuntimeError):
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"Missing dimension match in Dimensions_tbl_d_company "
+            r"for staging columns \['Organisation_Cd'\] -> dimension columns \['Organisation_Cd'\].*"
+            r"'Organisation_Cd': 'UNKNOWN'"
+        ),
+    ):
         ingest_fact(fact_engine, config, batch_id="B2")
 
 
