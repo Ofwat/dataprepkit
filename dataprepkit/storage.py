@@ -151,6 +151,66 @@ def get_sql_db_endpoint(workspace_name: str, sql_db_display_name: str) -> SQLDat
 
 
 @dataclass(frozen=True)
+class WarehouseEndpoint:
+    warehouse_name: str | None
+    server_fqdn: str | None
+    resource_id: str | None
+
+
+def get_warehouse_endpoint(
+    workspace_name: str,
+    warehouse_display_name: str,
+) -> WarehouseEndpoint:
+    if credentials is None:
+        raise ImportError("notebookutils.credentials is required for Fabric warehouse metadata.")
+    token = credentials.getToken("https://api.fabric.microsoft.com")
+
+    if fabric is None:
+        raise ImportError("sempy.fabric is required to list workspaces.")
+
+    if requests is None:
+        raise ImportError("requests is required to call the Fabric warehouse metadata API.")
+
+    ws_df = fabric.list_workspaces()
+    matches = ws_df[ws_df["Name"] == workspace_name]
+
+    if matches.empty:
+        raise ValueError(f"Workspace '{workspace_name}' not found")
+
+    workspace_id = matches["Id"].iloc[0]
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    warehouse_url = f"https://api.fabric.microsoft.com/v1/workspaces/{workspace_id}/warehouses"
+    warehouse_response = requests.get(warehouse_url, headers=headers)
+    warehouse_response.raise_for_status()
+    warehouses = warehouse_response.json()
+
+    for warehouse in warehouses.get("value", []):
+        if warehouse.get("displayName") != warehouse_display_name:
+            continue
+        warehouse_id = warehouse.get("id")
+        connection_url = (
+            "https://api.fabric.microsoft.com/v1/workspaces/"
+            f"{workspace_id}/warehouses/{warehouse_id}/connectionString"
+        )
+        connection_response = requests.get(connection_url, headers=headers)
+        connection_response.raise_for_status()
+        connection_data = connection_response.json()
+        return WarehouseEndpoint(
+            warehouse_name=warehouse.get("displayName"),
+            server_fqdn=connection_data.get("connectionString"),
+            resource_id=warehouse_id,
+        )
+
+    raise ValueError(
+        f"Warehouse '{warehouse_display_name}' not found in workspace '{workspace_name}'"
+    )
+
+
+@dataclass(frozen=True)
 class ArchivePath:
     table: str
     batch_id: str
