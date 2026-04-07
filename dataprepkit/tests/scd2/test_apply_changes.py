@@ -870,7 +870,7 @@ def test_create_staging_table_uses_override_type_for_existing_join_numeric():
     )
 
     sql, params = conn.calls[0]
-    assert "existing_join_numeric BIGINT" in sql
+    assert "[existing_join_numeric] BIGINT" in sql
     assert params == {}
 
 

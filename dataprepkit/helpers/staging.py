@@ -18,7 +18,8 @@ from dataprepkit.storage import archive_dataframe_path
 
 
 def _quote_mssql_identifier(identifier: str) -> str:
-    return f"[{identifier.replace(']', ']]')}]"
+    normalized = _normalize_bracket_identifier(identifier) or ""
+    return f"[{normalized.replace(']', ']]')}]"
 
 
 def _normalize_bracket_identifier(name: str | None) -> str | None:

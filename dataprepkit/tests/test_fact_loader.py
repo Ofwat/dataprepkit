@@ -18,6 +18,8 @@ from dataprepkit.fact_loader import (
     StageFileSpec,
     TableRef,
     _fact_pk_clause,
+    _null_safe_row_match_predicate,
+    _quote_identifier,
     assert_columns_have_single_distinct_row,
     assert_columns_not_null,
     assert_columns_unique,
@@ -38,6 +40,36 @@ def test_fact_pk_clause_defaults_to_int_for_mssql():
         dialect = _FakeDialect()
 
     assert _fact_pk_clause(_FakeEngine(), "fact_id") == "fact_id INT IDENTITY(1,1) PRIMARY KEY"
+
+
+def test_quote_identifier_normalizes_bracketed_name_for_mssql():
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    assert _quote_identifier(_FakeEngine(), "[Model version]") == "[Model version]"
+
+
+def test_null_safe_row_match_predicate_uses_normalized_bracketed_names_for_mssql():
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    predicate = _null_safe_row_match_predicate(
+        _FakeEngine(),
+        "e",
+        "s",
+        ["[Model version]"],
+    )
+
+    assert predicate == (
+        "((e.[Model version] = s.[Model version]) OR "
+        "(e.[Model version] IS NULL AND s.[Model version] IS NULL))"
+    )
 
 
 def _create_engine_with_table(engine):

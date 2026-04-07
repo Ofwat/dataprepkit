@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timezone
+import re
 from typing import Mapping, Sequence
 
 import pandas as pd
@@ -49,6 +50,15 @@ EFFECTIVE_DATE_MAX = "9999-12-31T23:59:59.999"
 
 class SCD2ValidationError(ValueError):
     """Raised when the provided data does not satisfy the required schema."""
+
+
+def _normalize_bracket_identifier(name: str | None) -> str | None:
+    if name is None:
+        return None
+    stripped = name.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        return stripped[1:-1].replace("]]", "]")
+    return stripped
 
 
 def apply_changes(
@@ -114,11 +124,14 @@ def apply_changes(
         extra_columns = ["existing_join_numeric"]
         existing_join_map = {}
         if natural_key_cols:
-            select_cols = ", ".join(natural_key_cols + [join_numeric_key_col])
+            select_cols = ", ".join(
+                _quote_identifier(conn.engine, col)
+                for col in [*natural_key_cols, join_numeric_key_col]
+            )
             rows = conn.execute(
                 text(
                     f"SELECT {select_cols} FROM {target_table} "
-                    f"WHERE {cols['current_ind']} = 1"
+                    f"WHERE {_quote_identifier(conn.engine, cols['current_ind'])} = 1"
                 )
             ).fetchall()
             for row in rows:
@@ -369,11 +382,12 @@ def _create_staging_table(
     extra_column_type_overrides: Mapping[str, str] | None = None,
 ):
     dialect = conn.engine.dialect.name
+    quote = lambda value: _quote_identifier(conn.engine, value)
     column_defs = []
     nullable_set = set(nullable_data_cols or [])
     for col in natural_key_cols:
         column_defs.append(
-            f"{col} {_column_type_for_column(col, column_types, conn.engine, preserve_mssql_types=preserve_mssql_types)} NOT NULL"
+            f"{quote(col)} {_column_type_for_column(col, column_types, conn.engine, preserve_mssql_types=preserve_mssql_types)} NOT NULL"
         )
     for col in data_cols:
         null_clause = (
@@ -382,10 +396,10 @@ def _create_staging_table(
             else " NOT NULL"
         )
         column_defs.append(
-            f"{col} {_column_type_for_column(col, column_types, conn.engine, preserve_mssql_types=preserve_mssql_types)}{null_clause}"
+            f"{quote(col)} {_column_type_for_column(col, column_types, conn.engine, preserve_mssql_types=preserve_mssql_types)}{null_clause}"
         )
     column_defs.append(
-        f"{hash_col} {_column_type_for_column(hash_col, column_types, conn.engine, preserve_mssql_types=preserve_mssql_types)} NOT NULL"
+        f"{quote(hash_col)} {_column_type_for_column(hash_col, column_types, conn.engine, preserve_mssql_types=preserve_mssql_types)} NOT NULL"
     )
     for extra in extra_columns or []:
         extra_type = (
@@ -394,9 +408,13 @@ def _create_staging_table(
             else None
         )
         column_defs.append(
-            f"{extra} {extra_type or _column_type_for_column(extra, column_types, conn.engine, preserve_mssql_types=preserve_mssql_types)}"
+            f"{quote(extra)} {extra_type or _column_type_for_column(extra, column_types, conn.engine, preserve_mssql_types=preserve_mssql_types)}"
         )
-    unique_clause = f", UNIQUE({', '.join(natural_key_cols)})" if natural_key_cols else ""
+    unique_clause = (
+        f", UNIQUE({', '.join(quote(col) for col in natural_key_cols)})"
+        if natural_key_cols
+        else ""
+    )
     create_sql = text(
         f"""
         CREATE {'TABLE' if dialect != 'sqlite' else 'TEMP TABLE'} {table_name} (
@@ -420,10 +438,20 @@ def _insert_snapshot_rows(
     columns = list(natural_key_cols) + list(data_cols) + [hash_col]
     if extra_columns:
         columns.extend(extra_columns)
+    engine = getattr(conn, "engine", None)
+    rendered_columns = ", ".join(
+        _quote_identifier(engine, col) if engine is not None else col
+        for col in columns
+    )
+    param_names = (
+        {col: f"value_{index}" for index, col in enumerate(columns)}
+        if engine is not None
+        else {col: col for col in columns}
+    )
     insert_sql = text(
         f"""
-        INSERT INTO {table_name} ({', '.join(columns)})
-        VALUES ({', '.join(':' + col for col in columns)})
+        INSERT INTO {table_name} ({rendered_columns})
+        VALUES ({', '.join(':' + param_names[col] for col in columns)})
         """
     )
     def _sanitize(value):
@@ -437,7 +465,7 @@ def _insert_snapshot_rows(
     for _, row in incoming_df[columns].iterrows():
         record = {}
         for col in columns:
-            record[col] = _sanitize(row[col])
+            record[param_names[col]] = _sanitize(row[col])
         records.append(record)
     try:
         if records:
@@ -522,13 +550,22 @@ def _is_integer_like_type(type_name: str) -> bool:
 
 
 def _quote_identifier(engine: Engine, identifier: str) -> str:
+    normalized = _normalize_bracket_identifier(identifier) or ""
     if engine.dialect.name == "mssql":
-        return f"[{identifier.replace(']', ']]')}]"
-    return f'"{identifier.replace(chr(34), chr(34) * 2)}"'
+        return f"[{normalized.replace(']', ']]')}]"
+    return f'"{normalized.replace(chr(34), chr(34) * 2)}"'
 
 
 def _build_join_condition(left_alias: str, right_alias: str, columns: Sequence[str]) -> str:
-    return " AND ".join(f"{left_alias}.{col} = {right_alias}.{col}" for col in columns)
+    return " AND ".join(
+        f"{left_alias}.{_quote_identifier_engine(col)} = {right_alias}.{_quote_identifier_engine(col)}"
+        for col in columns
+    )
+
+
+def _quote_identifier_engine(identifier: str) -> str:
+    normalized = _normalize_bracket_identifier(identifier) or ""
+    return f'"{normalized.replace(chr(34), chr(34) * 2)}"'
 
 
 def _apply_snapshot_to_target(
@@ -546,16 +583,25 @@ def _apply_snapshot_to_target(
     has_batch_id: bool = False,
     has_archive_filename: bool = False,
 ) -> bool:
-    join_condition = _build_join_condition(target_table, "s", natural_key_cols)
+    quote = lambda value: _quote_identifier(conn.engine, value)
+    join_condition = " AND ".join(
+        f"{target_table}.{quote(col)} = s.{quote(col)}" for col in natural_key_cols
+    )
+    deleted_ind_column = quote(columns["deleted_ind"])
+    update_date_column = quote(columns["update_date"])
+    effective_end_column = quote(columns["effective_date_end"])
+    current_ind_column = quote(columns["current_ind"])
+    hash_column = quote(hash_col)
+    join_numeric_column = quote(join_numeric_key_col)
 
     delete_sql = text(
         f"""
         UPDATE {target_table}
-        SET {columns['deleted_ind']} = 1,
-            {columns['update_date']} = :execution_time,
-            {columns['effective_date_end']} = :execution_time
-        WHERE {columns['current_ind']} = 1
-          AND {columns['deleted_ind']} = 0
+        SET {deleted_ind_column} = 1,
+            {update_date_column} = :execution_time,
+            {effective_end_column} = :execution_time
+        WHERE {current_ind_column} = 1
+          AND {deleted_ind_column} = 0
           AND NOT EXISTS (
             SELECT 1 FROM {staging_table} s
             WHERE {join_condition}
@@ -567,26 +613,26 @@ def _apply_snapshot_to_target(
     update_sql = text(
         f"""
         UPDATE {target_table}
-        SET {columns['current_ind']} = 0,
-            {columns['update_date']} = :execution_time,
-            {columns['effective_date_end']} = :execution_time
-        WHERE {columns['current_ind']} = 1
+        SET {current_ind_column} = 0,
+            {update_date_column} = :execution_time,
+            {effective_end_column} = :execution_time
+        WHERE {current_ind_column} = 1
           AND EXISTS (
             SELECT 1 FROM {staging_table} s
             WHERE {join_condition}
               AND (
-                s.{hash_col} != {target_table}.{hash_col}
-                OR {target_table}.{columns['deleted_ind']} = 1
+                s.{hash_column} != {target_table}.{hash_column}
+                OR {target_table}.{deleted_ind_column} = 1
               )
           )
         """
     )
     update_result = conn.execute(update_sql, {"execution_time": execution_time})
 
-    max_join_sql = text(f"SELECT COALESCE(MAX({join_numeric_key_col}), 0) FROM {target_table}")
+    max_join_sql = text(f"SELECT COALESCE(MAX({join_numeric_column}), 0) FROM {target_table}")
     max_join_numeric = conn.execute(max_join_sql).scalar() or 0
 
-    order_by = ", ".join(f"s.{col}" for col in natural_key_cols) or "1"
+    order_by = ", ".join(f"s.{quote(col)}" for col in natural_key_cols) or "1"
 
     insert_columns = list(natural_key_cols) + list(data_cols) + [join_numeric_key_col]
     if has_batch_id:
@@ -606,14 +652,14 @@ def _apply_snapshot_to_target(
     )
 
     current_join_condition = (
-        f"{_build_join_condition('t', 's', natural_key_cols)} AND t.{columns['current_ind']} = 1"
+        f"{' AND '.join(f't.{quote(col)} = s.{quote(col)}' for col in natural_key_cols)} AND t.{current_ind_column} = 1"
         if natural_key_cols
-        else f"t.{columns['current_ind']} = 1"
+        else f"t.{current_ind_column} = 1"
     )
 
     select_parts = [
-        *[f"s.{col}" for col in natural_key_cols],
-        *[f"s.{col}" for col in data_cols],
+        *[f"s.{quote(col)}" for col in natural_key_cols],
+        *[f"s.{quote(col)}" for col in data_cols],
         "COALESCE(s.existing_join_numeric, :join_numeric_base + rn)",
     ]
     if has_batch_id:
@@ -622,7 +668,7 @@ def _apply_snapshot_to_target(
         select_parts.append(":archive_filename")
     select_parts.extend(
         [
-            f"s.{hash_col}",
+            f"s.{hash_column}",
             ":execution_time",
             "NULL",
             "CASE WHEN s.existing_join_numeric IS NULL THEN :effective_date_min ELSE :execution_time END",
@@ -640,11 +686,11 @@ def _apply_snapshot_to_target(
                 ROW_NUMBER() OVER (ORDER BY {order_by}) AS rn
             FROM {staging_table} s
             LEFT JOIN {target_table} t ON {current_join_condition}
-            WHERE t.{columns['current_ind']} IS NULL
-               OR s.{hash_col} != t.{hash_col}
-               OR t.{columns['deleted_ind']} = 1
+            WHERE t.{current_ind_column} IS NULL
+               OR s.{hash_column} != t.{hash_column}
+               OR t.{deleted_ind_column} = 1
         )
-        INSERT INTO {target_table} ({', '.join(insert_columns)})
+        INSERT INTO {target_table} ({', '.join(quote(col) for col in insert_columns)})
         SELECT
             {', '.join(select_parts)}
         FROM candidates s

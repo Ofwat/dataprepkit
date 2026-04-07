@@ -73,6 +73,50 @@ def test_run_dimension_uses_metadata(engine=None):
     METADATA_REGISTRY.pop("dummy_dimension", None)
 
 
+def test_run_dimension_supports_metadata_columns_with_spaces():
+    engine = create_engine("sqlite:///:memory:")
+    metadata_name = "space_dimension"
+    METADATA_REGISTRY.pop(metadata_name, None)
+    register_metadata(
+        metadata_name,
+        {
+            "target_table": "dimension_space",
+            "natural_key_cols": ["natural key"],
+            "data_columns": {"display name": {"type": "TEXT"}},
+            "surrogate_key": "dimension key",
+            "join_numeric_key": "dimension id",
+            "filepath": "unused.csv",
+        },
+    )
+
+    incoming = pd.DataFrame(
+        [
+            {"natural key": "A1", "display name": "Alpha"},
+            {"natural key": "B1", "display name": "Beta"},
+        ]
+    )
+
+    run_dimension(engine, metadata_name, override_df=incoming)
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT "dimension key", "natural key", "display name", "Current_Ind"
+                FROM dimension_space
+                ORDER BY "dimension key"
+                """
+            )
+        ).fetchall()
+
+    assert rows == [
+        (1, "A1", "Alpha", 1),
+        (2, "B1", "Beta", 1),
+    ]
+
+    METADATA_REGISTRY.pop(metadata_name, None)
+
+
 def test_run_dimension_na_row_is_optional():
     engine = create_engine("sqlite:///:memory:")
     METADATA_REGISTRY.pop("na_dimension", None)

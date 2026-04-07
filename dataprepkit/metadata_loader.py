@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 from typing import Any, Callable, Dict, Mapping, Sequence, Literal
 
 import logging
@@ -124,6 +125,28 @@ class DimensionDependencyError(ValueError):
 
 class CircularDimensionDependencyError(DimensionDependencyError):
     """Raised when registered dimensions contain a dependency cycle."""
+
+
+def _normalize_bracket_identifier(name: str | None) -> str | None:
+    if name is None:
+        return None
+    stripped = name.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        return stripped[1:-1].replace("]]", "]")
+    return stripped
+
+
+def _quote_identifier(engine: Engine, identifier: str) -> str:
+    normalized = _normalize_bracket_identifier(identifier) or ""
+    if engine.dialect.name == "mssql":
+        return f"[{normalized.replace(']', ']]')}]"
+    return f'"{normalized.replace(chr(34), chr(34) * 2)}"'
+
+
+def _safe_identifier_token(identifier: str) -> str:
+    normalized = (_normalize_bracket_identifier(identifier) or "").strip('"')
+    token = re.sub(r"[^0-9A-Za-z_]+", "_", normalized).strip("_")
+    return token or "col"
 
 
 def _normalize_column_specs(
@@ -410,12 +433,13 @@ def _upsert_reserved_member(
     }
 
     with engine.begin() as conn:
+        quote = lambda value: _quote_identifier(engine, value)
         existing = conn.execute(
             text(
                 f"""
-                SELECT {metadata.surrogate_key}, {metadata.join_numeric_key}, {DEFAULT_SYSTEM_COLUMNS['insert_date']}
+                SELECT {quote(metadata.surrogate_key)}, {quote(metadata.join_numeric_key)}, {quote(DEFAULT_SYSTEM_COLUMNS['insert_date'])}
                 FROM {metadata.target_table}
-                WHERE {metadata.surrogate_key} = :surrogate_key
+                WHERE {quote(metadata.surrogate_key)} = :surrogate_key
                 """
             ),
             {"surrogate_key": member.surrogate_key},
@@ -460,8 +484,9 @@ def _raise_on_reserved_member_conflict(
     metadata: DimensionMetadata,
     member: ReservedSourceMember,
 ) -> None:
+    quote = lambda value: _quote_identifier(conn.engine, value)
     predicates = [
-        f"{column} = :nk_{index}"
+        f"{quote(column)} = :nk_{index}"
         for index, column in enumerate(metadata.natural_key_cols)
     ]
     params = {
@@ -472,11 +497,11 @@ def _raise_on_reserved_member_conflict(
     conflict = conn.execute(
         text(
             f"""
-            SELECT {metadata.surrogate_key}
+            SELECT {quote(metadata.surrogate_key)}
             FROM {metadata.target_table}
             WHERE {' AND '.join(predicates)}
-              AND {metadata.surrogate_key} != :surrogate_key
-              AND {DEFAULT_SYSTEM_COLUMNS['current_ind']} = 1
+              AND {quote(metadata.surrogate_key)} != :surrogate_key
+              AND {quote(DEFAULT_SYSTEM_COLUMNS['current_ind'])} = 1
             """
         ),
         params,
@@ -526,7 +551,7 @@ def _insert_reserved_member(
     params: dict[str, Any] = {}
     for index, (column, value) in enumerate(column_values):
         param_name = f"insert_value_{index}"
-        columns.append(column)
+        columns.append(_quote_identifier(conn.engine, column))
         placeholders.append(f":{param_name}")
         params[param_name] = value
     insert_sql = text(
@@ -579,14 +604,14 @@ def _update_reserved_member(
     params: dict[str, Any] = {"reserved_surrogate_key": member.surrogate_key}
     for index, (column, value) in enumerate(value_items):
         param_name = f"update_value_{index}"
-        set_clauses.append(f"{column} = :{param_name}")
+        set_clauses.append(f"{_quote_identifier(conn.engine, column)} = :{param_name}")
         params[param_name] = value
     conn.execute(
         text(
             f"""
             UPDATE {metadata.target_table}
             SET {', '.join(set_clauses)}
-            WHERE {metadata.surrogate_key} = :reserved_surrogate_key
+            WHERE {_quote_identifier(conn.engine, metadata.surrogate_key)} = :reserved_surrogate_key
             """
         ),
         params,
@@ -647,7 +672,7 @@ def _delete_reserved_member(
         for index, _column in enumerate(metadata.natural_key_cols)
     }
     predicate = " AND ".join(
-        f"{column} = :nk_{index}"
+        f"{_quote_identifier(engine, column)} = :nk_{index}"
         for index, column in enumerate(metadata.natural_key_cols)
     )
     with engine.begin() as conn:
@@ -950,7 +975,7 @@ def _column_spec_clause(name: str, spec: ColumnSpec, engine: Engine) -> str:
     if spec.default is not None:
         constraints.append(f"DEFAULT {spec.default}")
     constraint_sql = " ".join(constraints)
-    return f"{name} {column_type} {constraint_sql}".strip()
+    return f"{_quote_identifier(engine, name)} {column_type} {constraint_sql}".strip()
 
 
 def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
@@ -995,15 +1020,15 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
         for name, spec in metadata.data_columns.items()
     ]
     system_columns = [
-        f"{DEFAULT_SYSTEM_COLUMNS['row_hash']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['row_hash'], engine)} NOT NULL",
-        f"{DEFAULT_SYSTEM_COLUMNS['insert_date']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['insert_date'], engine)} NOT NULL",
-        f"{DEFAULT_SYSTEM_COLUMNS['update_date']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['update_date'], engine)}",
-        f"{DEFAULT_SYSTEM_COLUMNS['effective_date_start']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['effective_date_start'], engine)} NOT NULL",
-        f"{DEFAULT_SYSTEM_COLUMNS['effective_date_end']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['effective_date_end'], engine)} NOT NULL",
-        f"{DEFAULT_SYSTEM_COLUMNS['current_ind']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['current_ind'], engine)} NOT NULL",
-        f"{DEFAULT_SYSTEM_COLUMNS['deleted_ind']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['deleted_ind'], engine)} NOT NULL",
-        f"{DEFAULT_SYSTEM_COLUMNS['batch_id']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['batch_id'], engine)} NOT NULL",
-        f"{DEFAULT_SYSTEM_COLUMNS['archive_filename']} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['archive_filename'], engine)} NOT NULL",
+        f"{_quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS['row_hash'])} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['row_hash'], engine)} NOT NULL",
+        f"{_quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS['insert_date'])} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['insert_date'], engine)} NOT NULL",
+        f"{_quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS['update_date'])} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['update_date'], engine)}",
+        f"{_quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS['effective_date_start'])} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['effective_date_start'], engine)} NOT NULL",
+        f"{_quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS['effective_date_end'])} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['effective_date_end'], engine)} NOT NULL",
+        f"{_quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS['current_ind'])} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['current_ind'], engine)} NOT NULL",
+        f"{_quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS['deleted_ind'])} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['deleted_ind'], engine)} NOT NULL",
+        f"{_quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS['batch_id'])} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['batch_id'], engine)} NOT NULL",
+        f"{_quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS['archive_filename'])} {_system_column_type(DEFAULT_SYSTEM_COLUMNS['archive_filename'], engine)} NOT NULL",
     ]
     surrogate_clause = _surrogate_column_clause(engine, metadata.surrogate_key)
     join_numeric_clause = _join_numeric_clause(engine, metadata.join_numeric_key)
@@ -1043,8 +1068,9 @@ def _current_business_key_index_sql(
 ) -> str:
     _, table = _split_table_name(target_table)
     index_columns = [*natural_key_cols, current_ind]
-    index_name = f"ix_{table}_{'_'.join(index_columns)}"
-    return f"CREATE INDEX {index_name} ON {target_table} ({', '.join(index_columns)})"
+    index_name = f"ix_{_safe_identifier_token(table)}_{'_'.join(_safe_identifier_token(col) for col in index_columns)}"
+    rendered_columns = ", ".join(f'"{col}"' for col in index_columns)
+    return f"CREATE INDEX {index_name} ON {target_table} ({rendered_columns})"
 
 
 def _normalize_table_key(schema: str | None, table: str) -> tuple[str | None, str]:
@@ -1317,14 +1343,19 @@ def _evolve_table_columns(
 
 def _evolve_effective_date_column(conn: Connection, engine: Engine, table_name: str, column: str) -> None:
     column_type = _system_column_type(column, engine)
-    conn.execute(text(f"ALTER TABLE {table_name} ADD {column} {column_type}"))
+    quoted_column = _quote_identifier(engine, column)
+    insert_date_column = _quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS["insert_date"])
+    current_ind_column = _quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS["current_ind"])
+    deleted_ind_column = _quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS["deleted_ind"])
+    update_date_column = _quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS["update_date"])
+    conn.execute(text(f"ALTER TABLE {table_name} ADD {quoted_column} {column_type}"))
     if column == DEFAULT_SYSTEM_COLUMNS["effective_date_start"]:
         conn.execute(
             text(
                 f"""
                 UPDATE {table_name}
-                SET {column} = {DEFAULT_SYSTEM_COLUMNS['insert_date']}
-                WHERE {column} IS NULL
+                SET {quoted_column} = {insert_date_column}
+                WHERE {quoted_column} IS NULL
                 """
             )
         )
@@ -1333,32 +1364,32 @@ def _evolve_effective_date_column(conn: Connection, engine: Engine, table_name: 
             text(
                 f"""
                 UPDATE {table_name}
-                SET {column} = CASE
-                    WHEN {DEFAULT_SYSTEM_COLUMNS['current_ind']} = 1
-                         AND {DEFAULT_SYSTEM_COLUMNS['deleted_ind']} = 0
+                SET {quoted_column} = CASE
+                    WHEN {current_ind_column} = 1
+                         AND {deleted_ind_column} = 0
                     THEN :effective_date_max
-                    ELSE COALESCE({DEFAULT_SYSTEM_COLUMNS['update_date']}, :effective_date_max)
+                    ELSE COALESCE({update_date_column}, :effective_date_max)
                 END
-                WHERE {column} IS NULL
+                WHERE {quoted_column} IS NULL
                 """
             ),
             {"effective_date_max": EFFECTIVE_DATE_MAX},
         )
     if engine.dialect.name == "mssql":
-        conn.execute(text(f"ALTER TABLE {table_name} ALTER COLUMN {column} {column_type} NOT NULL"))
+        conn.execute(text(f"ALTER TABLE {table_name} ALTER COLUMN {quoted_column} {column_type} NOT NULL"))
 
 def _surrogate_column_clause(engine: Engine, name: str) -> str:
     dialect = engine.dialect.name
     if dialect == "mssql":
-        return f"{name} INT IDENTITY(1,1) PRIMARY KEY"
-    return f"{name} INTEGER PRIMARY KEY AUTOINCREMENT"
+        return f"{_quote_identifier(engine, name)} INT IDENTITY(1,1) PRIMARY KEY"
+    return f"{_quote_identifier(engine, name)} INTEGER PRIMARY KEY AUTOINCREMENT"
 
 
 def _join_numeric_clause(engine: Engine, name: str) -> str:
     dialect = engine.dialect.name
     if dialect == "mssql":
-        return f"{name} INT NOT NULL"
-    return f"{name} INTEGER NOT NULL"
+        return f"{_quote_identifier(engine, name)} INT NOT NULL"
+    return f"{_quote_identifier(engine, name)} INTEGER NOT NULL"
 
 
 def _resolve_safe_data_columns(
@@ -1560,7 +1591,7 @@ def _evolve_schema(engine: Engine, table_name: str, missing: Mapping[str, Column
             constraint_sql = " ".join(constraints)
             definition = f"{column_type} {constraint_sql}".strip()
             conn.execute(
-                text(f"ALTER TABLE {table_name} ADD COLUMN {column} {definition}")
+                text(f"ALTER TABLE {table_name} ADD COLUMN {_quote_identifier(engine, column)} {definition}")
             )
 
 
@@ -1571,12 +1602,16 @@ def _capture_execution_time() -> datetime:
 
 
 def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence[str]) -> None:
-    key_expr = ", ".join(natural_key_cols)
+    key_expr = ", ".join(_quote_identifier(engine, col) for col in natural_key_cols)
+    current_ind_column = _quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS["current_ind"])
+    deleted_ind_column = _quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS["deleted_ind"])
+    update_date_column = _quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS["update_date"])
+    effective_end_column = _quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS["effective_date_end"])
     current_dups_sql = text(
         f"""
         SELECT {key_expr}, COUNT(*) AS cnt
         FROM {table}
-        WHERE Current_Ind = 1
+        WHERE {current_ind_column} = 1
         GROUP BY {key_expr}
         HAVING COUNT(*) > 1
         """
@@ -1588,19 +1623,19 @@ def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence
     validation_checks = [
         (
             text(
-                f"SELECT {top}1 FROM {table} WHERE Current_Ind = 1 AND Deleted_Ind = 0 AND Update_Date IS NOT NULL{limit}"
+                f"SELECT {top}1 FROM {table} WHERE {current_ind_column} = 1 AND {deleted_ind_column} = 0 AND {update_date_column} IS NOT NULL{limit}"
             ),
             "current row has Update_Date not NULL",
         ),
         (
             text(
-                f"SELECT {top}1 FROM {table} WHERE Current_Ind = 1 AND Deleted_Ind = 0 AND {DEFAULT_SYSTEM_COLUMNS['effective_date_end']} != :effective_date_max{limit}"
+                f"SELECT {top}1 FROM {table} WHERE {current_ind_column} = 1 AND {deleted_ind_column} = 0 AND {effective_end_column} != :effective_date_max{limit}"
             ),
             "current row has Effective_Date_End not at max",
         ),
         (
             text(
-                f"SELECT {top}1 FROM {table} WHERE Current_Ind = 0 AND Update_Date IS NULL{limit}"
+                f"SELECT {top}1 FROM {table} WHERE {current_ind_column} = 0 AND {update_date_column} IS NULL{limit}"
             ),
             "historical row missing Update_Date",
         ),

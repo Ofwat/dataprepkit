@@ -100,8 +100,18 @@ def _parse_table_ref(table_name: str | TableRef) -> TableRef:
     return TableRef(table=table, schema=schema)
 
 
+def _normalize_bracket_identifier(name: str | None) -> str | None:
+    if name is None:
+        return None
+    stripped = name.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        return stripped[1:-1].replace("]]", "]")
+    return stripped
+
+
 def _quote_mssql_identifier(identifier: str) -> str:
-    return f"[{identifier.replace(']', ']]')}]"
+    normalized = _normalize_bracket_identifier(identifier) or ""
+    return f"[{normalized.replace(']', ']]')}]"
 
 
 def _render_table_name(engine: Engine, table_name: str | TableRef) -> str:
