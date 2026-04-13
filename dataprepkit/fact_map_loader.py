@@ -121,29 +121,6 @@ END
         conn.execute(text("\n".join(statements)), params)
 
 
-def _build_insert_sql(
-    *,
-    fact_sql: str,
-    insert_columns_sql: str,
-    base_select_sql: str,
-    staging_sql: str,
-    join_sql: str,
-    final_select_sql: str,
-    additional_join_sql: str,
-) -> str:
-    return f"""
-        WITH base_rows AS (
-            SELECT {base_select_sql}
-            FROM {staging_sql} s
-            {join_sql}
-        )
-        INSERT INTO {fact_sql} ({insert_columns_sql})
-        SELECT {final_select_sql}
-        FROM base_rows b
-        {additional_join_sql}
-        """
-
-
 def load_fact_from_maps(
     *,
     engine: Engine,
@@ -172,13 +149,14 @@ def load_fact_from_maps(
         target_column = target["column"]
         source_schema = source.get("schema")
         source_table = source["table"]
-        source_value_column = source["column"]
+        source_lookup_column = source["lookup_column"]
+        source_value_column = source["value_column"]
         alias = f"lookup_{index}"
 
         base_joins.append(
             "LEFT JOIN "
             f"{_render_table_name(engine, source_schema, source_table)} {alias} "
-            f"ON {alias}.{_quote_identifier(engine, staging_column)} = "
+            f"ON {alias}.{_quote_identifier(engine, source_lookup_column)} = "
             f"s.{_quote_identifier(engine, staging_column)}"
         )
         base_selects.append(
@@ -278,15 +256,17 @@ def load_fact_from_maps(
         conn.execute(text(f"CREATE TABLE {fact_sql} ({create_columns_sql})"))
         conn.execute(
             text(
-                _build_insert_sql(
-                    fact_sql=fact_sql,
-                    insert_columns_sql=insert_columns_sql,
-                    base_select_sql=base_select_sql,
-                    staging_sql=staging_sql,
-                    join_sql=join_sql,
-                    final_select_sql=final_select_sql,
-                    additional_join_sql=additional_join_sql,
+                f"""
+                WITH base_rows AS (
+                    SELECT {base_select_sql}
+                    FROM {staging_sql} s
+                    {join_sql}
                 )
+                INSERT INTO {fact_sql} ({insert_columns_sql})
+                SELECT {final_select_sql}
+                FROM base_rows b
+                {additional_join_sql}
+                """
             )
         )
 
