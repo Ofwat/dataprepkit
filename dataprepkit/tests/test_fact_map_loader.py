@@ -322,7 +322,7 @@ def test_load_fact_from_maps_drops_and_recreates_existing_fact_table():
     assert [column["name"] for column in columns] == ["Measure_Instance_Id", "Value"]
 
 
-def test_load_fact_from_maps_raises_for_missing_required_staging_column():
+def test_load_fact_from_maps_warns_for_missing_lookup_staging_column(capsys):
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
 
     with engine.begin() as conn:
@@ -338,7 +338,59 @@ def test_load_fact_from_maps_raises_for_missing_required_staging_column():
             )
         )
 
-    with pytest.raises(ValueError, match="Missing required staging columns"):
+    load_fact_from_maps(
+        engine=engine,
+        lookup_map={
+            "Measure_Cd": {
+                "source": {
+                    "schema": "main",
+                    "table": "dim_measure",
+                    "lookup_column": "Measure_Cd",
+                    "value_column": "Measure_Instance_Id",
+                },
+                "target": {
+                    "column": "Measure_Instance_Id",
+                    "comment": "Bar",
+                },
+            }
+        },
+        data_columns=[{"column": "Value", "comment": "Actual inserted value"}],
+        additional_columns=[],
+        staging_table="staging_fact",
+        staging_schema="main",
+        fact_table="fact_result",
+        fact_schema="main",
+    )
+
+    captured = capsys.readouterr()
+    assert "Warning: missing lookup staging columns" in captured.out
+    assert "Measure_Cd" in captured.out
+
+    with engine.connect() as conn:
+        rows = conn.execute(text("SELECT Value FROM fact_result")).mappings().all()
+        columns = conn.execute(text("PRAGMA table_info(fact_result)")).mappings().all()
+
+    assert rows == []
+    assert [column["name"] for column in columns] == ["Value"]
+
+
+def test_load_fact_from_maps_raises_for_missing_data_column():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE staging_fact (Measure_Cd TEXT)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_measure (
+                    Measure_Cd TEXT,
+                    Measure_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+
+    with pytest.raises(ValueError, match="Missing required data columns"):
         load_fact_from_maps(
             engine=engine,
             lookup_map={

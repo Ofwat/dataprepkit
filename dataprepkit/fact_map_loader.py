@@ -60,24 +60,34 @@ def _validate_staging_columns(
     table: str,
     lookup_map: Mapping[str, Mapping[str, object]],
     data_columns: Sequence[Mapping[str, str]],
-) -> None:
+) -> tuple[set[str], set[str]]:
     staging_columns = _get_table_columns(engine, schema=schema, table=table)
-    required_columns = set(lookup_map)
-    required_columns.update(column["column"] for column in data_columns)
+    lookup_columns = set(lookup_map)
+    data_column_names = {column["column"] for column in data_columns}
 
-    missing_columns = sorted(required_columns - staging_columns)
-    if missing_columns:
+    missing_lookup_columns = sorted(lookup_columns - staging_columns)
+    if missing_lookup_columns:
         location = f"{schema}.{table}" if schema else table
-        raise ValueError(
-            f"Missing required staging columns in '{location}': {', '.join(missing_columns)}"
+        print(
+            "Warning: missing lookup staging columns in "
+            f"'{location}': {', '.join(missing_lookup_columns)}"
         )
 
-    extra_columns = sorted(staging_columns - required_columns)
+    missing_data_columns = sorted(data_column_names - staging_columns)
+    if missing_data_columns:
+        location = f"{schema}.{table}" if schema else table
+        raise ValueError(
+            f"Missing required data columns in '{location}': {', '.join(missing_data_columns)}"
+        )
+
+    used_columns = lookup_columns | data_column_names
+    extra_columns = sorted(staging_columns - used_columns)
     if extra_columns:
         location = f"{schema}.{table}" if schema else table
         print(
             f"Warning: unused staging columns in '{location}': {', '.join(extra_columns)}"
         )
+    return staging_columns, set(missing_lookup_columns)
 
 
 def _apply_comments(
@@ -171,7 +181,7 @@ def load_fact_from_maps(
     table_comment: str | None = None,
 ) -> None:
     ensure_schema_exists(engine, fact_schema)
-    _validate_staging_columns(
+    staging_columns, missing_columns = _validate_staging_columns(
         engine,
         schema=staging_schema,
         table=staging_table,
@@ -188,6 +198,8 @@ def load_fact_from_maps(
     fact_sql = _render_table_name(engine, fact_schema, fact_table)
 
     for index, (staging_column, config) in enumerate(lookup_map.items()):
+        if staging_column in missing_columns:
+            continue
         source = config["source"]
         target = config["target"]
         target_column = target["column"]
@@ -223,6 +235,8 @@ def load_fact_from_maps(
 
     for column in data_columns:
         column_name = column["column"]
+        if column_name not in staging_columns:
+            continue
         base_selects.append(
             f"s.{_quote_identifier(engine, column_name)} "
             f"AS {_quote_identifier(engine, column_name)}"
