@@ -121,6 +121,29 @@ END
         conn.execute(text("\n".join(statements)), params)
 
 
+def _build_insert_sql(
+    *,
+    fact_sql: str,
+    insert_columns_sql: str,
+    base_select_sql: str,
+    staging_sql: str,
+    join_sql: str,
+    final_select_sql: str,
+    additional_join_sql: str,
+) -> str:
+    return f"""
+        WITH base_rows AS (
+            SELECT {base_select_sql}
+            FROM {staging_sql} s
+            {join_sql}
+        )
+        INSERT INTO {fact_sql} ({insert_columns_sql})
+        SELECT {final_select_sql}
+        FROM base_rows b
+        {additional_join_sql}
+        """
+
+
 def load_fact_from_maps(
     *,
     engine: Engine,
@@ -255,17 +278,15 @@ def load_fact_from_maps(
         conn.execute(text(f"CREATE TABLE {fact_sql} ({create_columns_sql})"))
         conn.execute(
             text(
-                f"""
-                INSERT INTO {fact_sql} ({insert_columns_sql})
-                WITH base_rows AS (
-                    SELECT {base_select_sql}
-                    FROM {staging_sql} s
-                    {join_sql}
+                _build_insert_sql(
+                    fact_sql=fact_sql,
+                    insert_columns_sql=insert_columns_sql,
+                    base_select_sql=base_select_sql,
+                    staging_sql=staging_sql,
+                    join_sql=join_sql,
+                    final_select_sql=final_select_sql,
+                    additional_join_sql=additional_join_sql,
                 )
-                SELECT {final_select_sql}
-                FROM base_rows b
-                {additional_join_sql}
-                """
             )
         )
 

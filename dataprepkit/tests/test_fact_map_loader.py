@@ -1,7 +1,7 @@
 from sqlalchemy import create_engine, text
 
 import dataprepkit.fact_map_loader as fact_map_loader_module
-from dataprepkit.fact_map_loader import load_fact_from_maps
+from dataprepkit.fact_map_loader import _build_insert_sql, load_fact_from_maps
 
 
 def test_load_fact_from_maps_builds_fact_table_from_staging_and_dimensions():
@@ -361,3 +361,21 @@ def test_apply_comments_executes_for_mssql():
     assert "sp_addextendedproperty" in sql
     assert params["schema"] == "Facts"
     assert params["table"] == "fact_result"
+
+
+def test_build_insert_sql_places_cte_before_insert():
+    sql = _build_insert_sql(
+        fact_sql="[Facts].[fact_result]",
+        insert_columns_sql="[Value]",
+        base_select_sql='s.[Value] AS [Value]',
+        staging_sql="[Staging].[stg_fact]",
+        join_sql="",
+        final_select_sql="b.[Value] AS [Value]",
+        additional_join_sql="",
+    )
+
+    normalized = " ".join(sql.split())
+    assert normalized.startswith(
+        "WITH base_rows AS ( SELECT s.[Value] AS [Value] FROM [Staging].[stg_fact] s ) "
+        "INSERT INTO [Facts].[fact_result] ([Value]) SELECT b.[Value] AS [Value] FROM base_rows b"
+    )
