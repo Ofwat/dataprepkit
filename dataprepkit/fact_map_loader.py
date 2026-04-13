@@ -172,13 +172,14 @@ def load_fact_from_maps(
         target_column = target["column"]
         source_schema = source.get("schema")
         source_table = source["table"]
+        source_lookup_column = source.get("lookup_column", staging_column)
         source_value_column = source["column"]
         alias = f"lookup_{index}"
 
         base_joins.append(
             "LEFT JOIN "
             f"{_render_table_name(engine, source_schema, source_table)} {alias} "
-            f"ON {alias}.{_quote_identifier(engine, staging_column)} = "
+            f"ON {alias}.{_quote_identifier(engine, source_lookup_column)} = "
             f"s.{_quote_identifier(engine, staging_column)}"
         )
         base_selects.append(
