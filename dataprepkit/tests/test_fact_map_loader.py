@@ -8,6 +8,7 @@ def test_load_fact_from_maps_builds_fact_table_from_staging_and_dimensions():
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
 
     with engine.begin() as conn:
+        conn.execute(text("ATTACH DATABASE ':memory:' AS facts"))
         conn.execute(
             text(
                 """
@@ -187,8 +188,9 @@ def test_load_fact_from_maps_builds_fact_table_from_staging_and_dimensions():
         data_columns=data_columns,
         additional_columns=additional_columns,
         staging_table="staging_fact",
-        schema_name="main",
+        staging_schema="main",
         fact_table="fact_result",
+        fact_schema="facts",
     )
 
     with engine.connect() as conn:
@@ -202,12 +204,14 @@ def test_load_fact_from_maps_builds_fact_table_from_staging_and_dimensions():
                     Value,
                     Measure_Name,
                     Submission_Period_Interval_Type
-                FROM fact_result
+                FROM facts.fact_result
                 ORDER BY Organisation_Instance_Id
                 """
             )
         ).mappings().all()
-        columns = conn.execute(text("PRAGMA table_info(fact_result)")).mappings().all()
+        columns = conn.execute(
+            text("PRAGMA facts.table_info(fact_result)")
+        ).mappings().all()
 
     assert rows == [
         {
@@ -297,8 +301,9 @@ def test_load_fact_from_maps_drops_and_recreates_existing_fact_table():
         data_columns=[{"column": "Value", "comment": "Actual inserted value"}],
         additional_columns=[],
         staging_table="staging_fact",
-        schema_name="main",
+        staging_schema="main",
         fact_table="fact_result",
+        fact_schema="main",
     )
 
     with engine.connect() as conn:

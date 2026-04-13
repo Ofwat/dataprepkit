@@ -128,19 +128,20 @@ def load_fact_from_maps(
     data_columns: Sequence[Mapping[str, str]],
     additional_columns: Sequence[Mapping[str, object]],
     staging_table: str,
-    schema_name: str | None,
+    staging_schema: str | None,
     fact_table: str,
+    fact_schema: str | None = None,
     table_comment: str | None = None,
 ) -> None:
-    ensure_schema_exists(engine, schema_name)
+    ensure_schema_exists(engine, fact_schema)
 
     column_definitions: list[tuple[str, str]] = []
     column_comments: dict[str, str] = {}
     base_selects: list[str] = []
     base_joins: list[str] = []
 
-    staging_sql = _render_table_name(engine, schema_name, staging_table)
-    fact_sql = _render_table_name(engine, schema_name, fact_table)
+    staging_sql = _render_table_name(engine, staging_schema, staging_table)
+    fact_sql = _render_table_name(engine, fact_schema, fact_table)
 
     for index, (staging_column, config) in enumerate(lookup_map.items()):
         source = config["source"]
@@ -186,7 +187,7 @@ def load_fact_from_maps(
                 column_name,
                 _get_column_type(
                     engine,
-                    schema=schema_name,
+                    schema=staging_schema,
                     table=staging_table,
                     column=column_name,
                 ),
@@ -270,7 +271,7 @@ def load_fact_from_maps(
 
     _apply_comments(
         engine,
-        schema=schema_name,
+        schema=fact_schema,
         table=fact_table,
         table_comment=table_comment,
         column_comments=column_comments,
