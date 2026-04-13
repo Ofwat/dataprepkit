@@ -46,7 +46,7 @@ def test_load_fact_from_maps_builds_fact_table_from_staging_and_dimensions():
             text(
                 """
                 CREATE TABLE dim_interval (
-                    Period_Code TEXT,
+                    Submission_Period_Cd TEXT,
                     Interval_Instance_Id INTEGER,
                     Interval_Type TEXT
                 )
@@ -97,7 +97,7 @@ def test_load_fact_from_maps_builds_fact_table_from_staging_and_dimensions():
             text(
                 """
                 INSERT INTO dim_interval (
-                    Period_Code,
+                    Submission_Period_Cd,
                     Interval_Instance_Id,
                     Interval_Type
                 )
@@ -135,7 +135,6 @@ def test_load_fact_from_maps_builds_fact_table_from_staging_and_dimensions():
             "source": {
                 "schema": "main",
                 "table": "dim_interval",
-                "lookup_column": "Period_Code",
                 "column": "Interval_Instance_Id",
             },
             "target": {
