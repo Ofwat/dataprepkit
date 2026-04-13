@@ -43,6 +43,43 @@ def _get_column_type(
     raise ValueError(f"Column '{column}' not found in '{location}'.")
 
 
+def _get_table_columns(
+    engine: Engine,
+    *,
+    schema: str | None,
+    table: str,
+) -> set[str]:
+    inspector = inspect(engine)
+    return {candidate["name"] for candidate in inspector.get_columns(table, schema=schema)}
+
+
+def _validate_staging_columns(
+    engine: Engine,
+    *,
+    schema: str | None,
+    table: str,
+    lookup_map: Mapping[str, Mapping[str, object]],
+    data_columns: Sequence[Mapping[str, str]],
+) -> None:
+    staging_columns = _get_table_columns(engine, schema=schema, table=table)
+    required_columns = set(lookup_map)
+    required_columns.update(column["column"] for column in data_columns)
+
+    missing_columns = sorted(required_columns - staging_columns)
+    if missing_columns:
+        location = f"{schema}.{table}" if schema else table
+        raise ValueError(
+            f"Missing required staging columns in '{location}': {', '.join(missing_columns)}"
+        )
+
+    extra_columns = sorted(staging_columns - required_columns)
+    if extra_columns:
+        location = f"{schema}.{table}" if schema else table
+        print(
+            f"Warning: unused staging columns in '{location}': {', '.join(extra_columns)}"
+        )
+
+
 def _apply_comments(
     engine: Engine,
     *,
@@ -134,6 +171,13 @@ def load_fact_from_maps(
     table_comment: str | None = None,
 ) -> None:
     ensure_schema_exists(engine, fact_schema)
+    _validate_staging_columns(
+        engine,
+        schema=staging_schema,
+        table=staging_table,
+        lookup_map=lookup_map,
+        data_columns=data_columns,
+    )
 
     column_definitions: list[tuple[str, str]] = []
     column_comments: dict[str, str] = {}
