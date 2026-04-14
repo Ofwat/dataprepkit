@@ -28,6 +28,11 @@ def _compile_column_type(engine: Engine, column_type: object) -> str:
     return str(column_type)
 
 
+def _build_column_definition(name: str, column_type: str, *, nullable: bool) -> str:
+    null_sql = "" if nullable else " NOT NULL"
+    return f"{name} {column_type}{null_sql}"
+
+
 def _get_column_type(
     engine: Engine,
     *,
@@ -189,7 +194,7 @@ def load_fact_from_maps(
         data_columns=data_columns,
     )
 
-    column_definitions: list[tuple[str, str]] = []
+    column_definitions: list[tuple[str, str, bool]] = []
     column_comments: dict[str, str] = {}
     base_selects: list[str] = []
     base_joins: list[str] = []
@@ -228,6 +233,7 @@ def load_fact_from_maps(
                     table=source_table,
                     column=source_value_column,
                 ),
+                False,
             )
         )
         if target.get("comment"):
@@ -250,6 +256,7 @@ def load_fact_from_maps(
                     table=staging_table,
                     column=column_name,
                 ),
+                True,
             )
         )
         if column.get("comment"):
@@ -257,7 +264,7 @@ def load_fact_from_maps(
 
     final_selects = [
         f"b.{_quote_identifier(engine, name)} AS {_quote_identifier(engine, name)}"
-        for name, _ in column_definitions
+        for name, _, _ in column_definitions
     ]
     additional_joins: list[str] = []
 
@@ -292,17 +299,22 @@ def load_fact_from_maps(
                     table=source_table,
                     column=source_value_column,
                 ),
+                True,
             )
         )
         if target.get("comment"):
             column_comments[target_column] = str(target["comment"])
 
     create_columns_sql = ", ".join(
-        f"{_quote_identifier(engine, name)} {column_type}"
-        for name, column_type in column_definitions
+        _build_column_definition(
+            _quote_identifier(engine, name),
+            column_type,
+            nullable=nullable,
+        )
+        for name, column_type, nullable in column_definitions
     )
     insert_columns_sql = ", ".join(
-        _quote_identifier(engine, name) for name, _ in column_definitions
+        _quote_identifier(engine, name) for name, _, _ in column_definitions
     )
     base_select_sql = ", ".join(base_selects)
     final_select_sql = ", ".join(final_selects)

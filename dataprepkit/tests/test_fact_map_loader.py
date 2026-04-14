@@ -244,6 +244,14 @@ def test_load_fact_from_maps_builds_fact_table_from_staging_and_dimensions():
         "Measure_Name": "TEXT",
         "Submission_Period_Interval_Type": "TEXT",
     }
+    assert {column["name"]: column["notnull"] for column in columns} == {
+        "Organisation_Instance_Id": 1,
+        "Measure_Instance_Id": 1,
+        "Submission_Period_Interval_Instance_Id": 1,
+        "Value": 0,
+        "Measure_Name": 0,
+        "Submission_Period_Interval_Type": 0,
+    }
 
 
 def test_load_fact_from_maps_drops_and_recreates_existing_fact_table():
