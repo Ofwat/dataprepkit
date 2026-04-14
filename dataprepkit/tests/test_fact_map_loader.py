@@ -495,6 +495,180 @@ def test_load_fact_from_maps_warns_for_unused_staging_column(capsys):
     assert "Ignored_Column" in captured.out
 
 
+def test_load_fact_from_maps_filters_lookup_to_current_rows():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("ATTACH DATABASE ':memory:' AS facts"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE staging_fact (
+                    Measure_Cd TEXT,
+                    Value REAL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_measure (
+                    Measure_Cd TEXT,
+                    Measure_Instance_Id INTEGER,
+                    current_ind INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO staging_fact (Measure_Cd, Value)
+                VALUES ('MEASURE1', 1.5)
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_measure (Measure_Cd, Measure_Instance_Id, current_ind)
+                VALUES ('MEASURE1', 100, 0), ('MEASURE1', 200, 1)
+                """
+            )
+        )
+
+    load_fact_from_maps(
+        engine=engine,
+        lookup_map={
+            "Measure_Cd": {
+                "source": {
+                    "schema": "main",
+                    "table": "dim_measure",
+                    "lookup_column": "Measure_Cd",
+                    "value_column": "Measure_Instance_Id",
+                },
+                "target": {
+                    "column": "Measure_Instance_Id",
+                    "comment": "Bar",
+                },
+            }
+        },
+        data_columns=[{"column": "Value", "comment": "Actual inserted value"}],
+        additional_columns=[],
+        staging_table="staging_fact",
+        staging_schema="main",
+        fact_table="fact_result",
+        fact_schema="facts",
+    )
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT Measure_Instance_Id, Value FROM facts.fact_result")
+        ).mappings().all()
+
+    assert rows == [{"Measure_Instance_Id": 200, "Value": 1.5}]
+
+
+def test_load_fact_from_maps_filters_additional_columns_to_current_rows():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("ATTACH DATABASE ':memory:' AS facts"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE staging_fact (
+                    Measure_Cd TEXT,
+                    Value REAL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_measure (
+                    Measure_Cd TEXT,
+                    Measure_Instance_Id INTEGER,
+                    Measure_Name TEXT,
+                    Current_Ind INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO staging_fact (Measure_Cd, Value)
+                VALUES ('MEASURE1', 1.5)
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_measure (
+                    Measure_Cd,
+                    Measure_Instance_Id,
+                    Measure_Name,
+                    Current_Ind
+                )
+                VALUES
+                    ('MEASURE1', 200, 'Old Name', 0),
+                    ('MEASURE1', 200, 'Current Name', 1)
+                """
+            )
+        )
+
+    load_fact_from_maps(
+        engine=engine,
+        lookup_map={
+            "Measure_Cd": {
+                "source": {
+                    "schema": "main",
+                    "table": "dim_measure",
+                    "lookup_column": "Measure_Cd",
+                    "value_column": "Measure_Instance_Id",
+                },
+                "target": {
+                    "column": "Measure_Instance_Id",
+                    "comment": "Bar",
+                },
+            }
+        },
+        data_columns=[{"column": "Value", "comment": "Actual inserted value"}],
+        additional_columns=[
+            {
+                "target": {
+                    "column": "Measure_Name",
+                    "comment": "Column brought from dim table",
+                },
+                "source": {
+                    "schema": "main",
+                    "table": "dim_measure",
+                    "column": "Measure_Name",
+                },
+                "surrogate_keys": {
+                    "fact": "Measure_Instance_Id",
+                    "dim": "Measure_Instance_Id",
+                },
+            }
+        ],
+        staging_table="staging_fact",
+        staging_schema="main",
+        fact_table="fact_result",
+        fact_schema="facts",
+    )
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT Measure_Instance_Id, Measure_Name FROM facts.fact_result")
+        ).mappings().all()
+
+    assert rows == [{"Measure_Instance_Id": 200, "Measure_Name": "Current Name"}]
+
+
 def test_apply_comments_executes_for_mssql():
     class _FakeDialect:
         name = "mssql"

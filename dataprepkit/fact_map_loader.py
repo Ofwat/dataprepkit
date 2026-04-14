@@ -58,6 +58,18 @@ def _get_table_columns(
     return {candidate["name"] for candidate in inspector.get_columns(table, schema=schema)}
 
 
+def _get_current_indicator_column(
+    engine: Engine,
+    *,
+    schema: str | None,
+    table: str,
+) -> str | None:
+    for column in _get_table_columns(engine, schema=schema, table=table):
+        if column.lower() == "current_ind":
+            return column
+    return None
+
+
 def _validate_staging_columns(
     engine: Engine,
     *,
@@ -213,12 +225,23 @@ def load_fact_from_maps(
         source_lookup_column = source["lookup_column"]
         source_value_column = source["value_column"]
         alias = f"lookup_{index}"
+        current_clause = ""
+        current_column = _get_current_indicator_column(
+            engine,
+            schema=source_schema,
+            table=source_table,
+        )
+        if current_column:
+            current_clause = (
+                f" AND ({alias}.{_quote_identifier(engine, current_column)} = 1 "
+                f"OR {alias}.{_quote_identifier(engine, current_column)} IS NULL)"
+            )
 
         base_joins.append(
             "LEFT JOIN "
             f"{_render_table_name(engine, source_schema, source_table)} {alias} "
             f"ON {alias}.{_quote_identifier(engine, source_lookup_column)} = "
-            f"s.{_quote_identifier(engine, staging_column)}"
+            f"s.{_quote_identifier(engine, staging_column)}{current_clause}"
         )
         base_selects.append(
             f"{alias}.{_quote_identifier(engine, source_value_column)} "
@@ -279,12 +302,23 @@ def load_fact_from_maps(
         fact_key = surrogate_keys["fact"]
         dim_key = surrogate_keys["dim"]
         alias = f"additional_{index}"
+        current_clause = ""
+        current_column = _get_current_indicator_column(
+            engine,
+            schema=source_schema,
+            table=source_table,
+        )
+        if current_column:
+            current_clause = (
+                f" AND ({alias}.{_quote_identifier(engine, current_column)} = 1 "
+                f"OR {alias}.{_quote_identifier(engine, current_column)} IS NULL)"
+            )
 
         additional_joins.append(
             "LEFT JOIN "
             f"{_render_table_name(engine, source_schema, source_table)} {alias} "
             f"ON {alias}.{_quote_identifier(engine, dim_key)} = "
-            f"b.{_quote_identifier(engine, fact_key)}"
+            f"b.{_quote_identifier(engine, fact_key)}{current_clause}"
         )
         final_selects.append(
             f"{alias}.{_quote_identifier(engine, source_value_column)} "
