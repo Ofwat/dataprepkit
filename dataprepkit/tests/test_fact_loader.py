@@ -6,6 +6,8 @@ import textwrap
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.pool import NullPool
 
 import dataprepkit.fact_loader as fact_loader_module
 from dataprepkit.fact_loader import (
@@ -1140,6 +1142,88 @@ def test_ingest_fact_supports_explicit_table_refs(fact_engine):
             text("SELECT batch_id, Company_Instance_Id FROM fact WHERE batch_id='B8'")
         ).fetchone()
     assert result == ("B8", 800)
+
+
+def test_ingest_fact_with_connection_scoped_temp_table_fails_across_connections(
+    tmp_path,
+):
+    db_path = tmp_path / "temp_scope.db"
+    engine = create_engine(
+        f"sqlite+pysqlite:///{db_path}",
+        future=True,
+        poolclass=NullPool,
+    )
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE staging (
+                    batch_id TEXT,
+                    Organisation_Cd TEXT,
+                    measure_value REAL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE fact (
+                    batch_id TEXT,
+                    Company_Instance_Id INTEGER,
+                    measure_value REAL,
+                    Insert_Date TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE Dimensions_tbl_d_company (
+                    Organisation_Cd TEXT,
+                    Company_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Organisation_Cd, measure_value) "
+                "VALUES ('B_TEMP', 'REGION1', 1.5)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO Dimensions_tbl_d_company "
+                "(Organisation_Cd, Company_Instance_Id) VALUES ('REGION1', 100)"
+            )
+        )
+
+    config = FactConfig(
+        batch=FactBatchMetadata(fact_table="fact", validations={}),
+        dimensions=[
+            DimensionJoinSpec(
+                dim_table="Dimensions_tbl_d_company",
+                staging_columns=["Organisation_Cd"],
+                dim_columns=["Organisation_Cd"],
+                add_columns={"Company_Instance_Id": "Company_Instance_Id"},
+                require_not_null=["Company_Instance_Id"],
+            )
+        ],
+        fact_columns=["Company_Instance_Id", "measure_value"],
+        source_table="staging",
+        temp_table=TableRef(schema="temp", table="tmp_fact"),
+        temp_columns={
+            "batch_id": None,
+            "Organisation_Cd": None,
+            "measure_value": None,
+        },
+    )
+
+    with pytest.raises(OperationalError, match="no such table: temp.tmp_fact"):
+        ingest_fact(engine, config, batch_id="B_TEMP")
 
 
 def test_ingest_fact_handles_existing_fact_table_when_inspection_misses_it(monkeypatch):
