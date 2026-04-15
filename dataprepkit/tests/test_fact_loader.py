@@ -6,7 +6,6 @@ import textwrap
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import OperationalError
 from sqlalchemy.pool import NullPool
 
 import dataprepkit.fact_loader as fact_loader_module
@@ -1144,7 +1143,7 @@ def test_ingest_fact_supports_explicit_table_refs(fact_engine):
     assert result == ("B8", 800)
 
 
-def test_ingest_fact_with_connection_scoped_temp_table_fails_across_connections(
+def test_ingest_fact_with_connection_scoped_temp_table_succeeds_across_steps(
     tmp_path,
 ):
     db_path = tmp_path / "temp_scope.db"
@@ -1222,8 +1221,17 @@ def test_ingest_fact_with_connection_scoped_temp_table_fails_across_connections(
         },
     )
 
-    with pytest.raises(OperationalError, match="no such table: temp.tmp_fact"):
-        ingest_fact(engine, config, batch_id="B_TEMP")
+    ingest_fact(engine, config, batch_id="B_TEMP")
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            text(
+                "SELECT batch_id, Company_Instance_Id, measure_value "
+                "FROM fact WHERE batch_id = 'B_TEMP'"
+            )
+        ).fetchone()
+
+    assert result == ("B_TEMP", 100, 1.5)
 
 
 def test_ingest_fact_handles_existing_fact_table_when_inspection_misses_it(monkeypatch):

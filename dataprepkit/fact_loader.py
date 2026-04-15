@@ -109,6 +109,13 @@ def _normalize_bracket_identifier(name: str | None) -> str | None:
     return stripped
 
 
+def _is_connection_scoped_temp_table(table_name: str | TableRef) -> bool:
+    table_ref = _parse_table_ref(table_name)
+    if table_ref.table.startswith("#"):
+        return True
+    return (table_ref.schema or "").lower() == "temp"
+
+
 def _quote_mssql_identifier(identifier: str) -> str:
     normalized = _normalize_bracket_identifier(identifier) or ""
     return f"[{normalized.replace(']', ']]')}]"
@@ -291,6 +298,7 @@ def _render_column_defs(
 
 def _format_missing_lookup_error(
     engine: Engine,
+    conn,
     *,
     base_table: str,
     dim_table: str,
@@ -309,11 +317,10 @@ def _format_missing_lookup_error(
         WHERE {where_clause}
         """
     )
-    with engine.connect() as conn:
-        count = conn.execute(
-            text(f"SELECT COUNT(1) FROM {base_table} WHERE {where_clause}")
-        ).scalar()
-        rows = conn.execute(sample_query).mappings().fetchmany(10)
+    count = conn.execute(
+        text(f"SELECT COUNT(1) FROM {base_table} WHERE {where_clause}")
+    ).scalar()
+    rows = conn.execute(sample_query).mappings().fetchmany(10)
     missing_keys = [
         {column: row[column] for column in staging_columns}
         for row in rows
@@ -338,6 +345,8 @@ def _ensure_temp_table(
     engine: Engine,
     table_name: str | TableRef,
     columns: Mapping[str, Optional[str] | Mapping[str, object]],
+    *,
+    conn=None,
 ) -> None:
     if not any(_has_explicit_column_definition(defn) for defn in columns.values()):
         return
@@ -346,11 +355,17 @@ def _ensure_temp_table(
     table_name_sql = _render_table_name(engine, table_ref)
     if schema:
         ensure_schema_exists(engine, schema)
-    with engine.begin() as conn:
-        conn.execute(text(f"DROP TABLE IF EXISTS {table_name_sql}"))
-        column_defs = _render_column_defs(columns, engine)
-        create_sql = f"CREATE TABLE {table_name_sql} ({column_defs})"
-        conn.execute(text(create_sql))
+    if conn is None:
+        with engine.begin() as active_conn:
+            active_conn.execute(text(f"DROP TABLE IF EXISTS {table_name_sql}"))
+            column_defs = _render_column_defs(columns, engine)
+            create_sql = f"CREATE TABLE {table_name_sql} ({column_defs})"
+            active_conn.execute(text(create_sql))
+        return
+    conn.execute(text(f"DROP TABLE IF EXISTS {table_name_sql}"))
+    column_defs = _render_column_defs(columns, engine)
+    create_sql = f"CREATE TABLE {table_name_sql} ({column_defs})"
+    conn.execute(text(create_sql))
 
 
 def _get_existing_columns(engine: Engine, table_name: str | TableRef) -> set[str]:
@@ -752,20 +767,10 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
         _register_dimension_columns(dimension)
     for extra in config.extra_columns:
         temp_columns.setdefault(extra.column, "INT")
-    _ensure_temp_table(engine, config.temp_table, temp_columns)
     if not base_cols:
         raise RuntimeError("No base columns defined for temp table copy")
-    cols = ", ".join(base_cols)
-    insert_temp = text(
-        f"""
-        INSERT INTO {temp_table_sql} ({cols})
-        SELECT {cols} FROM {source_table_sql}
-        """
-    )
-    with engine.begin() as conn:
-        conn.execute(insert_temp)
 
-    def _apply_dimension(base_table: str, spec: DimensionJoinSpec) -> None:
+    def _apply_dimension(base_table: str, spec: DimensionJoinSpec, *, conn=None) -> None:
         predicate = " AND ".join(
             f"{base_table}.{s} = d.{dcol}"
             for s, dcol in zip(spec.staging_columns, spec.dim_columns)
@@ -808,27 +813,49 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
                 )
                 """
             )
-            with engine.begin() as conn:
+            if conn is None:
+                with engine.begin() as active_conn:
+                    active_conn.execute(update_stmt)
+            else:
                 conn.execute(update_stmt)
         if spec.require_not_null:
             cond = " OR ".join(f"{col} IS NULL" for col in spec.require_not_null)
-            with engine.connect() as conn:
+            if conn is None:
+                with engine.connect() as active_conn:
+                    result = active_conn.execute(
+                        text(f"SELECT COUNT(1) FROM {base_table} WHERE {cond}")
+                    ).scalar()
+            else:
                 result = conn.execute(
                     text(f"SELECT COUNT(1) FROM {base_table} WHERE {cond}")
                 ).scalar()
             if result:
-                raise RuntimeError(
-                    _format_missing_lookup_error(
+                if conn is None:
+                    with engine.connect() as error_conn:
+                        message = _format_missing_lookup_error(
+                            engine,
+                            error_conn,
+                            base_table=base_table,
+                            dim_table=spec.dim_table,
+                            staging_columns=spec.staging_columns,
+                            dim_columns=spec.dim_columns,
+                            required_columns=spec.require_not_null,
+                        )
+                else:
+                    message = _format_missing_lookup_error(
                         engine,
+                        conn,
                         base_table=base_table,
                         dim_table=spec.dim_table,
                         staging_columns=spec.staging_columns,
                         dim_columns=spec.dim_columns,
                         required_columns=spec.require_not_null,
                     )
+                raise RuntimeError(
+                    message
                 )
 
-    def _apply_extra_column(base_table: str, spec: ExtraColumnSpec) -> None:
+    def _apply_extra_column(base_table: str, spec: ExtraColumnSpec, *, conn=None) -> None:
         predicate = " AND ".join(
             f"{base_table}.{s} = d.{dcol}"
             for s, dcol in zip(spec.staging_columns, spec.dim_columns)
@@ -849,35 +876,46 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
             )
             """
         )
-        with engine.begin() as conn:
+        if conn is None:
+            with engine.begin() as active_conn:
+                active_conn.execute(update_stmt)
+        else:
             conn.execute(update_stmt)
         if spec.require_not_null:
-            with engine.connect() as conn:
+            if conn is None:
+                with engine.connect() as active_conn:
+                    result = active_conn.execute(
+                        text(f"SELECT COUNT(1) FROM {base_table} WHERE {spec.column} IS NULL")
+                    ).scalar()
+            else:
                 result = conn.execute(
                     text(f"SELECT COUNT(1) FROM {base_table} WHERE {spec.column} IS NULL")
                 ).scalar()
             if result:
-                raise RuntimeError(
-                    _format_missing_lookup_error(
+                if conn is None:
+                    with engine.connect() as error_conn:
+                        message = _format_missing_lookup_error(
+                            engine,
+                            error_conn,
+                            base_table=base_table,
+                            dim_table=spec.dim_table,
+                            staging_columns=spec.staging_columns,
+                            dim_columns=spec.dim_columns,
+                            required_columns=[spec.column],
+                        )
+                else:
+                    message = _format_missing_lookup_error(
                         engine,
+                        conn,
                         base_table=base_table,
                         dim_table=spec.dim_table,
                         staging_columns=spec.staging_columns,
                         dim_columns=spec.dim_columns,
                         required_columns=[spec.column],
                     )
+                raise RuntimeError(
+                    message
                 )
-
-    for dimension in config.dimensions:
-        _apply_dimension(temp_table_sql, dimension)
-        for extra in config.extra_columns:
-            if extra.dim_table == dimension.dim_table:
-                _apply_extra_column(temp_table_sql, extra)
-        for chained in dimension.join_chain:
-            _apply_dimension(temp_table_sql, chained)
-            for extra in config.extra_columns:
-                if extra.dim_table == chained.dim_table:
-                    _apply_extra_column(temp_table_sql, extra)
 
     resolved_fact_columns, fact_columns_types = _resolve_fact_columns(
         config.fact_columns, temp_columns
@@ -922,6 +960,82 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
         config.batch.input_archive_filename = archive_filename
 
     try:
+        if _is_connection_scoped_temp_table(config.temp_table):
+            with engine.begin() as conn:
+                _ensure_temp_table(engine, config.temp_table, temp_columns, conn=conn)
+                cols = ", ".join(base_cols)
+                insert_temp = text(
+                    f"""
+                    INSERT INTO {temp_table_sql} ({cols})
+                    SELECT {cols} FROM {source_table_sql}
+                    """
+                )
+                conn.execute(insert_temp)
+                for dimension in config.dimensions:
+                    _apply_dimension(temp_table_sql, dimension, conn=conn)
+                    for extra in config.extra_columns:
+                        if extra.dim_table == dimension.dim_table:
+                            _apply_extra_column(temp_table_sql, extra, conn=conn)
+                    for chained in dimension.join_chain:
+                        _apply_dimension(temp_table_sql, chained, conn=conn)
+                        for extra in config.extra_columns:
+                            if extra.dim_table == chained.dim_table:
+                                _apply_extra_column(temp_table_sql, extra, conn=conn)
+                insert_columns = [config.batch_id_column_name]
+                select_values = [":batch_id"]
+                if config.batch.input_archive_base_dir:
+                    insert_columns.append(config.archive_filename_column_name)
+                    select_values.append(":archive_filename")
+                insert_columns.extend(resolved_fact_columns)
+                insert_columns.append("Insert_Date")
+                select_values.extend(
+                    f"s.{_quote_identifier(engine, col)}" for col in resolved_fact_columns
+                )
+                select_values.append("CURRENT_TIMESTAMP")
+                insert_cols = ", ".join(insert_columns)
+                duplicate_predicate = _null_safe_row_match_predicate(
+                    engine, "e", "s", resolved_fact_columns
+                )
+                select_clause = (
+                    f"SELECT {', '.join(select_values)} "
+                    f"FROM {temp_table_sql} s "
+                    f"WHERE NOT EXISTS ("
+                    f"SELECT 1 FROM {fact_table_sql} e WHERE {duplicate_predicate}"
+                    f")"
+                )
+                insert_sql = text(
+                    f"""
+                    INSERT INTO {fact_table_sql} ({insert_cols})
+                    {select_clause}
+                    """
+                )
+                params = {"batch_id": batch_id}
+                if config.batch.input_archive_base_dir:
+                    params["archive_filename"] = config.batch.input_archive_filename
+                conn.execute(insert_sql, params)
+            return
+
+        _ensure_temp_table(engine, config.temp_table, temp_columns)
+        cols = ", ".join(base_cols)
+        insert_temp = text(
+            f"""
+            INSERT INTO {temp_table_sql} ({cols})
+            SELECT {cols} FROM {source_table_sql}
+            """
+        )
+        with engine.begin() as conn:
+            conn.execute(insert_temp)
+        for dimension in config.dimensions:
+            _apply_dimension(temp_table_sql, dimension)
+            for extra in config.extra_columns:
+                if extra.dim_table == dimension.dim_table:
+                    _apply_extra_column(temp_table_sql, extra)
+            for chained in dimension.join_chain:
+                _apply_dimension(temp_table_sql, chained)
+                for extra in config.extra_columns:
+                    if extra.dim_table == chained.dim_table:
+                        _apply_extra_column(temp_table_sql, extra)
+
         with engine.begin() as conn:
             insert_columns = [config.batch_id_column_name]
             select_values = [":batch_id"]
