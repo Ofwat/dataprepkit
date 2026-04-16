@@ -333,6 +333,73 @@ def test_load_fact_from_maps_drops_and_recreates_existing_fact_table():
     assert [column["name"] for column in columns] == ["Measure_Instance_Id", "Value"]
 
 
+def test_load_fact_from_maps_creates_optional_fact_primary_key():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE staging_fact (Measure_Cd TEXT, Value REAL)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_measure (
+                    Measure_Cd TEXT,
+                    Measure_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO staging_fact (Measure_Cd, Value)
+                VALUES ('MEASURE1', 1.5)
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_measure (Measure_Cd, Measure_Instance_Id)
+                VALUES ('MEASURE1', 200)
+                """
+            )
+        )
+
+    load_fact_from_maps(
+        engine=engine,
+        lookup_map={
+            "Measure_Cd": {
+                "source": {
+                    "schema": "main",
+                    "table": "dim_measure",
+                    "lookup_column": "Measure_Cd",
+                    "value_column": "Measure_Instance_Id",
+                },
+                "target": {
+                    "column": "Measure_Instance_Id",
+                    "comment": "Bar",
+                },
+            }
+        },
+        data_columns=[{"column": "Value", "comment": "Actual inserted value"}],
+        additional_columns=[],
+        staging_table="staging_fact",
+        staging_schema="main",
+        fact_table="fact_result",
+        fact_schema="main",
+        fact_pk_column="fact_id",
+    )
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT fact_id, Measure_Instance_Id, Value FROM fact_result")
+        ).mappings().one()
+        columns = conn.execute(text("PRAGMA table_info(fact_result)")).mappings().all()
+
+    assert row == {"fact_id": 1, "Measure_Instance_Id": 200, "Value": 1.5}
+    assert [column["name"] for column in columns if column["pk"]] == ["fact_id"]
+
+
 def test_load_fact_from_maps_warns_for_missing_lookup_staging_column(capsys):
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
 
@@ -949,3 +1016,15 @@ def test_apply_comments_executes_for_mssql():
     assert "sp_addextendedproperty" in sql
     assert params["schema"] == "Facts"
     assert params["table"] == "fact_result"
+
+
+def test_fact_pk_clause_uses_identity_for_mssql():
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    assert fact_map_loader_module._fact_pk_clause(_FakeEngine(), "fact_id") == (
+        "[fact_id] INT IDENTITY(1,1) PRIMARY KEY"
+    )

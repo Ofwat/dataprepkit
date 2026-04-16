@@ -48,6 +48,17 @@ def _default_datetime_type(engine: Engine) -> str:
     return "TEXT"
 
 
+def _fact_pk_clause(engine: Engine, column_name: str) -> str:
+    if engine.dialect.name == "mssql":
+        return f"{_quote_identifier(engine, column_name)} INT IDENTITY(1,1) PRIMARY KEY"
+    if engine.dialect.name == "sqlite":
+        return (
+            f"{_quote_identifier(engine, column_name)} "
+            "INTEGER PRIMARY KEY AUTOINCREMENT"
+        )
+    return f"{_quote_identifier(engine, column_name)} INT PRIMARY KEY"
+
+
 def _get_column_type(
     engine: Engine,
     *,
@@ -235,6 +246,7 @@ def load_fact_from_maps(
     staging_schema: str | None,
     fact_table: str,
     fact_schema: str | None = None,
+    fact_pk_column: str | None = None,
     archive_base_dir: str | None = None,
     table_comment: str | None = None,
 ) -> None:
@@ -441,13 +453,19 @@ def load_fact_from_maps(
         if target.get("comment"):
             column_comments[target_column] = str(target["comment"])
 
-    create_columns_sql = ", ".join(
+    create_columns = [
         _build_column_definition(
             _quote_identifier(engine, name),
             column_type,
             nullable=nullable,
         )
         for name, column_type, nullable in column_definitions
+    ]
+    if fact_pk_column:
+        create_columns.insert(0, _fact_pk_clause(engine, fact_pk_column))
+
+    create_columns_sql = ", ".join(
+        create_columns
     )
     insert_columns_sql = ", ".join(
         _quote_identifier(engine, name) for name, _, _ in column_definitions
