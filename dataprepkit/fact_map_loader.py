@@ -260,17 +260,13 @@ def load_fact_from_maps(
     metadata_columns = list(metadata_columns or [])
 
     archive_filename: str | None = None
-    if any(
+    if archive_base_dir and any(
         column["source"]["kind"] == "archive_filename" for column in metadata_columns
     ):
         batch_id_value = runtime_values.get("batch_id")
         if not isinstance(batch_id_value, str) or not batch_id_value:
             raise ValueError(
                 "runtime_values['batch_id'] must be provided when using archive_filename metadata."
-            )
-        if not archive_base_dir:
-            raise ValueError(
-                "archive_base_dir must be provided when using archive_filename metadata."
             )
         _, archive_filename = _archive_source_table_snapshot(
             engine,
@@ -357,10 +353,14 @@ def load_fact_from_maps(
             )
             metadata_params[metadata_param_name] = archive_filename
             column_type = _default_string_type(engine)
+            nullable = archive_base_dir is None
         else:
             raise ValueError(f"Unsupported metadata source kind '{source_kind}'.")
 
-        column_definitions.append((target_column, column_type, False))
+        if source_kind != "archive_filename":
+            nullable = False
+
+        column_definitions.append((target_column, column_type, nullable))
         if target.get("comment"):
             column_comments[target_column] = str(target["comment"])
 

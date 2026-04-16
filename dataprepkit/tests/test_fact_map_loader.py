@@ -805,6 +805,105 @@ def test_load_fact_from_maps_supports_metadata_columns_and_archive_filename(
     assert {column["name"]: column["notnull"] for column in columns}["Archive_Filename"] == 1
 
 
+def test_load_fact_from_maps_skips_archive_when_archive_base_dir_is_none(
+    tmp_path, monkeypatch
+):
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("ATTACH DATABASE ':memory:' AS facts"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE staging_fact (
+                    Measure_Cd TEXT,
+                    Value REAL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_measure (
+                    Measure_Cd TEXT,
+                    Measure_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO staging_fact (Measure_Cd, Value)
+                VALUES ('MEASURE1', 1.5)
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_measure (Measure_Cd, Measure_Instance_Id)
+                VALUES ('MEASURE1', 200)
+                """
+            )
+        )
+
+    def fail_to_parquet(self, path, index=False):
+        raise AssertionError("to_parquet should not be called when archive_base_dir is None")
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", fail_to_parquet)
+
+    load_fact_from_maps(
+        engine=engine,
+        lookup_map={
+            "Measure_Cd": {
+                "source": {
+                    "schema": "main",
+                    "table": "dim_measure",
+                    "lookup_column": "Measure_Cd",
+                    "value_column": "Measure_Instance_Id",
+                },
+                "target": {
+                    "column": "Measure_Instance_Id",
+                    "comment": "Bar",
+                },
+            }
+        },
+        data_columns=[{"column": "Value", "comment": "Actual inserted value"}],
+        additional_columns=[],
+        metadata_columns=[
+            {
+                "target": {
+                    "column": "Archive_Filename",
+                    "comment": "Archive file name for the snapshot.",
+                },
+                "source": {
+                    "kind": "archive_filename",
+                },
+            }
+        ],
+        runtime_values={"batch_id": "BATCH123"},
+        staging_table="staging_fact",
+        staging_schema="main",
+        fact_table="fact_result",
+        fact_schema="facts",
+        archive_base_dir=None,
+    )
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT Measure_Instance_Id, Archive_Filename FROM facts.fact_result")
+        ).mappings().one()
+        columns = conn.execute(
+            text("PRAGMA facts.table_info(fact_result)")
+        ).mappings().all()
+
+    assert row == {"Measure_Instance_Id": 200, "Archive_Filename": None}
+    assert {column["name"]: column["notnull"] for column in columns}["Archive_Filename"] == 0
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_apply_comments_executes_for_mssql():
     class _FakeDialect:
         name = "mssql"
