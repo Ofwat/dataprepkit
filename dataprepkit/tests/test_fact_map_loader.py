@@ -1,5 +1,8 @@
 from sqlalchemy import create_engine, text
 
+from pathlib import Path
+
+import pandas as pd
 import pytest
 
 import dataprepkit.fact_map_loader as fact_map_loader_module
@@ -667,6 +670,139 @@ def test_load_fact_from_maps_filters_additional_columns_to_current_rows():
         ).mappings().all()
 
     assert rows == [{"Measure_Instance_Id": 200, "Measure_Name": "Current Name"}]
+
+
+def test_load_fact_from_maps_supports_metadata_columns_and_archive_filename(
+    tmp_path, monkeypatch
+):
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("ATTACH DATABASE ':memory:' AS facts"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE staging_fact (
+                    Measure_Cd TEXT,
+                    Value REAL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_measure (
+                    Measure_Cd TEXT,
+                    Measure_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO staging_fact (Measure_Cd, Value)
+                VALUES ('MEASURE1', 1.5)
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_measure (Measure_Cd, Measure_Instance_Id)
+                VALUES ('MEASURE1', 200)
+                """
+            )
+        )
+
+    def fake_to_parquet(self, path, index=False):
+        Path(path).write_bytes(b"parquet")
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", fake_to_parquet)
+
+    load_fact_from_maps(
+        engine=engine,
+        lookup_map={
+            "Measure_Cd": {
+                "source": {
+                    "schema": "main",
+                    "table": "dim_measure",
+                    "lookup_column": "Measure_Cd",
+                    "value_column": "Measure_Instance_Id",
+                },
+                "target": {
+                    "column": "Measure_Instance_Id",
+                    "comment": "Bar",
+                },
+            }
+        },
+        data_columns=[{"column": "Value", "comment": "Actual inserted value"}],
+        additional_columns=[],
+        metadata_columns=[
+            {
+                "target": {
+                    "column": "Batch_Id",
+                    "comment": "Pipeline batch identifier.",
+                },
+                "source": {
+                    "kind": "parameter",
+                    "name": "batch_id",
+                },
+            },
+            {
+                "target": {
+                    "column": "Insert_Date",
+                    "comment": "UTC insert timestamp.",
+                },
+                "source": {
+                    "kind": "sql",
+                    "expression": "CURRENT_TIMESTAMP",
+                },
+            },
+            {
+                "target": {
+                    "column": "Archive_Filename",
+                    "comment": "Archive file name for the snapshot.",
+                },
+                "source": {
+                    "kind": "archive_filename",
+                },
+            },
+        ],
+        runtime_values={"batch_id": "BATCH123"},
+        staging_table="staging_fact",
+        staging_schema="main",
+        fact_table="fact_result",
+        fact_schema="facts",
+        archive_base_dir=str(tmp_path),
+    )
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                """
+                SELECT
+                    Measure_Instance_Id,
+                    Value,
+                    Batch_Id,
+                    Archive_Filename
+                FROM facts.fact_result
+                """
+            )
+        ).mappings().one()
+        columns = conn.execute(
+            text("PRAGMA facts.table_info(fact_result)")
+        ).mappings().all()
+
+    assert row["Measure_Instance_Id"] == 200
+    assert row["Value"] == 1.5
+    assert row["Batch_Id"] == "BATCH123"
+    assert row["Archive_Filename"].startswith("staging_fact__")
+    assert row["Archive_Filename"].endswith("__BATCHBATCH123.parquet")
+    assert {column["name"]: column["notnull"] for column in columns}["Batch_Id"] == 1
+    assert {column["name"]: column["notnull"] for column in columns}["Insert_Date"] == 1
+    assert {column["name"]: column["notnull"] for column in columns}["Archive_Filename"] == 1
 
 
 def test_apply_comments_executes_for_mssql():

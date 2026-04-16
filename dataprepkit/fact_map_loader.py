@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 
+import pandas as pd
 from sqlalchemy import Engine, inspect, text
 
 from dataprepkit.helpers.schema import ensure_schema_exists
+from dataprepkit.storage import archive_dataframe_path
 
 
 def _quote_identifier(engine: Engine, identifier: str) -> str:
@@ -31,6 +34,18 @@ def _compile_column_type(engine: Engine, column_type: object) -> str:
 def _build_column_definition(name: str, column_type: str, *, nullable: bool) -> str:
     null_sql = "" if nullable else " NOT NULL"
     return f"{name} {column_type}{null_sql}"
+
+
+def _default_string_type(engine: Engine) -> str:
+    if engine.dialect.name == "mssql":
+        return "NVARCHAR(4000)"
+    return "TEXT"
+
+
+def _default_datetime_type(engine: Engine) -> str:
+    if engine.dialect.name == "mssql":
+        return "DATETIME2(3)"
+    return "TEXT"
 
 
 def _get_column_type(
@@ -105,6 +120,29 @@ def _validate_staging_columns(
             f"Warning: unused staging columns in '{location}': {', '.join(extra_columns)}"
         )
     return staging_columns, set(missing_lookup_columns)
+
+
+def _archive_source_table_snapshot(
+    engine: Engine,
+    *,
+    schema: str | None,
+    table: str,
+    batch_id: str,
+    archive_base_dir: str,
+) -> tuple[str, str]:
+    archive_path = archive_dataframe_path(
+        table_name=table,
+        batch_id=batch_id,
+        base_dir=archive_base_dir,
+    )
+    output_path = Path(archive_path.file_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    source_df = pd.read_sql_query(
+        text(f"SELECT * FROM {_render_table_name(engine, schema, table)}"),
+        con=engine,
+    )
+    source_df.to_parquet(output_path, index=False)
+    return str(output_path), output_path.name
 
 
 def _apply_comments(
@@ -191,10 +229,13 @@ def load_fact_from_maps(
     lookup_map: Mapping[str, Mapping[str, object]],
     data_columns: Sequence[Mapping[str, str]],
     additional_columns: Sequence[Mapping[str, object]],
+    metadata_columns: Sequence[Mapping[str, object]] | None = None,
+    runtime_values: Mapping[str, object] | None = None,
     staging_table: str,
     staging_schema: str | None,
     fact_table: str,
     fact_schema: str | None = None,
+    archive_base_dir: str | None = None,
     table_comment: str | None = None,
 ) -> None:
     ensure_schema_exists(engine, fact_schema)
@@ -210,9 +251,34 @@ def load_fact_from_maps(
     column_comments: dict[str, str] = {}
     base_selects: list[str] = []
     base_joins: list[str] = []
+    metadata_selects: list[str] = []
+    metadata_params: dict[str, object] = {}
 
     staging_sql = _render_table_name(engine, staging_schema, staging_table)
     fact_sql = _render_table_name(engine, fact_schema, fact_table)
+    runtime_values = dict(runtime_values or {})
+    metadata_columns = list(metadata_columns or [])
+
+    archive_filename: str | None = None
+    if any(
+        column["source"]["kind"] == "archive_filename" for column in metadata_columns
+    ):
+        batch_id_value = runtime_values.get("batch_id")
+        if not isinstance(batch_id_value, str) or not batch_id_value:
+            raise ValueError(
+                "runtime_values['batch_id'] must be provided when using archive_filename metadata."
+            )
+        if not archive_base_dir:
+            raise ValueError(
+                "archive_base_dir must be provided when using archive_filename metadata."
+            )
+        _, archive_filename = _archive_source_table_snapshot(
+            engine,
+            schema=staging_schema,
+            table=staging_table,
+            batch_id=batch_id_value,
+            archive_base_dir=archive_base_dir,
+        )
 
     for index, (staging_column, config) in enumerate(lookup_map.items()):
         if staging_column in missing_columns:
@@ -259,6 +325,42 @@ def load_fact_from_maps(
                 False,
             )
         )
+        if target.get("comment"):
+            column_comments[target_column] = str(target["comment"])
+
+    for index, config in enumerate(metadata_columns):
+        target = config["target"]
+        source = config["source"]
+        target_column = target["column"]
+        source_kind = source["kind"]
+        metadata_param_name = f"metadata_{index}"
+
+        if source_kind == "parameter":
+            runtime_name = source["name"]
+            if runtime_name not in runtime_values:
+                raise ValueError(
+                    f"runtime_values['{runtime_name}'] must be provided for metadata column '{target_column}'."
+                )
+            metadata_selects.append(
+                f":{metadata_param_name} AS {_quote_identifier(engine, target_column)}"
+            )
+            metadata_params[metadata_param_name] = runtime_values[runtime_name]
+            column_type = _default_string_type(engine)
+        elif source_kind == "sql":
+            metadata_selects.append(
+                f"{source['expression']} AS {_quote_identifier(engine, target_column)}"
+            )
+            column_type = _default_datetime_type(engine)
+        elif source_kind == "archive_filename":
+            metadata_selects.append(
+                f":{metadata_param_name} AS {_quote_identifier(engine, target_column)}"
+            )
+            metadata_params[metadata_param_name] = archive_filename
+            column_type = _default_string_type(engine)
+        else:
+            raise ValueError(f"Unsupported metadata source kind '{source_kind}'.")
+
+        column_definitions.append((target_column, column_type, False))
         if target.get("comment"):
             column_comments[target_column] = str(target["comment"])
 
@@ -350,7 +452,9 @@ def load_fact_from_maps(
     insert_columns_sql = ", ".join(
         _quote_identifier(engine, name) for name, _, _ in column_definitions
     )
-    base_select_sql = ", ".join(base_selects)
+    select_parts = [base_select for base_select in base_selects]
+    select_parts.extend(metadata_selects)
+    base_select_sql = ", ".join(select_parts)
     final_select_sql = ", ".join(final_selects)
     join_sql = " ".join(base_joins)
     additional_join_sql = " ".join(additional_joins)
@@ -371,7 +475,8 @@ def load_fact_from_maps(
                 FROM base_rows b
                 {additional_join_sql}
                 """
-            )
+            ),
+            metadata_params,
         )
 
     _apply_comments(
