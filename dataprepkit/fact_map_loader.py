@@ -156,6 +156,102 @@ def _archive_source_table_snapshot(
     return str(output_path), output_path.name
 
 
+def _format_missing_lookup_error(
+    engine: Engine,
+    *,
+    staging_schema: str | None,
+    staging_table: str,
+    staging_column: str,
+    dim_schema: str | None,
+    dim_table: str,
+    dim_lookup_column: str,
+    required_column: str,
+) -> tuple[int, str]:
+    staging_sql = _render_table_name(engine, staging_schema, staging_table)
+    dim_sql = _render_table_name(engine, dim_schema, dim_table)
+    dim_alias = "d"
+    current_clause = ""
+    current_column = _get_current_indicator_column(
+        engine,
+        schema=dim_schema,
+        table=dim_table,
+    )
+    if current_column:
+        current_clause = (
+            f" AND ({dim_alias}.{_quote_identifier(engine, current_column)} = 1 "
+            f"OR {dim_alias}.{_quote_identifier(engine, current_column)} IS NULL)"
+        )
+
+    predicate = (
+        f"{dim_alias}.{_quote_identifier(engine, dim_lookup_column)} = "
+        f"s.{_quote_identifier(engine, staging_column)}{current_clause}"
+    )
+    where_clause = f"{dim_alias}.{_quote_identifier(engine, required_column)} IS NULL"
+    count_query = text(
+        f"""
+        SELECT COUNT(1)
+        FROM {staging_sql} s
+        LEFT JOIN {dim_sql} {dim_alias}
+          ON {predicate}
+        WHERE {where_clause}
+        """
+    )
+    sample_query = text(
+        f"""
+        SELECT DISTINCT s.{_quote_identifier(engine, staging_column)} AS staging_key
+        FROM {staging_sql} s
+        LEFT JOIN {dim_sql} {dim_alias}
+          ON {predicate}
+        WHERE {where_clause}
+        """
+    )
+    with engine.connect() as conn:
+        count = conn.execute(count_query).scalar() or 0
+        rows = conn.execute(sample_query).mappings().fetchmany(10)
+
+    missing_keys = [{staging_column: row["staging_key"]} for row in rows]
+    location = f"{dim_schema}.{dim_table}" if dim_schema else dim_table
+    return count, (
+        f"Missing dimension match in {location} for staging columns "
+        f"{[staging_column]} -> dimension columns {[dim_lookup_column]}. "
+        f"Required columns {[required_column]} were null for {count} row(s). "
+        f"Example missing source keys: {missing_keys}"
+    )
+
+
+def _validate_lookup_matches(
+    engine: Engine,
+    *,
+    staging_schema: str | None,
+    staging_table: str,
+    lookup_map: Mapping[str, Mapping[str, object]],
+    missing_columns: set[str],
+) -> None:
+    for staging_column, config in lookup_map.items():
+        if staging_column in missing_columns:
+            continue
+        source = config["source"]
+        target = config["target"]
+        source_schema = source.get("schema")
+        source_table = source["table"]
+        source_lookup_column = source["lookup_column"]
+        source_value_column = source["value_column"]
+        target_column = target["column"]
+
+        count, message = _format_missing_lookup_error(
+            engine,
+            staging_schema=staging_schema,
+            staging_table=staging_table,
+            staging_column=staging_column,
+            dim_schema=source_schema,
+            dim_table=source_table,
+            dim_lookup_column=source_lookup_column,
+            required_column=source_value_column,
+        )
+        if count:
+            raise RuntimeError(message)
+
+
 def _apply_comments(
     engine: Engine,
     *,
@@ -257,6 +353,13 @@ def load_fact_from_maps(
         table=staging_table,
         lookup_map=lookup_map,
         data_columns=data_columns,
+    )
+    _validate_lookup_matches(
+        engine,
+        staging_schema=staging_schema,
+        staging_table=staging_table,
+        lookup_map=lookup_map,
+        missing_columns=missing_columns,
     )
 
     column_definitions: list[tuple[str, str, bool]] = []

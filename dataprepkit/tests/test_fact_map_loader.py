@@ -452,6 +452,72 @@ def test_load_fact_from_maps_warns_for_missing_lookup_staging_column(capsys):
     assert [column["name"] for column in columns] == ["Value"]
 
 
+def test_load_fact_from_maps_raises_structured_error_for_missing_dimension_lookup():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE staging_fact (
+                    Measure_Cd TEXT,
+                    Value REAL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_measure (
+                    Measure_Cd TEXT,
+                    Measure_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO staging_fact (Measure_Cd, Value)
+                VALUES ('UNKNOWN', 1.5)
+                """
+            )
+        )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"Missing dimension match in main.dim_measure "
+            r"for staging columns \['Measure_Cd'\] -> dimension columns \['Measure_Cd'\].*"
+            r"'Measure_Cd': 'UNKNOWN'"
+        ),
+    ):
+        load_fact_from_maps(
+            engine=engine,
+            lookup_map={
+                "Measure_Cd": {
+                    "source": {
+                        "schema": "main",
+                        "table": "dim_measure",
+                        "lookup_column": "Measure_Cd",
+                        "value_column": "Measure_Instance_Id",
+                    },
+                    "target": {
+                        "column": "Measure_Instance_Id",
+                        "comment": "Bar",
+                    },
+                }
+            },
+            data_columns=[{"column": "Value", "comment": "Actual inserted value"}],
+            additional_columns=[],
+            staging_table="staging_fact",
+            staging_schema="main",
+            fact_table="fact_result",
+            fact_schema="main",
+        )
+
+
 def test_load_fact_from_maps_raises_for_missing_data_column():
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
 
