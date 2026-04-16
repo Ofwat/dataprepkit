@@ -96,6 +96,15 @@ def _get_current_indicator_column(
     return None
 
 
+def _table_exists(
+    engine: Engine,
+    *,
+    schema: str | None,
+    table: str,
+) -> bool:
+    return inspect(engine).has_table(table, schema=schema)
+
+
 def _validate_staging_columns(
     engine: Engine,
     *,
@@ -131,6 +140,16 @@ def _validate_staging_columns(
             f"Warning: unused staging columns in '{location}': {', '.join(extra_columns)}"
         )
     return staging_columns, set(missing_lookup_columns)
+
+
+def _get_batch_metadata_column(
+    metadata_columns: Sequence[Mapping[str, object]],
+) -> str | None:
+    for config in metadata_columns:
+        source = config["source"]
+        if source["kind"] == "parameter" and source["name"] == "batch_id":
+            return config["target"]["column"]
+    return None
 
 
 def _archive_source_table_snapshot(
@@ -217,6 +236,46 @@ def _format_missing_lookup_error(
         f"Required columns {[required_column]} were null for {count} row(s). "
         f"Example missing source keys: {missing_keys}"
     )
+
+
+def _batch_already_loaded(
+    engine: Engine,
+    *,
+    schema: str | None,
+    table: str,
+    batch_column: str,
+    batch_id: object,
+) -> bool:
+    with engine.connect() as conn:
+        count = conn.execute(
+            text(
+                f"""
+                SELECT COUNT(1)
+                FROM {_render_table_name(engine, schema, table)}
+                WHERE {_quote_identifier(engine, batch_column)} = :batch_id
+                """
+            ),
+            {"batch_id": batch_id},
+        ).scalar()
+    return (count or 0) > 0
+
+
+def _null_safe_row_match_predicate(
+    engine: Engine,
+    *,
+    left_alias: str,
+    right_alias: str,
+    columns: Sequence[str],
+) -> str:
+    predicates = []
+    for column in columns:
+        quoted = _quote_identifier(engine, column)
+        left_expr = f"{left_alias}.{quoted}"
+        right_expr = f"{right_alias}.{quoted}"
+        predicates.append(
+            f"(({left_expr} = {right_expr}) OR ({left_expr} IS NULL AND {right_expr} IS NULL))"
+        )
+    return " AND ".join(predicates) if predicates else "1 = 1"
 
 
 def _validate_lookup_matches(
@@ -345,7 +404,11 @@ def load_fact_from_maps(
     fact_pk_column: str | None = None,
     archive_base_dir: str | None = None,
     table_comment: str | None = None,
+    mode: str = "replace",
 ) -> None:
+    if mode not in {"replace", "append"}:
+        raise ValueError("mode must be either 'replace' or 'append'.")
+
     ensure_schema_exists(engine, fact_schema)
     staging_columns, missing_columns = _validate_staging_columns(
         engine,
@@ -368,11 +431,29 @@ def load_fact_from_maps(
     base_joins: list[str] = []
     metadata_selects: list[str] = []
     metadata_params: dict[str, object] = {}
+    duplicate_check_columns: list[str] = []
 
     staging_sql = _render_table_name(engine, staging_schema, staging_table)
     fact_sql = _render_table_name(engine, fact_schema, fact_table)
     runtime_values = dict(runtime_values or {})
     metadata_columns = list(metadata_columns or [])
+    batch_metadata_column = _get_batch_metadata_column(metadata_columns)
+    fact_exists = _table_exists(engine, schema=fact_schema, table=fact_table)
+
+    if (
+        mode == "append"
+        and fact_exists
+        and batch_metadata_column
+        and "batch_id" in runtime_values
+        and _batch_already_loaded(
+            engine,
+            schema=fact_schema,
+            table=fact_table,
+            batch_column=batch_metadata_column,
+            batch_id=runtime_values["batch_id"],
+        )
+    ):
+        return
 
     archive_filename: str | None = None
     if archive_base_dir and any(
@@ -436,6 +517,7 @@ def load_fact_from_maps(
                 False,
             )
         )
+        duplicate_check_columns.append(target_column)
         if target.get("comment"):
             column_comments[target_column] = str(target["comment"])
 
@@ -499,6 +581,7 @@ def load_fact_from_maps(
                 True,
             )
         )
+        duplicate_check_columns.append(column_name)
         if column.get("comment"):
             column_comments[column_name] = column["comment"]
 
@@ -553,6 +636,7 @@ def load_fact_from_maps(
                 True,
             )
         )
+        duplicate_check_columns.append(target_column)
         if target.get("comment"):
             column_comments[target_column] = str(target["comment"])
 
@@ -579,10 +663,30 @@ def load_fact_from_maps(
     final_select_sql = ", ".join(final_selects)
     join_sql = " ".join(base_joins)
     additional_join_sql = " ".join(additional_joins)
+    duplicate_predicate = _null_safe_row_match_predicate(
+        engine,
+        left_alias="e",
+        right_alias="src",
+        columns=duplicate_check_columns,
+    )
+    projected_rows_sql = (
+        f"SELECT {final_select_sql} FROM base_rows b {additional_join_sql}"
+    )
+    final_source_sql = projected_rows_sql
+    if mode == "append":
+        final_source_sql = (
+            f"SELECT * FROM ({projected_rows_sql}) src "
+            f"WHERE NOT EXISTS ("
+            f"SELECT 1 FROM {fact_sql} e WHERE {duplicate_predicate}"
+            f")"
+        )
 
     with engine.begin() as conn:
-        conn.execute(text(f"DROP TABLE IF EXISTS {fact_sql}"))
-        conn.execute(text(f"CREATE TABLE {fact_sql} ({create_columns_sql})"))
+        if mode == "replace":
+            conn.execute(text(f"DROP TABLE IF EXISTS {fact_sql}"))
+            fact_exists = False
+        if not fact_exists:
+            conn.execute(text(f"CREATE TABLE {fact_sql} ({create_columns_sql})"))
         conn.execute(
             text(
                 f"""
@@ -592,9 +696,7 @@ def load_fact_from_maps(
                     {join_sql}
                 )
                 INSERT INTO {fact_sql} ({insert_columns_sql})
-                SELECT {final_select_sql}
-                FROM base_rows b
-                {additional_join_sql}
+                {final_source_sql}
                 """
             ),
             metadata_params,

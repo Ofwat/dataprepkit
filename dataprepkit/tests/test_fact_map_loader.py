@@ -1037,6 +1037,287 @@ def test_load_fact_from_maps_skips_archive_when_archive_base_dir_is_none(
     assert list(tmp_path.iterdir()) == []
 
 
+def test_load_fact_from_maps_append_mode_is_idempotent_for_same_batch_id():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("ATTACH DATABASE ':memory:' AS facts"))
+        conn.execute(text("CREATE TABLE staging_fact (Measure_Cd TEXT, Value REAL)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_measure (
+                    Measure_Cd TEXT,
+                    Measure_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_measure (Measure_Cd, Measure_Instance_Id)
+                VALUES ('MEASURE1', 200)
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO staging_fact (Measure_Cd, Value)
+                VALUES ('MEASURE1', 1.5)
+                """
+            )
+        )
+
+    kwargs = {
+        "engine": engine,
+        "lookup_map": {
+            "Measure_Cd": {
+                "source": {
+                    "schema": "main",
+                    "table": "dim_measure",
+                    "lookup_column": "Measure_Cd",
+                    "value_column": "Measure_Instance_Id",
+                },
+                "target": {
+                    "column": "Measure_Instance_Id",
+                    "comment": "Bar",
+                },
+            }
+        },
+        "data_columns": [{"column": "Value", "comment": "Actual inserted value"}],
+        "additional_columns": [],
+        "metadata_columns": [
+            {
+                "target": {
+                    "column": "Batch_Id",
+                    "comment": "Pipeline batch identifier.",
+                },
+                "source": {
+                    "kind": "parameter",
+                    "name": "batch_id",
+                },
+            }
+        ],
+        "runtime_values": {"batch_id": "BATCH1"},
+        "staging_table": "staging_fact",
+        "staging_schema": "main",
+        "fact_table": "fact_result",
+        "fact_schema": "facts",
+        "mode": "append",
+    }
+
+    load_fact_from_maps(**kwargs)
+    load_fact_from_maps(**kwargs)
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT Batch_Id, Measure_Instance_Id, Value
+                FROM facts.fact_result
+                ORDER BY Batch_Id
+                """
+            )
+        ).mappings().all()
+
+    assert rows == [
+        {"Batch_Id": "BATCH1", "Measure_Instance_Id": 200, "Value": 1.5}
+    ]
+
+
+def test_load_fact_from_maps_append_mode_skips_duplicate_rows_across_batches():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("ATTACH DATABASE ':memory:' AS facts"))
+        conn.execute(text("CREATE TABLE staging_fact (Measure_Cd TEXT, Value REAL)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_measure (
+                    Measure_Cd TEXT,
+                    Measure_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_measure (Measure_Cd, Measure_Instance_Id)
+                VALUES ('MEASURE1', 200)
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO staging_fact (Measure_Cd, Value)
+                VALUES ('MEASURE1', 1.5)
+                """
+            )
+        )
+
+    common_kwargs = {
+        "engine": engine,
+        "lookup_map": {
+            "Measure_Cd": {
+                "source": {
+                    "schema": "main",
+                    "table": "dim_measure",
+                    "lookup_column": "Measure_Cd",
+                    "value_column": "Measure_Instance_Id",
+                },
+                "target": {
+                    "column": "Measure_Instance_Id",
+                    "comment": "Bar",
+                },
+            }
+        },
+        "data_columns": [{"column": "Value", "comment": "Actual inserted value"}],
+        "additional_columns": [],
+        "metadata_columns": [
+            {
+                "target": {
+                    "column": "Batch_Id",
+                    "comment": "Pipeline batch identifier.",
+                },
+                "source": {
+                    "kind": "parameter",
+                    "name": "batch_id",
+                },
+            }
+        ],
+        "staging_table": "staging_fact",
+        "staging_schema": "main",
+        "fact_table": "fact_result",
+        "fact_schema": "facts",
+        "mode": "append",
+    }
+
+    load_fact_from_maps(**common_kwargs, runtime_values={"batch_id": "BATCH1"})
+    load_fact_from_maps(**common_kwargs, runtime_values={"batch_id": "BATCH2"})
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT Batch_Id, Measure_Instance_Id, Value
+                FROM facts.fact_result
+                ORDER BY Batch_Id
+                """
+            )
+        ).mappings().all()
+
+    assert rows == [
+        {"Batch_Id": "BATCH1", "Measure_Instance_Id": 200, "Value": 1.5}
+    ]
+
+
+def test_load_fact_from_maps_append_mode_inserts_changed_rows_across_batches():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("ATTACH DATABASE ':memory:' AS facts"))
+        conn.execute(text("CREATE TABLE staging_fact (Measure_Cd TEXT, Value REAL)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_measure (
+                    Measure_Cd TEXT,
+                    Measure_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_measure (Measure_Cd, Measure_Instance_Id)
+                VALUES ('MEASURE1', 200)
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO staging_fact (Measure_Cd, Value)
+                VALUES ('MEASURE1', 1.5)
+                """
+            )
+        )
+
+    common_kwargs = {
+        "engine": engine,
+        "lookup_map": {
+            "Measure_Cd": {
+                "source": {
+                    "schema": "main",
+                    "table": "dim_measure",
+                    "lookup_column": "Measure_Cd",
+                    "value_column": "Measure_Instance_Id",
+                },
+                "target": {
+                    "column": "Measure_Instance_Id",
+                    "comment": "Bar",
+                },
+            }
+        },
+        "data_columns": [{"column": "Value", "comment": "Actual inserted value"}],
+        "additional_columns": [],
+        "metadata_columns": [
+            {
+                "target": {
+                    "column": "Batch_Id",
+                    "comment": "Pipeline batch identifier.",
+                },
+                "source": {
+                    "kind": "parameter",
+                    "name": "batch_id",
+                },
+            }
+        ],
+        "staging_table": "staging_fact",
+        "staging_schema": "main",
+        "fact_table": "fact_result",
+        "fact_schema": "facts",
+        "mode": "append",
+    }
+
+    load_fact_from_maps(**common_kwargs, runtime_values={"batch_id": "BATCH1"})
+
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM staging_fact"))
+        conn.execute(
+            text(
+                """
+                INSERT INTO staging_fact (Measure_Cd, Value)
+                VALUES ('MEASURE1', 2.5)
+                """
+            )
+        )
+
+    load_fact_from_maps(**common_kwargs, runtime_values={"batch_id": "BATCH2"})
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT Batch_Id, Measure_Instance_Id, Value
+                FROM facts.fact_result
+                ORDER BY Batch_Id
+                """
+            )
+        ).mappings().all()
+
+    assert rows == [
+        {"Batch_Id": "BATCH1", "Measure_Instance_Id": 200, "Value": 1.5},
+        {"Batch_Id": "BATCH2", "Measure_Instance_Id": 200, "Value": 2.5},
+    ]
+
+
 def test_apply_comments_executes_for_mssql():
     class _FakeDialect:
         name = "mssql"
