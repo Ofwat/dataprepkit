@@ -806,6 +806,7 @@ def load_fact_from_maps(
                 schema=fact_schema,
                 table=fact_table,
             )
+            added_fact_columns: set[str] = set()
             for column_name, column_type, _ in column_definitions:
                 if column_name in existing_fact_columns:
                     continue
@@ -817,14 +818,17 @@ def load_fact_from_maps(
                     column_name=column_name,
                     column_type=column_type,
                 )
+                added_fact_columns.add(column_name)
             for active_lookup in active_lookups:
+                target_column = active_lookup["config"]["target"]["column"]
+                if target_column not in added_fact_columns:
+                    continue
                 backfill_value = (
                     active_lookup["config"].get("fallbacks") or {}
                 ).get("backfill_existing_rows")
                 if backfill_value is None:
                     continue
                 source = active_lookup["config"]["source"]
-                target_column = active_lookup["config"]["target"]["column"]
                 resolved_value = _resolve_lookup_value(
                     conn,
                     engine,
