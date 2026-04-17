@@ -1576,6 +1576,166 @@ def test_load_fact_from_maps_append_mode_inserts_changed_rows_across_batches():
     ]
 
 
+def test_load_fact_from_maps_append_mode_adds_lookup_column_and_backfills_existing_rows():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("ATTACH DATABASE ':memory:' AS facts"))
+        conn.execute(text("CREATE TABLE staging_fact (Measure_Cd TEXT, Value REAL)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_measure (
+                    Measure_Cd TEXT,
+                    Measure_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_region (
+                    Region_Cd TEXT,
+                    Region_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_measure (Measure_Cd, Measure_Instance_Id)
+                VALUES ('MEASURE1', 200)
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_region (Region_Cd, Region_Instance_Id)
+                VALUES ('NA', 300), ('UNKNOWN', 999)
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO staging_fact (Measure_Cd, Value)
+                VALUES ('MEASURE1', 1.5)
+                """
+            )
+        )
+
+    base_kwargs = {
+        "engine": engine,
+        "data_columns": [{"column": "Value", "comment": "Actual inserted value"}],
+        "additional_columns": [],
+        "metadata_columns": [
+            {
+                "target": {
+                    "column": "Batch_Id",
+                    "comment": "Pipeline batch identifier.",
+                },
+                "source": {
+                    "kind": "parameter",
+                    "name": "batch_id",
+                },
+            }
+        ],
+        "staging_table": "staging_fact",
+        "staging_schema": "main",
+        "fact_table": "fact_result",
+        "fact_schema": "facts",
+        "mode": "append",
+    }
+
+    load_fact_from_maps(
+        **base_kwargs,
+        lookup_map={
+            "Measure_Cd": {
+                "source": {
+                    "schema": "main",
+                    "table": "dim_measure",
+                    "lookup_column": "Measure_Cd",
+                    "value_column": "Measure_Instance_Id",
+                },
+                "target": {
+                    "column": "Measure_Instance_Id",
+                    "comment": "Bar",
+                },
+            }
+        },
+        runtime_values={"batch_id": "BATCH1"},
+    )
+
+    load_fact_from_maps(
+        **base_kwargs,
+        lookup_map={
+            "Measure_Cd": {
+                "source": {
+                    "schema": "main",
+                    "table": "dim_measure",
+                    "lookup_column": "Measure_Cd",
+                    "value_column": "Measure_Instance_Id",
+                },
+                "target": {
+                    "column": "Measure_Instance_Id",
+                    "comment": "Bar",
+                },
+            },
+            "Region_Cd": {
+                "source": {
+                    "schema": "main",
+                    "table": "dim_region",
+                    "lookup_column": "Region_Cd",
+                    "value_column": "Region_Instance_Id",
+                },
+                "target": {
+                    "column": "Region_Instance_Id",
+                    "comment": "Region surrogate key",
+                },
+                "fallbacks": {
+                    "column_missing_in_staging": "NA",
+                    "backfill_existing_rows": "UNKNOWN",
+                },
+            },
+        },
+        expected_lookup_columns=["Measure_Cd", "Region_Cd"],
+        runtime_values={"batch_id": "BATCH2"},
+    )
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT Batch_Id, Measure_Instance_Id, Region_Instance_Id, Value
+                FROM facts.fact_result
+                ORDER BY Batch_Id
+                """
+            )
+        ).mappings().all()
+        columns = conn.execute(
+            text("PRAGMA facts.table_info(fact_result)")
+        ).mappings().all()
+
+    assert rows == [
+        {
+            "Batch_Id": "BATCH1",
+            "Measure_Instance_Id": 200,
+            "Region_Instance_Id": 999,
+            "Value": 1.5,
+        },
+        {
+            "Batch_Id": "BATCH2",
+            "Measure_Instance_Id": 200,
+            "Region_Instance_Id": 300,
+            "Value": 1.5,
+        },
+    ]
+    assert "Region_Instance_Id" in {column["name"] for column in columns}
+
+
 def test_apply_comments_executes_for_mssql():
     class _FakeDialect:
         name = "mssql"

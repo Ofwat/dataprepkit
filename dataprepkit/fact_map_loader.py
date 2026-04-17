@@ -296,6 +296,7 @@ def _format_missing_lookup_error(
 
 
 def _batch_already_loaded(
+    bind,
     engine: Engine,
     *,
     schema: str | None,
@@ -303,17 +304,16 @@ def _batch_already_loaded(
     batch_column: str,
     batch_id: object,
 ) -> bool:
-    with engine.connect() as conn:
-        count = conn.execute(
-            text(
-                f"""
-                SELECT COUNT(1)
-                FROM {_render_table_name(engine, schema, table)}
-                WHERE {_quote_identifier(engine, batch_column)} = :batch_id
-                """
-            ),
-            {"batch_id": batch_id},
-        ).scalar()
+    count = bind.execute(
+        text(
+            f"""
+            SELECT COUNT(1)
+            FROM {_render_table_name(engine, schema, table)}
+            WHERE {_quote_identifier(engine, batch_column)} = :batch_id
+            """
+        ),
+        {"batch_id": batch_id},
+    ).scalar()
     return (count or 0) > 0
 
 
@@ -333,6 +333,75 @@ def _null_safe_row_match_predicate(
             f"(({left_expr} = {right_expr}) OR ({left_expr} IS NULL AND {right_expr} IS NULL))"
         )
     return " AND ".join(predicates) if predicates else "1 = 1"
+
+
+def _alter_table_add_column(
+    conn,
+    engine: Engine,
+    *,
+    schema: str | None,
+    table: str,
+    column_name: str,
+    column_type: str,
+) -> None:
+    add_keyword = "ADD" if engine.dialect.name == "mssql" else "ADD COLUMN"
+    conn.execute(
+        text(
+            f"""
+            ALTER TABLE {_render_table_name(engine, schema, table)}
+            {add_keyword} {_build_column_definition(
+                _quote_identifier(engine, column_name),
+                column_type,
+                nullable=True,
+            )}
+            """
+        )
+    )
+
+
+def _resolve_lookup_value(
+    conn,
+    engine: Engine,
+    *,
+    dim_schema: str | None,
+    dim_table: str,
+    dim_lookup_column: str,
+    required_column: str,
+    lookup_value: object,
+) -> object:
+    dim_sql = _render_table_name(engine, dim_schema, dim_table)
+    dim_alias = "d"
+    current_clause = ""
+    current_column = _get_current_indicator_column(
+        engine,
+        schema=dim_schema,
+        table=dim_table,
+    )
+    if current_column:
+        current_clause = (
+            f" AND ({dim_alias}.{_quote_identifier(engine, current_column)} = 1 "
+            f"OR {dim_alias}.{_quote_identifier(engine, current_column)} IS NULL)"
+        )
+    row = conn.execute(
+        text(
+            f"""
+            SELECT {dim_alias}.{_quote_identifier(engine, required_column)} AS resolved_value
+            FROM {dim_sql} {dim_alias}
+            WHERE {dim_alias}.{_quote_identifier(engine, dim_lookup_column)} = :lookup_value
+            {current_clause}
+            """
+        ),
+        {"lookup_value": lookup_value},
+    ).mappings().first()
+    if row is None or row["resolved_value"] is None:
+        location = f"{dim_schema}.{dim_table}" if dim_schema else dim_table
+        raise RuntimeError(
+            f"Missing dimension match in {location} for lookup columns "
+            f"{[dim_lookup_column]} -> dimension columns {[dim_lookup_column]}. "
+            f"Required columns {[required_column]} were null for backfill value(s): "
+            f"[{{'{dim_lookup_column}': '{lookup_value}'}}]"
+        )
+    return row["resolved_value"]
 
 
 def _validate_lookup_matches(
@@ -497,21 +566,6 @@ def load_fact_from_maps(
     metadata_columns = list(metadata_columns or [])
     batch_metadata_column = _get_batch_metadata_column(metadata_columns)
     fact_exists = _table_exists(engine, schema=fact_schema, table=fact_table)
-
-    if (
-        mode == "append"
-        and fact_exists
-        and batch_metadata_column
-        and "batch_id" in runtime_values
-        and _batch_already_loaded(
-            engine,
-            schema=fact_schema,
-            table=fact_table,
-            batch_column=batch_metadata_column,
-            batch_id=runtime_values["batch_id"],
-        )
-    ):
-        return
 
     archive_filename: str | None = None
     if archive_base_dir and any(
@@ -746,6 +800,63 @@ def load_fact_from_maps(
             fact_exists = False
         if not fact_exists:
             conn.execute(text(f"CREATE TABLE {fact_sql} ({create_columns_sql})"))
+        elif mode == "append":
+            existing_fact_columns = _get_table_columns(
+                engine,
+                schema=fact_schema,
+                table=fact_table,
+            )
+            for column_name, column_type, _ in column_definitions:
+                if column_name in existing_fact_columns:
+                    continue
+                _alter_table_add_column(
+                    conn,
+                    engine,
+                    schema=fact_schema,
+                    table=fact_table,
+                    column_name=column_name,
+                    column_type=column_type,
+                )
+            for active_lookup in active_lookups:
+                backfill_value = (
+                    active_lookup["config"].get("fallbacks") or {}
+                ).get("backfill_existing_rows")
+                if backfill_value is None:
+                    continue
+                source = active_lookup["config"]["source"]
+                target_column = active_lookup["config"]["target"]["column"]
+                resolved_value = _resolve_lookup_value(
+                    conn,
+                    engine,
+                    dim_schema=source.get("schema"),
+                    dim_table=source["table"],
+                    dim_lookup_column=source["lookup_column"],
+                    required_column=source["value_column"],
+                    lookup_value=backfill_value,
+                )
+                conn.execute(
+                    text(
+                        f"""
+                        UPDATE {fact_sql}
+                        SET {_quote_identifier(engine, target_column)} = :resolved_value
+                        WHERE {_quote_identifier(engine, target_column)} IS NULL
+                        """
+                    ),
+                    {"resolved_value": resolved_value},
+                )
+            if (
+                batch_metadata_column
+                and "batch_id" in runtime_values
+                and _batch_already_loaded(
+                    conn,
+                    engine,
+                    schema=fact_schema,
+                    table=fact_table,
+                    batch_column=batch_metadata_column,
+                    batch_id=runtime_values["batch_id"],
+                )
+            ):
+                return
         conn.execute(
             text(
                 f"""
