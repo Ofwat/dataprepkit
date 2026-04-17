@@ -1,5 +1,7 @@
 from sqlalchemy import create_engine, text
 
+import shutil
+import uuid
 from pathlib import Path
 
 import pandas as pd
@@ -452,6 +454,256 @@ def test_load_fact_from_maps_warns_for_missing_lookup_staging_column(capsys):
     assert [column["name"] for column in columns] == ["Value"]
 
 
+def test_load_fact_from_maps_uses_only_expected_lookup_columns():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE staging_fact (Measure_Cd TEXT, Value REAL)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_measure (
+                    Measure_Cd TEXT,
+                    Measure_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_organisation (
+                    Organisation_Cd TEXT,
+                    Organisation_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO staging_fact (Measure_Cd, Value)
+                VALUES ('MEASURE1', 1.5)
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_measure (Measure_Cd, Measure_Instance_Id)
+                VALUES ('MEASURE1', 200)
+                """
+            )
+        )
+
+    load_fact_from_maps(
+        engine=engine,
+        lookup_map={
+            "Measure_Cd": {
+                "source": {
+                    "schema": "main",
+                    "table": "dim_measure",
+                    "lookup_column": "Measure_Cd",
+                    "value_column": "Measure_Instance_Id",
+                },
+                "target": {
+                    "column": "Measure_Instance_Id",
+                    "comment": "Bar",
+                },
+            },
+            "Organisation_Cd": {
+                "source": {
+                    "schema": "main",
+                    "table": "dim_organisation",
+                    "lookup_column": "Organisation_Cd",
+                    "value_column": "Organisation_Instance_Id",
+                },
+                "target": {
+                    "column": "Organisation_Instance_Id",
+                    "comment": "Foo",
+                },
+            },
+        },
+        expected_lookup_columns=["Measure_Cd"],
+        data_columns=[{"column": "Value", "comment": "Actual inserted value"}],
+        additional_columns=[],
+        staging_table="staging_fact",
+        staging_schema="main",
+        fact_table="fact_result",
+        fact_schema="main",
+    )
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT Measure_Instance_Id, Value FROM fact_result")
+        ).mappings().all()
+        columns = conn.execute(text("PRAGMA table_info(fact_result)")).mappings().all()
+
+    assert rows == [{"Measure_Instance_Id": 200, "Value": 1.5}]
+    assert [column["name"] for column in columns] == ["Measure_Instance_Id", "Value"]
+
+
+def test_load_fact_from_maps_uses_lookup_fallback_when_expected_column_missing():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE staging_fact (Value REAL)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_interval (
+                    Interval_Cd TEXT,
+                    Interval_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(text("INSERT INTO staging_fact (Value) VALUES (1.5)"))
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_interval (Interval_Cd, Interval_Instance_Id)
+                VALUES ('UNKNOWN', 301)
+                """
+            )
+        )
+
+    load_fact_from_maps(
+        engine=engine,
+        lookup_map={
+            "Submission_Period_Cd": {
+                "source": {
+                    "schema": "main",
+                    "table": "dim_interval",
+                    "lookup_column": "Interval_Cd",
+                    "value_column": "Interval_Instance_Id",
+                },
+                "target": {
+                    "column": "Submission_Period_Interval_Instance_Id",
+                    "comment": "Baz",
+                },
+                "fallbacks": {
+                    "column_missing_in_staging": "UNKNOWN",
+                    "backfill_existing_rows": "NOT_USED_YET",
+                },
+            }
+        },
+        expected_lookup_columns=["Submission_Period_Cd"],
+        data_columns=[{"column": "Value", "comment": "Actual inserted value"}],
+        additional_columns=[],
+        staging_table="staging_fact",
+        staging_schema="main",
+        fact_table="fact_result",
+        fact_schema="main",
+    )
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT Submission_Period_Interval_Instance_Id, Value
+                FROM fact_result
+                """
+            )
+        ).mappings().all()
+
+    assert rows == [
+        {"Submission_Period_Interval_Instance_Id": 301, "Value": 1.5}
+    ]
+
+
+def test_load_fact_from_maps_raises_for_missing_expected_lookup_without_fallback():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE staging_fact (Value REAL)"))
+        conn.execute(text("INSERT INTO staging_fact (Value) VALUES (1.5)"))
+
+    with pytest.raises(
+        ValueError,
+        match="Missing required lookup staging columns in 'main.staging_fact': Submission_Period_Cd",
+    ):
+        load_fact_from_maps(
+            engine=engine,
+            lookup_map={
+                "Submission_Period_Cd": {
+                    "source": {
+                        "schema": "main",
+                        "table": "dim_interval",
+                        "lookup_column": "Interval_Cd",
+                        "value_column": "Interval_Instance_Id",
+                    },
+                    "target": {
+                        "column": "Submission_Period_Interval_Instance_Id",
+                        "comment": "Baz",
+                    },
+                }
+            },
+            expected_lookup_columns=["Submission_Period_Cd"],
+            data_columns=[{"column": "Value", "comment": "Actual inserted value"}],
+            additional_columns=[],
+            staging_table="staging_fact",
+            staging_schema="main",
+            fact_table="fact_result",
+            fact_schema="main",
+        )
+
+
+def test_load_fact_from_maps_raises_structured_error_for_missing_lookup_fallback():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE staging_fact (Value REAL)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_interval (
+                    Interval_Cd TEXT,
+                    Interval_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(text("INSERT INTO staging_fact (Value) VALUES (1.5)"))
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"Missing dimension match in main.dim_interval "
+            r"for lookup columns \['Submission_Period_Cd'\] -> dimension columns \['Interval_Cd'\].*"
+            r"'Submission_Period_Cd': 'UNKNOWN'"
+        ),
+    ):
+        load_fact_from_maps(
+            engine=engine,
+            lookup_map={
+                "Submission_Period_Cd": {
+                    "source": {
+                        "schema": "main",
+                        "table": "dim_interval",
+                        "lookup_column": "Interval_Cd",
+                        "value_column": "Interval_Instance_Id",
+                    },
+                    "target": {
+                        "column": "Submission_Period_Interval_Instance_Id",
+                        "comment": "Baz",
+                    },
+                    "fallbacks": {
+                        "column_missing_in_staging": "UNKNOWN",
+                        "backfill_existing_rows": "NOT_USED_YET",
+                    },
+                }
+            },
+            expected_lookup_columns=["Submission_Period_Cd"],
+            data_columns=[{"column": "Value", "comment": "Actual inserted value"}],
+            additional_columns=[],
+            staging_table="staging_fact",
+            staging_schema="main",
+            fact_table="fact_result",
+            fact_schema="main",
+        )
+
+
 def test_load_fact_from_maps_raises_structured_error_for_missing_dimension_lookup():
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
 
@@ -805,236 +1057,242 @@ def test_load_fact_from_maps_filters_additional_columns_to_current_rows():
     assert rows == [{"Measure_Instance_Id": 200, "Measure_Name": "Current Name"}]
 
 
-def test_load_fact_from_maps_supports_metadata_columns_and_archive_filename(
-    tmp_path, monkeypatch
-):
+def test_load_fact_from_maps_supports_metadata_columns_and_archive_filename(monkeypatch):
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    archive_dir = Path(".test_artifacts") / f"archive_{uuid.uuid4().hex}"
+    archive_dir.mkdir(parents=True, exist_ok=True)
 
-    with engine.begin() as conn:
-        conn.execute(text("ATTACH DATABASE ':memory:' AS facts"))
-        conn.execute(
-            text(
-                """
-                CREATE TABLE staging_fact (
-                    Measure_Cd TEXT,
-                    Value REAL
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ATTACH DATABASE ':memory:' AS facts"))
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE staging_fact (
+                        Measure_Cd TEXT,
+                        Value REAL
+                    )
+                    """
                 )
-                """
             )
-        )
-        conn.execute(
-            text(
-                """
-                CREATE TABLE dim_measure (
-                    Measure_Cd TEXT,
-                    Measure_Instance_Id INTEGER
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE dim_measure (
+                        Measure_Cd TEXT,
+                        Measure_Instance_Id INTEGER
+                    )
+                    """
                 )
-                """
             )
-        )
-        conn.execute(
-            text(
-                """
-                INSERT INTO staging_fact (Measure_Cd, Value)
-                VALUES ('MEASURE1', 1.5)
-                """
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO staging_fact (Measure_Cd, Value)
+                    VALUES ('MEASURE1', 1.5)
+                    """
+                )
             )
-        )
-        conn.execute(
-            text(
-                """
-                INSERT INTO dim_measure (Measure_Cd, Measure_Instance_Id)
-                VALUES ('MEASURE1', 200)
-                """
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO dim_measure (Measure_Cd, Measure_Instance_Id)
+                    VALUES ('MEASURE1', 200)
+                    """
+                )
             )
-        )
 
-    def fake_to_parquet(self, path, index=False):
-        Path(path).write_bytes(b"parquet")
+        def fake_to_parquet(self, path, index=False):
+            Path(path).write_bytes(b"parquet")
 
-    monkeypatch.setattr(pd.DataFrame, "to_parquet", fake_to_parquet)
+        monkeypatch.setattr(pd.DataFrame, "to_parquet", fake_to_parquet)
 
-    load_fact_from_maps(
-        engine=engine,
-        lookup_map={
-            "Measure_Cd": {
-                "source": {
-                    "schema": "main",
-                    "table": "dim_measure",
-                    "lookup_column": "Measure_Cd",
-                    "value_column": "Measure_Instance_Id",
-                },
-                "target": {
-                    "column": "Measure_Instance_Id",
-                    "comment": "Bar",
-                },
-            }
-        },
-        data_columns=[{"column": "Value", "comment": "Actual inserted value"}],
-        additional_columns=[],
-        metadata_columns=[
-            {
-                "target": {
-                    "column": "Batch_Id",
-                    "comment": "Pipeline batch identifier.",
-                },
-                "source": {
-                    "kind": "parameter",
-                    "name": "batch_id",
-                },
+        load_fact_from_maps(
+            engine=engine,
+            lookup_map={
+                "Measure_Cd": {
+                    "source": {
+                        "schema": "main",
+                        "table": "dim_measure",
+                        "lookup_column": "Measure_Cd",
+                        "value_column": "Measure_Instance_Id",
+                    },
+                    "target": {
+                        "column": "Measure_Instance_Id",
+                        "comment": "Bar",
+                    },
+                }
             },
-            {
-                "target": {
-                    "column": "Insert_Date",
-                    "comment": "UTC insert timestamp.",
+            data_columns=[{"column": "Value", "comment": "Actual inserted value"}],
+            additional_columns=[],
+            metadata_columns=[
+                {
+                    "target": {
+                        "column": "Batch_Id",
+                        "comment": "Pipeline batch identifier.",
+                    },
+                    "source": {
+                        "kind": "parameter",
+                        "name": "batch_id",
+                    },
                 },
-                "source": {
-                    "kind": "sql",
-                    "expression": "CURRENT_TIMESTAMP",
+                {
+                    "target": {
+                        "column": "Insert_Date",
+                        "comment": "UTC insert timestamp.",
+                    },
+                    "source": {
+                        "kind": "sql",
+                        "expression": "CURRENT_TIMESTAMP",
+                    },
                 },
-            },
-            {
-                "target": {
-                    "column": "Archive_Filename",
-                    "comment": "Archive file name for the snapshot.",
+                {
+                    "target": {
+                        "column": "Archive_Filename",
+                        "comment": "Archive file name for the snapshot.",
+                    },
+                    "source": {
+                        "kind": "archive_filename",
+                    },
                 },
-                "source": {
-                    "kind": "archive_filename",
-                },
-            },
-        ],
-        runtime_values={"batch_id": "BATCH123"},
-        staging_table="staging_fact",
-        staging_schema="main",
-        fact_table="fact_result",
-        fact_schema="facts",
-        archive_base_dir=str(tmp_path),
-    )
+            ],
+            runtime_values={"batch_id": "BATCH123"},
+            staging_table="staging_fact",
+            staging_schema="main",
+            fact_table="fact_result",
+            fact_schema="facts",
+            archive_base_dir=str(archive_dir),
+        )
 
-    with engine.connect() as conn:
-        row = conn.execute(
-            text(
-                """
-                SELECT
-                    Measure_Instance_Id,
-                    Value,
-                    Batch_Id,
-                    Archive_Filename
-                FROM facts.fact_result
-                """
-            )
-        ).mappings().one()
-        columns = conn.execute(
-            text("PRAGMA facts.table_info(fact_result)")
-        ).mappings().all()
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT
+                        Measure_Instance_Id,
+                        Value,
+                        Batch_Id,
+                        Archive_Filename
+                    FROM facts.fact_result
+                    """
+                )
+            ).mappings().one()
+            columns = conn.execute(
+                text("PRAGMA facts.table_info(fact_result)")
+            ).mappings().all()
 
-    assert row["Measure_Instance_Id"] == 200
-    assert row["Value"] == 1.5
-    assert row["Batch_Id"] == "BATCH123"
-    assert row["Archive_Filename"].startswith("staging_fact__")
-    assert row["Archive_Filename"].endswith("__BATCHBATCH123.parquet")
-    assert {column["name"]: column["notnull"] for column in columns}["Batch_Id"] == 1
-    assert {column["name"]: column["notnull"] for column in columns}["Insert_Date"] == 1
-    assert {column["name"]: column["notnull"] for column in columns}["Archive_Filename"] == 1
+        assert row["Measure_Instance_Id"] == 200
+        assert row["Value"] == 1.5
+        assert row["Batch_Id"] == "BATCH123"
+        assert row["Archive_Filename"].startswith("staging_fact__")
+        assert row["Archive_Filename"].endswith("__BATCHBATCH123.parquet")
+        assert {column["name"]: column["notnull"] for column in columns}["Batch_Id"] == 1
+        assert {column["name"]: column["notnull"] for column in columns}["Insert_Date"] == 1
+        assert {column["name"]: column["notnull"] for column in columns}["Archive_Filename"] == 1
+    finally:
+        shutil.rmtree(archive_dir.parent, ignore_errors=True)
 
 
-def test_load_fact_from_maps_skips_archive_when_archive_base_dir_is_none(
-    tmp_path, monkeypatch
-):
+def test_load_fact_from_maps_skips_archive_when_archive_base_dir_is_none(monkeypatch):
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    archive_dir = Path(".test_artifacts") / f"archive_{uuid.uuid4().hex}"
+    archive_dir.mkdir(parents=True, exist_ok=True)
 
-    with engine.begin() as conn:
-        conn.execute(text("ATTACH DATABASE ':memory:' AS facts"))
-        conn.execute(
-            text(
-                """
-                CREATE TABLE staging_fact (
-                    Measure_Cd TEXT,
-                    Value REAL
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ATTACH DATABASE ':memory:' AS facts"))
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE staging_fact (
+                        Measure_Cd TEXT,
+                        Value REAL
+                    )
+                    """
                 )
-                """
             )
-        )
-        conn.execute(
-            text(
-                """
-                CREATE TABLE dim_measure (
-                    Measure_Cd TEXT,
-                    Measure_Instance_Id INTEGER
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE dim_measure (
+                        Measure_Cd TEXT,
+                        Measure_Instance_Id INTEGER
+                    )
+                    """
                 )
-                """
             )
-        )
-        conn.execute(
-            text(
-                """
-                INSERT INTO staging_fact (Measure_Cd, Value)
-                VALUES ('MEASURE1', 1.5)
-                """
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO staging_fact (Measure_Cd, Value)
+                    VALUES ('MEASURE1', 1.5)
+                    """
+                )
             )
-        )
-        conn.execute(
-            text(
-                """
-                INSERT INTO dim_measure (Measure_Cd, Measure_Instance_Id)
-                VALUES ('MEASURE1', 200)
-                """
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO dim_measure (Measure_Cd, Measure_Instance_Id)
+                    VALUES ('MEASURE1', 200)
+                    """
+                )
             )
+
+        def fail_to_parquet(self, path, index=False):
+            raise AssertionError("to_parquet should not be called when archive_base_dir is None")
+
+        monkeypatch.setattr(pd.DataFrame, "to_parquet", fail_to_parquet)
+
+        load_fact_from_maps(
+            engine=engine,
+            lookup_map={
+                "Measure_Cd": {
+                    "source": {
+                        "schema": "main",
+                        "table": "dim_measure",
+                        "lookup_column": "Measure_Cd",
+                        "value_column": "Measure_Instance_Id",
+                    },
+                    "target": {
+                        "column": "Measure_Instance_Id",
+                        "comment": "Bar",
+                    },
+                }
+            },
+            data_columns=[{"column": "Value", "comment": "Actual inserted value"}],
+            additional_columns=[],
+            metadata_columns=[
+                {
+                    "target": {
+                        "column": "Archive_Filename",
+                        "comment": "Archive file name for the snapshot.",
+                    },
+                    "source": {
+                        "kind": "archive_filename",
+                    },
+                }
+            ],
+            runtime_values={"batch_id": "BATCH123"},
+            staging_table="staging_fact",
+            staging_schema="main",
+            fact_table="fact_result",
+            fact_schema="facts",
+            archive_base_dir=None,
         )
 
-    def fail_to_parquet(self, path, index=False):
-        raise AssertionError("to_parquet should not be called when archive_base_dir is None")
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT Measure_Instance_Id, Archive_Filename FROM facts.fact_result")
+            ).mappings().one()
+            columns = conn.execute(
+                text("PRAGMA facts.table_info(fact_result)")
+            ).mappings().all()
 
-    monkeypatch.setattr(pd.DataFrame, "to_parquet", fail_to_parquet)
-
-    load_fact_from_maps(
-        engine=engine,
-        lookup_map={
-            "Measure_Cd": {
-                "source": {
-                    "schema": "main",
-                    "table": "dim_measure",
-                    "lookup_column": "Measure_Cd",
-                    "value_column": "Measure_Instance_Id",
-                },
-                "target": {
-                    "column": "Measure_Instance_Id",
-                    "comment": "Bar",
-                },
-            }
-        },
-        data_columns=[{"column": "Value", "comment": "Actual inserted value"}],
-        additional_columns=[],
-        metadata_columns=[
-            {
-                "target": {
-                    "column": "Archive_Filename",
-                    "comment": "Archive file name for the snapshot.",
-                },
-                "source": {
-                    "kind": "archive_filename",
-                },
-            }
-        ],
-        runtime_values={"batch_id": "BATCH123"},
-        staging_table="staging_fact",
-        staging_schema="main",
-        fact_table="fact_result",
-        fact_schema="facts",
-        archive_base_dir=None,
-    )
-
-    with engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT Measure_Instance_Id, Archive_Filename FROM facts.fact_result")
-        ).mappings().one()
-        columns = conn.execute(
-            text("PRAGMA facts.table_info(fact_result)")
-        ).mappings().all()
-
-    assert row == {"Measure_Instance_Id": 200, "Archive_Filename": None}
-    assert {column["name"]: column["notnull"] for column in columns}["Archive_Filename"] == 0
-    assert list(tmp_path.iterdir()) == []
+        assert row == {"Measure_Instance_Id": 200, "Archive_Filename": None}
+        assert {column["name"]: column["notnull"] for column in columns}["Archive_Filename"] == 0
+        assert list(archive_dir.iterdir()) == []
+    finally:
+        shutil.rmtree(archive_dir.parent, ignore_errors=True)
 
 
 def test_load_fact_from_maps_append_mode_is_idempotent_for_same_batch_id():

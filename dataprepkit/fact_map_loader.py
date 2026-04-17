@@ -112,34 +112,81 @@ def _validate_staging_columns(
     table: str,
     lookup_map: Mapping[str, Mapping[str, object]],
     data_columns: Sequence[Mapping[str, str]],
-) -> tuple[set[str], set[str]]:
+    expected_lookup_columns: Sequence[str] | None = None,
+) -> tuple[set[str], list[dict[str, object]]]:
     staging_columns = _get_table_columns(engine, schema=schema, table=table)
     lookup_columns = set(lookup_map)
     data_column_names = {column["column"] for column in data_columns}
-
-    missing_lookup_columns = sorted(lookup_columns - staging_columns)
-    if missing_lookup_columns:
-        location = f"{schema}.{table}" if schema else table
-        print(
-            "Warning: missing lookup staging columns in "
-            f"'{location}': {', '.join(missing_lookup_columns)}"
+    active_lookup_columns = list(expected_lookup_columns or lookup_map.keys())
+    missing_lookup_configs = [
+        column for column in active_lookup_columns if column not in lookup_map
+    ]
+    if missing_lookup_configs:
+        raise ValueError(
+            "Missing lookup definitions for expected columns: "
+            f"{', '.join(sorted(missing_lookup_configs))}"
         )
+
+    location = f"{schema}.{table}" if schema else table
+    active_lookups: list[dict[str, object]] = []
+    required_missing_columns: list[str] = []
+
+    for column_name in active_lookup_columns:
+        config = lookup_map[column_name]
+        fallbacks = config.get("fallbacks") or {}
+        fallback_value = fallbacks.get("column_missing_in_staging")
+        if column_name in staging_columns:
+            active_lookups.append(
+                {
+                    "staging_column": column_name,
+                    "config": config,
+                    "lookup_sql": f"s.{_quote_identifier(engine, column_name)}",
+                    "lookup_params": {},
+                    "lookup_value": None,
+                }
+            )
+            continue
+        if fallback_value is not None:
+            param_name = f"lookup_fallback_{len(active_lookups)}"
+            active_lookups.append(
+                {
+                    "staging_column": column_name,
+                    "config": config,
+                    "lookup_sql": f":{param_name}",
+                    "lookup_params": {param_name: fallback_value},
+                    "lookup_value": fallback_value,
+                }
+            )
+            continue
+        required_missing_columns.append(column_name)
+
+    if required_missing_columns and expected_lookup_columns is not None:
+        raise ValueError(
+            f"Missing required lookup staging columns in '{location}': "
+            f"{', '.join(sorted(required_missing_columns))}"
+        )
+
+    if expected_lookup_columns is None:
+        missing_lookup_columns = sorted(lookup_columns - staging_columns)
+        if missing_lookup_columns:
+            print(
+                "Warning: missing lookup staging columns in "
+                f"'{location}': {', '.join(missing_lookup_columns)}"
+            )
 
     missing_data_columns = sorted(data_column_names - staging_columns)
     if missing_data_columns:
-        location = f"{schema}.{table}" if schema else table
         raise ValueError(
             f"Missing required data columns in '{location}': {', '.join(missing_data_columns)}"
         )
 
-    used_columns = lookup_columns | data_column_names
+    used_columns = set(active_lookup_columns) | data_column_names
     extra_columns = sorted(staging_columns - used_columns)
     if extra_columns:
-        location = f"{schema}.{table}" if schema else table
         print(
             f"Warning: unused staging columns in '{location}': {', '.join(extra_columns)}"
         )
-    return staging_columns, set(missing_lookup_columns)
+    return staging_columns, active_lookups
 
 
 def _get_batch_metadata_column(
@@ -185,6 +232,9 @@ def _format_missing_lookup_error(
     dim_table: str,
     dim_lookup_column: str,
     required_column: str,
+    lookup_sql: str | None = None,
+    lookup_params: Mapping[str, object] | None = None,
+    lookup_value: object | None = None,
 ) -> tuple[int, str]:
     staging_sql = _render_table_name(engine, staging_schema, staging_table)
     dim_sql = _render_table_name(engine, dim_schema, dim_table)
@@ -201,11 +251,17 @@ def _format_missing_lookup_error(
             f"OR {dim_alias}.{_quote_identifier(engine, current_column)} IS NULL)"
         )
 
+    effective_lookup_sql = lookup_sql or f"s.{_quote_identifier(engine, staging_column)}"
     predicate = (
         f"{dim_alias}.{_quote_identifier(engine, dim_lookup_column)} = "
-        f"s.{_quote_identifier(engine, staging_column)}{current_clause}"
+        f"{effective_lookup_sql}{current_clause}"
     )
     where_clause = f"{dim_alias}.{_quote_identifier(engine, required_column)} IS NULL"
+    sample_select = (
+        f"s.{_quote_identifier(engine, staging_column)}"
+        if lookup_value is None
+        else f"{effective_lookup_sql}"
+    )
     count_query = text(
         f"""
         SELECT COUNT(1)
@@ -217,7 +273,7 @@ def _format_missing_lookup_error(
     )
     sample_query = text(
         f"""
-        SELECT DISTINCT s.{_quote_identifier(engine, staging_column)} AS staging_key
+        SELECT DISTINCT {sample_select} AS staging_key
         FROM {staging_sql} s
         LEFT JOIN {dim_sql} {dim_alias}
           ON {predicate}
@@ -225,13 +281,14 @@ def _format_missing_lookup_error(
         """
     )
     with engine.connect() as conn:
-        count = conn.execute(count_query).scalar() or 0
-        rows = conn.execute(sample_query).mappings().fetchmany(10)
+        count = conn.execute(count_query, dict(lookup_params or {})).scalar() or 0
+        rows = conn.execute(sample_query, dict(lookup_params or {})).mappings().fetchmany(10)
 
     missing_keys = [{staging_column: row["staging_key"]} for row in rows]
     location = f"{dim_schema}.{dim_table}" if dim_schema else dim_table
+    source_label = "lookup columns" if lookup_value is not None else "staging columns"
     return count, (
-        f"Missing dimension match in {location} for staging columns "
+        f"Missing dimension match in {location} for {source_label} "
         f"{[staging_column]} -> dimension columns {[dim_lookup_column]}. "
         f"Required columns {[required_column]} were null for {count} row(s). "
         f"Example missing source keys: {missing_keys}"
@@ -283,19 +340,16 @@ def _validate_lookup_matches(
     *,
     staging_schema: str | None,
     staging_table: str,
-    lookup_map: Mapping[str, Mapping[str, object]],
-    missing_columns: set[str],
+    active_lookups: Sequence[Mapping[str, object]],
 ) -> None:
-    for staging_column, config in lookup_map.items():
-        if staging_column in missing_columns:
-            continue
+    for active_lookup in active_lookups:
+        staging_column = active_lookup["staging_column"]
+        config = active_lookup["config"]
         source = config["source"]
-        target = config["target"]
         source_schema = source.get("schema")
         source_table = source["table"]
         source_lookup_column = source["lookup_column"]
         source_value_column = source["value_column"]
-        target_column = target["column"]
 
         count, message = _format_missing_lookup_error(
             engine,
@@ -306,6 +360,9 @@ def _validate_lookup_matches(
             dim_table=source_table,
             dim_lookup_column=source_lookup_column,
             required_column=source_value_column,
+            lookup_sql=active_lookup["lookup_sql"],
+            lookup_params=active_lookup["lookup_params"],
+            lookup_value=active_lookup["lookup_value"],
         )
         if count:
             raise RuntimeError(message)
@@ -397,6 +454,7 @@ def load_fact_from_maps(
     additional_columns: Sequence[Mapping[str, object]],
     metadata_columns: Sequence[Mapping[str, object]] | None = None,
     runtime_values: Mapping[str, object] | None = None,
+    expected_lookup_columns: Sequence[str] | None = None,
     staging_table: str,
     staging_schema: str | None,
     fact_table: str,
@@ -416,13 +474,13 @@ def load_fact_from_maps(
         table=staging_table,
         lookup_map=lookup_map,
         data_columns=data_columns,
+        expected_lookup_columns=expected_lookup_columns,
     )
     _validate_lookup_matches(
         engine,
         staging_schema=staging_schema,
         staging_table=staging_table,
-        lookup_map=lookup_map,
-        missing_columns=missing_columns,
+        active_lookups=missing_columns,
     )
 
     column_definitions: list[tuple[str, str, bool]] = []
@@ -472,9 +530,10 @@ def load_fact_from_maps(
             archive_base_dir=archive_base_dir,
         )
 
-    for index, (staging_column, config) in enumerate(lookup_map.items()):
-        if staging_column in missing_columns:
-            continue
+    active_lookups = list(missing_columns)
+    for index, active_lookup in enumerate(active_lookups):
+        staging_column = active_lookup["staging_column"]
+        config = active_lookup["config"]
         source = config["source"]
         target = config["target"]
         target_column = target["column"]
@@ -499,7 +558,7 @@ def load_fact_from_maps(
             "LEFT JOIN "
             f"{_render_table_name(engine, source_schema, source_table)} {alias} "
             f"ON {alias}.{_quote_identifier(engine, source_lookup_column)} = "
-            f"s.{_quote_identifier(engine, staging_column)}{current_clause}"
+            f"{active_lookup['lookup_sql']}{current_clause}"
         )
         base_selects.append(
             f"{alias}.{_quote_identifier(engine, source_value_column)} "
@@ -699,7 +758,14 @@ def load_fact_from_maps(
                 {final_source_sql}
                 """
             ),
-            metadata_params,
+            {
+                **{
+                    key: value
+                    for active_lookup in active_lookups
+                    for key, value in active_lookup["lookup_params"].items()
+                },
+                **metadata_params,
+            },
         )
 
     _apply_comments(
