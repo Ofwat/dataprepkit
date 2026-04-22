@@ -1588,6 +1588,47 @@ def _coerce_uuid_series(series: pd.Series, column: str, target_type: str) -> pd.
     return pd.Series(coerced, index=series.index, dtype="object")
 
 
+def _format_temporal_value_for_sql(value: datetime, base_sql_type: str) -> str:
+    if base_sql_type == "DATE":
+        return value.date().isoformat()
+    if base_sql_type == "TIME":
+        return value.time().isoformat(timespec="milliseconds")
+    return value.isoformat(timespec="milliseconds")
+
+
+def _parse_temporal_value_for_sql(
+    value: object,
+    *,
+    fmt: str,
+    base_sql_type: str,
+) -> str | None:
+    if pd.isna(value):
+        return None
+    if isinstance(value, datetime):
+        return _format_temporal_value_for_sql(value, base_sql_type)
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    parse_attempts = [
+        lambda text: datetime.strptime(text, fmt),
+        lambda text: datetime.fromisoformat(text.replace("Z", "+00:00")),
+    ]
+    for parser in parse_attempts:
+        try:
+            return _format_temporal_value_for_sql(parser(raw), base_sql_type)
+        except ValueError:
+            continue
+    return None
+
+
+def _normalize_parsed_temporal_series_for_sql(parsed: pd.Series, base_sql_type: str) -> pd.Series:
+    return parsed.map(
+        lambda value: None
+        if pd.isna(value)
+        else _format_temporal_value_for_sql(value.to_pydatetime(), base_sql_type)
+    )
+
+
 def _cast_data_columns(incoming: pd.DataFrame, metadata: DimensionMetadata) -> pd.DataFrame:
     integer_types = {"INT", "INTEGER", "BIGINT", "SMALLINT", "TINYINT"}
     decimal_types = {"FLOAT", "REAL", "DECIMAL", "NUMERIC"}
@@ -1623,7 +1664,25 @@ def _cast_data_columns(incoming: pd.DataFrame, metadata: DimensionMetadata) -> p
                     )
                 invalid_mask = df[name].notna() & parsed.isna()
                 if invalid_mask.any():
-                    _raise_incompatible_type_error(df[name], invalid_mask, name, spec.type)
+                    normalized = {}
+                    for index, value in df.loc[invalid_mask, name].items():
+                        normalized_value = _parse_temporal_value_for_sql(
+                            value,
+                            fmt=fmt,
+                            base_sql_type=base_sql_type,
+                        )
+                        if normalized_value is not None:
+                            normalized[index] = normalized_value
+                    unresolved_mask = invalid_mask.copy()
+                    for index in normalized:
+                        unresolved_mask.loc[index] = False
+                    if unresolved_mask.any():
+                        _raise_incompatible_type_error(df[name], unresolved_mask, name, spec.type)
+                    normalized_series = _normalize_parsed_temporal_series_for_sql(parsed, base_sql_type)
+                    for index, value in normalized.items():
+                        normalized_series.loc[index] = value
+                    df[name] = normalized_series.astype("object")
+                    continue
                 if base_sql_type == "TIME":
                     df[name] = parsed.dt.time
                 else:

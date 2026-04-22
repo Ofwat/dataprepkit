@@ -1559,6 +1559,37 @@ def test_cast_data_columns_falls_back_to_additional_iso_datetime_strings():
     metadata_loader.METADATA_REGISTRY.pop("iso_format_test_2", None)
 
 
+def test_cast_data_columns_accepts_out_of_bounds_datetime_strings():
+    metadata_loader.METADATA_REGISTRY.pop("out_of_bounds_datetime_test", None)
+    metadata_loader.register_metadata(
+        "out_of_bounds_datetime_test",
+        {
+            "target_table": "dimtable",
+            "natural_key_cols": ["id"],
+            "data_columns": {
+                "Interval_Start_Date": {
+                    "type": "DATETIME2(3)",
+                    "nullable": True,
+                }
+            },
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+    )
+
+    metadata = metadata_loader.get_metadata("out_of_bounds_datetime_test")
+    incoming = metadata_loader.pd.DataFrame(
+        {"Interval_Start_Date": ["31/12/2999 00:00", None]}
+    )
+
+    casted = metadata_loader._cast_data_columns(incoming, metadata)
+
+    assert casted.loc[0, "Interval_Start_Date"] == "2999-12-31T00:00:00.000"
+    assert casted.loc[1, "Interval_Start_Date"] is None
+    metadata_loader.METADATA_REGISTRY.pop("out_of_bounds_datetime_test", None)
+
+
 def test_cast_data_columns_raises_for_invalid_float_values():
     metadata_loader.METADATA_REGISTRY.pop("float_cast_test", None)
     metadata_loader.register_metadata(
