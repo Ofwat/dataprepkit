@@ -272,6 +272,7 @@ def apply_changes(
                 data_cols,
                 join_numeric_key_col,
                 cols,
+                column_types,
                 hash_col,
                 execution_time,
                 batch_id=batch_id,
@@ -568,6 +569,43 @@ def _quote_identifier_engine(identifier: str) -> str:
     return f'"{normalized.replace(chr(34), chr(34) * 2)}"'
 
 
+def _is_text_like_type(type_name: str | None) -> bool:
+    if not type_name:
+        return False
+    normalized = type_name.strip().upper()
+    return any(token in normalized for token in ("CHAR", "TEXT", "CLOB"))
+
+
+def _case_sensitive_match_expression(
+    engine: Engine,
+    alias: str,
+    column: str,
+    column_types: Mapping[str, str],
+) -> str:
+    quoted = f"{alias}.{_quote_identifier(engine, column)}"
+    if not _is_text_like_type(column_types.get(column.lower())):
+        return quoted
+    if engine.dialect.name == "sqlite":
+        return f"{quoted} COLLATE BINARY"
+    if engine.dialect.name == "mssql":
+        return f"{quoted} COLLATE Latin1_General_100_BIN2"
+    return quoted
+
+
+def _build_natural_key_match_condition(
+    engine: Engine,
+    left_alias: str,
+    right_alias: str,
+    columns: Sequence[str],
+    column_types: Mapping[str, str],
+) -> str:
+    return " AND ".join(
+        f"{_case_sensitive_match_expression(engine, left_alias, col, column_types)} = "
+        f"{_case_sensitive_match_expression(engine, right_alias, col, column_types)}"
+        for col in columns
+    )
+
+
 def _apply_snapshot_to_target(
     conn,
     staging_table: str,
@@ -576,6 +614,7 @@ def _apply_snapshot_to_target(
     data_cols: Sequence[str],
     join_numeric_key_col: str,
     columns: Mapping[str, str],
+    column_types: Mapping[str, str],
     hash_col: str,
     execution_time: str,
     batch_id: str | None = None,
@@ -584,8 +623,12 @@ def _apply_snapshot_to_target(
     has_archive_filename: bool = False,
 ) -> bool:
     quote = lambda value: _quote_identifier(conn.engine, value)
-    join_condition = " AND ".join(
-        f"{target_table}.{quote(col)} = s.{quote(col)}" for col in natural_key_cols
+    join_condition = _build_natural_key_match_condition(
+        conn.engine,
+        target_table,
+        "s",
+        natural_key_cols,
+        column_types,
     )
     deleted_ind_column = quote(columns["deleted_ind"])
     update_date_column = quote(columns["update_date"])
@@ -652,7 +695,8 @@ def _apply_snapshot_to_target(
     )
 
     current_join_condition = (
-        f"{' AND '.join(f't.{quote(col)} = s.{quote(col)}' for col in natural_key_cols)} AND t.{current_ind_column} = 1"
+        f"{_build_natural_key_match_condition(conn.engine, 't', 's', natural_key_cols, column_types)} "
+        f"AND t.{current_ind_column} = 1"
         if natural_key_cols
         else f"t.{current_ind_column} = 1"
     )

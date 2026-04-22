@@ -754,6 +754,7 @@ def run_dimension(
             incoming.head(),
         )
     incoming = _apply_dependency_joins(incoming, metadata.dependencies, engine)
+    incoming = _cast_data_columns(incoming, metadata)
     logger.debug(
         "After dependency joins for %s: %d rows, columns=%s",
         metadata_name,
@@ -925,6 +926,7 @@ def run_dimension_copy_into(
     if metadata.processing_class:
         incoming = metadata.processing_class(incoming)
     incoming = _apply_dependency_joins(incoming, metadata.dependencies, engine)
+    incoming = _cast_data_columns(incoming, metadata)
 
     _, target_table = _split_table_name(metadata.target_table)
     batch_id = metadata.archive_batch_id or metadata.name
@@ -1420,15 +1422,6 @@ def _apply_dependency_joins(
         where_clauses = []
         if dep.filter_target_current:
             where_clauses.append("[Current_Ind] = 1")
-            try:
-                inspector = inspect(engine)
-                dep_columns = {
-                    column["name"] for column in inspector.get_columns(table, schema=schema)
-                }
-            except Exception:
-                dep_columns = set()
-            if "Deleted_Ind" in dep_columns:
-                where_clauses.append("[Deleted_Ind] = 0")
         for expressions in dep.where.values():
             where_clauses.extend(expressions)
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
@@ -1482,7 +1475,13 @@ def _apply_dependency_joins(
                 missing_rows.head(5).to_dict(orient="records"),
             )
             if dep.on_missing == "error":
-                raise RuntimeError(f"Dependency join {dep.table} produced missing values.")
+                raise RuntimeError(
+                    _format_missing_dependency_join_error(
+                        dep=dep,
+                        table_ref=table_ref,
+                        missing_rows=missing_rows,
+                    )
+                )
 
     return incoming
 
@@ -1500,10 +1499,144 @@ def _normalize_dependency_join_key(value: Any) -> str | None:
     return str(value)
 
 
+def _format_missing_dependency_join_error(
+    *,
+    dep: DependencyJoin,
+    table_ref: str,
+    missing_rows: pd.DataFrame,
+) -> str:
+    example_missing_keys = missing_rows[[relation["source"] for relation in dep.on]]
+    examples = example_missing_keys.drop_duplicates().head(10).to_dict(orient="records")
+    return (
+        f"Missing dependency match in {table_ref} for source columns "
+        f"{[relation['source'] for relation in dep.on]} -> target columns "
+        f"{[relation['target'] for relation in dep.on]}. "
+        f"Required columns {list(dep.select.values())} were null for {len(missing_rows)} row(s). "
+        f"Example missing source keys: {examples}"
+    )
+
+
+def _raise_incompatible_type_error(series: pd.Series, invalid_mask: pd.Series, column: str, target_type: str) -> None:
+    invalid_values = series.loc[invalid_mask].drop_duplicates().head(3).tolist()
+    raise ValueError(
+        f"Column '{column}' contains value(s) incompatible with target type {target_type}: "
+        f"{invalid_values}. SCD2 load aborted."
+    )
+
+
+def _coerce_boolean_series(series: pd.Series, column: str, target_type: str) -> pd.Series:
+    true_values = {"1", "true", "t", "yes", "y"}
+    false_values = {"0", "false", "f", "no", "n"}
+    coerced = []
+    invalid_mask = pd.Series(False, index=series.index, dtype="boolean")
+    for index, value in series.items():
+        if pd.isna(value):
+            coerced.append(pd.NA)
+            continue
+        if isinstance(value, bool):
+            coerced.append(value)
+            continue
+        if hasattr(value, "item"):
+            scalar_value = value.item()
+            if isinstance(scalar_value, bool):
+                coerced.append(scalar_value)
+                continue
+        if isinstance(value, int) and value in {0, 1}:
+            coerced.append(bool(value))
+            continue
+        if isinstance(value, float) and value in {0.0, 1.0}:
+            coerced.append(bool(int(value)))
+            continue
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in true_values:
+                coerced.append(True)
+                continue
+            if normalized in false_values:
+                coerced.append(False)
+                continue
+        coerced.append(pd.NA)
+        invalid_mask.loc[index] = True
+    if invalid_mask.any():
+        _raise_incompatible_type_error(series, invalid_mask, column, target_type)
+    return pd.Series(coerced, index=series.index, dtype="boolean")
+
+
+def _coerce_uuid_series(series: pd.Series, column: str, target_type: str) -> pd.Series:
+    coerced = []
+    invalid_mask = pd.Series(False, index=series.index, dtype="boolean")
+    for index, value in series.items():
+        if pd.isna(value):
+            coerced.append(None)
+            continue
+        try:
+            coerced.append(str(uuid.UUID(str(value).strip())))
+        except (AttributeError, TypeError, ValueError):
+            coerced.append(None)
+            invalid_mask.loc[index] = True
+    if invalid_mask.any():
+        _raise_incompatible_type_error(series, invalid_mask, column, target_type)
+    return pd.Series(coerced, index=series.index, dtype="object")
+
+
+def _format_temporal_value_for_sql(value: datetime, base_sql_type: str) -> str:
+    if base_sql_type == "DATE":
+        return value.date().isoformat()
+    if base_sql_type == "TIME":
+        return value.time().isoformat(timespec="milliseconds")
+    return value.isoformat(timespec="milliseconds")
+
+
+def _parse_temporal_value_for_sql(
+    value: object,
+    *,
+    fmt: str,
+    base_sql_type: str,
+) -> str | None:
+    if pd.isna(value):
+        return None
+    if isinstance(value, datetime):
+        return _format_temporal_value_for_sql(value, base_sql_type)
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    parse_formats = [fmt]
+    if "%S" not in fmt and "%M" in fmt:
+        parse_formats.append(f"{fmt}:%S")
+    parse_attempts = [
+        *[lambda text, candidate_fmt=candidate_fmt: datetime.strptime(text, candidate_fmt) for candidate_fmt in parse_formats],
+        lambda text: datetime.fromisoformat(text.replace("Z", "+00:00")),
+    ]
+    for parser in parse_attempts:
+        try:
+            return _format_temporal_value_for_sql(parser(raw), base_sql_type)
+        except ValueError:
+            continue
+    return None
+
+
+def _normalize_parsed_temporal_series_for_sql(parsed: pd.Series, base_sql_type: str) -> pd.Series:
+    return parsed.map(
+        lambda value: None
+        if pd.isna(value)
+        else _format_temporal_value_for_sql(value.to_pydatetime(), base_sql_type)
+    )
+
+
 def _cast_data_columns(incoming: pd.DataFrame, metadata: DimensionMetadata) -> pd.DataFrame:
+    integer_types = {"INT", "INTEGER", "BIGINT", "SMALLINT", "TINYINT"}
+    decimal_types = {"FLOAT", "REAL", "DECIMAL", "NUMERIC"}
+    boolean_types = {"BIT", "BOOLEAN", "BOOL"}
+    uuid_types = {"UNIQUEIDENTIFIER", "UUID"}
     df = incoming.copy()
     for name, spec in metadata.data_columns.items():
-        if spec.type and "DATETIME" in spec.type.upper():
+        if name not in df.columns:
+            continue
+        if not spec.type:
+            continue
+        sql_type = spec.type.upper()
+        base_sql_type = re.split(r"[\s(]", sql_type, maxsplit=1)[0]
+        if "DATETIME" in sql_type or base_sql_type in {"DATE", "TIME"}:
             fmt = spec.parse_format or DEFAULT_DATETIME_INPUT_FORMAT
             with warnings.catch_warnings():
                 warnings.filterwarnings(
@@ -1523,7 +1656,51 @@ def _cast_data_columns(incoming: pd.DataFrame, metadata: DimensionMetadata) -> p
                         errors="coerce",
                         dayfirst=spec.dayfirst,
                     )
+                invalid_mask = df[name].notna() & parsed.isna()
+                if invalid_mask.any():
+                    normalized = {}
+                    for index, value in df.loc[invalid_mask, name].items():
+                        normalized_value = _parse_temporal_value_for_sql(
+                            value,
+                            fmt=fmt,
+                            base_sql_type=base_sql_type,
+                        )
+                        if normalized_value is not None:
+                            normalized[index] = normalized_value
+                    unresolved_mask = invalid_mask.copy()
+                    for index in normalized:
+                        unresolved_mask.loc[index] = False
+                    if unresolved_mask.any():
+                        _raise_incompatible_type_error(df[name], unresolved_mask, name, spec.type)
+                    normalized_series = _normalize_parsed_temporal_series_for_sql(parsed, base_sql_type)
+                    for index, value in normalized.items():
+                        normalized_series.loc[index] = value
+                    df[name] = normalized_series.astype("object")
+                    continue
+                if base_sql_type == "TIME":
+                    df[name] = parsed.dt.time
+                else:
+                    df[name] = parsed
+            continue
+        if base_sql_type in decimal_types | integer_types:
+            parsed = pd.to_numeric(df[name], errors="coerce")
+            invalid_mask = df[name].notna() & parsed.isna()
+            if base_sql_type in integer_types:
+                non_null_mask = parsed.notna()
+                whole_number_mask = (parsed[non_null_mask] % 1).eq(0)
+                invalid_mask.loc[non_null_mask] = invalid_mask.loc[non_null_mask] | ~whole_number_mask
+            if invalid_mask.any():
+                _raise_incompatible_type_error(df[name], invalid_mask, name, spec.type)
+            if base_sql_type in integer_types:
+                df[name] = parsed.astype("Int64")
+            else:
                 df[name] = parsed
+            continue
+        if base_sql_type in boolean_types:
+            df[name] = _coerce_boolean_series(df[name], name, spec.type)
+            continue
+        if base_sql_type in uuid_types:
+            df[name] = _coerce_uuid_series(df[name], name, spec.type)
     return df
 
 
@@ -1602,7 +1779,15 @@ def _capture_execution_time() -> datetime:
 
 
 def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence[str]) -> None:
-    key_expr = ", ".join(_quote_identifier(engine, col) for col in natural_key_cols)
+    column_types = _get_table_column_types(engine, table)
+    group_expr = ", ".join(
+        _case_sensitive_group_expression(engine, col, column_types)
+        for col in natural_key_cols
+    )
+    key_expr = ", ".join(
+        f"{_case_sensitive_group_expression(engine, col, column_types)} AS {_quote_identifier(engine, col)}"
+        for col in natural_key_cols
+    )
     current_ind_column = _quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS["current_ind"])
     deleted_ind_column = _quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS["deleted_ind"])
     update_date_column = _quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS["update_date"])
@@ -1612,7 +1797,7 @@ def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence
         SELECT {key_expr}, COUNT(*) AS cnt
         FROM {table}
         WHERE {current_ind_column} = 1
-        GROUP BY {key_expr}
+        GROUP BY {group_expr}
         HAVING COUNT(*) > 1
         """
     )
@@ -1642,11 +1827,50 @@ def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence
     ]
 
     with engine.connect() as conn:
-        if conn.execute(current_dups_sql).first():
-            raise RuntimeError("Multiple current rows found for a natural key.")
+        duplicate_rows = conn.execute(current_dups_sql).mappings().fetchmany(10)
+        if duplicate_rows:
+            examples = [
+                {column: row[column] for column in natural_key_cols}
+                for row in duplicate_rows
+            ]
+            raise RuntimeError(
+                f"Multiple current rows found for natural key columns {list(natural_key_cols)}. "
+                f"Example duplicate keys: {examples}"
+            )
         for sql_stmt, message in validation_checks:
             if conn.execute(sql_stmt, {"effective_date_max": EFFECTIVE_DATE_MAX}).first():
                 raise RuntimeError(f"Post-SCD2 validation failed: {message}")
+
+
+def _get_table_column_types(engine: Engine, table_name: str) -> dict[str, str]:
+    inspector = inspect(engine)
+    schema, table = _split_table_name(table_name)
+    return {
+        column["name"].lower(): str(column["type"])
+        for column in inspector.get_columns(table, schema=schema)
+    }
+
+
+def _is_text_like_type(type_name: str | None) -> bool:
+    if not type_name:
+        return False
+    normalized = type_name.strip().upper()
+    return any(token in normalized for token in ("CHAR", "TEXT", "CLOB"))
+
+
+def _case_sensitive_group_expression(
+    engine: Engine,
+    column: str,
+    column_types: Mapping[str, str],
+) -> str:
+    quoted = _quote_identifier(engine, column)
+    if not _is_text_like_type(column_types.get(column.lower())):
+        return quoted
+    if engine.dialect.name == "sqlite":
+        return f"{quoted} COLLATE BINARY"
+    if engine.dialect.name == "mssql":
+        return f"{quoted} COLLATE Latin1_General_100_BIN2"
+    return quoted
 
 
 def _resolve_archive_destination(

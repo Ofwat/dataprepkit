@@ -274,8 +274,13 @@ def test_post_scd2_validation_detects_duplicates():
     _create_dimension_table(engine)
     _insert_row(engine, "dup", 1, current_ind=1)
     _insert_row(engine, "dup", 2, current_ind=1)
-    with pytest.raises(RuntimeError, match="Multiple current rows"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"Multiple current rows found for natural key columns \['natural_key'\]",
+    ) as exc_info:
         _post_scd2_validation(engine, "dimension", ["natural_key"])
+
+    assert "Example duplicate keys: [{'natural_key': 'dup'}]" in str(exc_info.value)
 
 
 def test_post_scd2_validation_detects_current_with_update_date():

@@ -105,6 +105,41 @@ def test_register_and_resolve_metadata_with_explicit_registry():
     assert "schema_test" not in metadata_loader.METADATA_REGISTRY
 
 
+def test_register_metadata_target_schema_does_not_override_dependency_schema():
+    registry = {}
+
+    metadata_loader.register_metadata(
+        "map_measure",
+        {
+            "target_table": "map_measure",
+            "target_schema": "test",
+            "natural_key_cols": ["Legacy_BonCode"],
+            "data_columns": {
+                "Measure_Cd": {"type": "TEXT"},
+                "Measure_Instance_Id": {"type": "BIGINT"},
+            },
+            "surrogate_key": "Map_Measure_Instance_Id",
+            "join_numeric_key": "Map_Measure_Id",
+            "filepath": "dummy",
+            "dependencies": [
+                {
+                    "table": "dim_measure",
+                    "schema": "prod",
+                    "on": [{"source": "Measure_Cd", "target": "Measure_Cd"}],
+                    "select": {"Measure_Instance_Id": "Measure_Instance_Id"},
+                }
+            ],
+        },
+        metadata_registry=registry,
+    )
+
+    entry = metadata_loader.get_metadata("map_measure", metadata_registry=registry)
+
+    assert entry.target_table == "test.map_measure"
+    assert entry.target_schema == "test"
+    assert entry.dependencies[0].schema_name == "prod"
+
+
 def test_expected_column_names_uses_configured_key_columns():
     metadata = DimensionMetadata(
         name="wrmp_scheme_classification",
@@ -644,6 +679,47 @@ def test_dependency_join_error_allows_matched_null_selected_values():
     ]
 
 
+def test_dependency_join_error_reports_missing_source_keys():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_service (
+                    Service_Type_Cd TEXT NOT NULL,
+                    Current_Ind INTEGER NOT NULL,
+                    Policy_Flag TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_service (Service_Type_Cd, Current_Ind, Policy_Flag)
+                VALUES ('S1', 1, 'flag-yes')
+                """
+            )
+        )
+
+    incoming = metadata_loader.pd.DataFrame({"Service_Type_Cd": ["S2"]})
+    dependency = DependencyJoin(
+        table="dim_service",
+        on=[{"source": "Service_Type_Cd", "target": "Service_Type_Cd"}],
+        select={"Policy_Flag": "Policy_Flag"},
+        on_missing="error",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"Missing dependency match in \[dim_service\] for source columns \['Service_Type_Cd'\]",
+    ) as exc_info:
+        metadata_loader._apply_dependency_joins(incoming, [dependency], engine)
+
+    assert "Required columns ['Policy_Flag'] were null for 1 row(s)." in str(exc_info.value)
+    assert "Example missing source keys: [{'Service_Type_Cd': 'S2'}]" in str(exc_info.value)
+
+
 def test_dependency_join_inner_keeps_matched_rows_with_null_selected_values():
     engine = create_engine("sqlite:///:memory:")
     with engine.begin() as conn:
@@ -722,7 +798,7 @@ def test_dependency_join_normalizes_numeric_like_source_keys_to_match_text_targe
     assert metadata_loader.pd.isna(joined.loc[1, "Interval_Instance_Id"])
 
 
-def test_dependency_join_filters_out_deleted_current_rows():
+def test_dependency_join_allows_deleted_current_rows():
     engine = create_engine("sqlite:///:memory:")
     with engine.begin() as conn:
         conn.execute(
@@ -757,7 +833,7 @@ def test_dependency_join_filters_out_deleted_current_rows():
     joined = metadata_loader._apply_dependency_joins(incoming, [dependency], engine)
 
     assert joined.to_dict("records") == [
-        {"Service_Type_Cd": "S1", "Policy_Flag": None}
+        {"Service_Type_Cd": "S1", "Policy_Flag": "deleted-current"}
     ]
 
 
@@ -787,8 +863,13 @@ def test_post_scd2_validation_rejects_multiple_current_rows_for_same_key():
             )
         )
 
-    with pytest.raises(RuntimeError, match="Multiple current rows found for a natural key"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"Multiple current rows found for natural key columns \['Service_Type_Cd'\]",
+    ) as exc_info:
         _post_scd2_validation(engine, "dim_service", ["Service_Type_Cd"])
+
+    assert "Example duplicate keys: [{'Service_Type_Cd': 'S1'}]" in str(exc_info.value)
 
 
 def test_post_scd2_validation_allows_deleted_current_row_with_closed_end_date():
@@ -818,6 +899,42 @@ def test_post_scd2_validation_allows_deleted_current_row_with_closed_end_date():
                     Effective_Date_End
                 )
                 VALUES ('S1', 1, 1, '2026-03-18T10:00:00.000', '2026-03-18T10:00:00.000')
+                """
+            )
+        )
+
+    _post_scd2_validation(engine, "dim_service", ["Service_Type_Cd"])
+
+
+def test_post_scd2_validation_treats_case_variants_as_distinct_keys():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_service (
+                    Service_Type_Cd TEXT COLLATE NOCASE NOT NULL,
+                    Current_Ind INTEGER NOT NULL,
+                    Deleted_Ind INTEGER NOT NULL,
+                    Update_Date TEXT,
+                    Effective_Date_End TEXT NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_service (
+                    Service_Type_Cd,
+                    Current_Ind,
+                    Deleted_Ind,
+                    Update_Date,
+                    Effective_Date_End
+                )
+                VALUES
+                    ('Ret', 1, 0, NULL, '9999-12-31T23:59:59.999'),
+                    ('RET', 1, 0, NULL, '9999-12-31T23:59:59.999')
                 """
             )
         )
@@ -1440,3 +1557,270 @@ def test_cast_data_columns_falls_back_to_additional_iso_datetime_strings():
     assert casted.loc[0, "ended_at"] == metadata_loader.pd.Timestamp("2014-04-01 00:00:00")
     assert metadata_loader.pd.isna(casted.loc[1, "ended_at"])
     metadata_loader.METADATA_REGISTRY.pop("iso_format_test_2", None)
+
+
+def test_cast_data_columns_accepts_out_of_bounds_datetime_strings():
+    metadata_loader.METADATA_REGISTRY.pop("out_of_bounds_datetime_test", None)
+    metadata_loader.register_metadata(
+        "out_of_bounds_datetime_test",
+        {
+            "target_table": "dimtable",
+            "natural_key_cols": ["id"],
+            "data_columns": {
+                "Interval_Start_Date": {
+                    "type": "DATETIME2(3)",
+                    "nullable": True,
+                }
+            },
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+    )
+
+    metadata = metadata_loader.get_metadata("out_of_bounds_datetime_test")
+    incoming = metadata_loader.pd.DataFrame(
+        {"Interval_Start_Date": ["31/12/2999 00:00", None]}
+    )
+
+    casted = metadata_loader._cast_data_columns(incoming, metadata)
+
+    assert casted.loc[0, "Interval_Start_Date"] == "2999-12-31T00:00:00.000"
+    assert casted.loc[1, "Interval_Start_Date"] is None
+    metadata_loader.METADATA_REGISTRY.pop("out_of_bounds_datetime_test", None)
+
+
+def test_cast_data_columns_accepts_out_of_bounds_datetime_strings_with_seconds():
+    metadata_loader.METADATA_REGISTRY.pop("out_of_bounds_datetime_seconds_test", None)
+    metadata_loader.register_metadata(
+        "out_of_bounds_datetime_seconds_test",
+        {
+            "target_table": "dimtable",
+            "natural_key_cols": ["id"],
+            "data_columns": {
+                "Interval_End_Date": {
+                    "type": "DATETIME2(3)",
+                    "nullable": True,
+                }
+            },
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+    )
+
+    metadata = metadata_loader.get_metadata("out_of_bounds_datetime_seconds_test")
+    incoming = metadata_loader.pd.DataFrame(
+        {"Interval_End_Date": ["31/12/2999 23:59:59", None]}
+    )
+
+    casted = metadata_loader._cast_data_columns(incoming, metadata)
+
+    assert casted.loc[0, "Interval_End_Date"] == "2999-12-31T23:59:59.000"
+    assert casted.loc[1, "Interval_End_Date"] is None
+    metadata_loader.METADATA_REGISTRY.pop("out_of_bounds_datetime_seconds_test", None)
+
+
+def test_cast_data_columns_raises_for_invalid_float_values():
+    metadata_loader.METADATA_REGISTRY.pop("float_cast_test", None)
+    metadata_loader.register_metadata(
+        "float_cast_test",
+        {
+            "target_table": "dimtable",
+            "natural_key_cols": ["id"],
+            "data_columns": {
+                "measure_value": {
+                    "type": "REAL",
+                    "nullable": True,
+                }
+            },
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+    )
+
+    metadata = metadata_loader.get_metadata("float_cast_test")
+    incoming = metadata_loader.pd.DataFrame({"measure_value": ["not-a-float", None]})
+
+    with pytest.raises(
+        ValueError,
+        match=r"Column 'measure_value' contains value\(s\) incompatible with target type REAL",
+    ):
+        metadata_loader._cast_data_columns(incoming, metadata)
+
+    metadata_loader.METADATA_REGISTRY.pop("float_cast_test", None)
+
+
+def test_cast_data_columns_raises_for_non_integral_integer_values():
+    metadata_loader.METADATA_REGISTRY.pop("integer_cast_test", None)
+    metadata_loader.register_metadata(
+        "integer_cast_test",
+        {
+            "target_table": "dimtable",
+            "natural_key_cols": ["id"],
+            "data_columns": {
+                "measure_id": {
+                    "type": "BIGINT",
+                    "nullable": True,
+                }
+            },
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+    )
+
+    metadata = metadata_loader.get_metadata("integer_cast_test")
+    incoming = metadata_loader.pd.DataFrame({"measure_id": [1.5, None]})
+
+    with pytest.raises(
+        ValueError,
+        match=r"Column 'measure_id' contains value\(s\) incompatible with target type BIGINT",
+    ):
+        metadata_loader._cast_data_columns(incoming, metadata)
+
+    metadata_loader.METADATA_REGISTRY.pop("integer_cast_test", None)
+
+
+def test_cast_data_columns_raises_for_invalid_boolean_values():
+    metadata_loader.METADATA_REGISTRY.pop("boolean_cast_test", None)
+    metadata_loader.register_metadata(
+        "boolean_cast_test",
+        {
+            "target_table": "dimtable",
+            "natural_key_cols": ["id"],
+            "data_columns": {
+                "is_active": {
+                    "type": "BIT",
+                    "nullable": True,
+                }
+            },
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+    )
+
+    metadata = metadata_loader.get_metadata("boolean_cast_test")
+    incoming = metadata_loader.pd.DataFrame({"is_active": ["maybe", None]})
+
+    with pytest.raises(
+        ValueError,
+        match=r"Column 'is_active' contains value\(s\) incompatible with target type BIT",
+    ):
+        metadata_loader._cast_data_columns(incoming, metadata)
+
+    metadata_loader.METADATA_REGISTRY.pop("boolean_cast_test", None)
+
+
+def test_cast_data_columns_accepts_pandas_boolean_values():
+    metadata_loader.METADATA_REGISTRY.pop("boolean_cast_valid_test", None)
+    metadata_loader.register_metadata(
+        "boolean_cast_valid_test",
+        {
+            "target_table": "dimtable",
+            "natural_key_cols": ["id"],
+            "data_columns": {
+                "is_active": {
+                    "type": "BIT",
+                    "nullable": True,
+                }
+            },
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+    )
+
+    metadata = metadata_loader.get_metadata("boolean_cast_valid_test")
+    incoming = metadata_loader.pd.DataFrame(
+        {
+            "is_active": metadata_loader.pd.Series(
+                [True, False, None],
+                dtype="boolean",
+            )
+        }
+    )
+
+    casted = metadata_loader._cast_data_columns(incoming, metadata)
+
+    assert casted["is_active"].tolist() == [True, False, metadata_loader.pd.NA]
+    metadata_loader.METADATA_REGISTRY.pop("boolean_cast_valid_test", None)
+
+
+def test_cast_data_columns_raises_for_invalid_uuid_values():
+    metadata_loader.METADATA_REGISTRY.pop("uuid_cast_test", None)
+    metadata_loader.register_metadata(
+        "uuid_cast_test",
+        {
+            "target_table": "dimtable",
+            "natural_key_cols": ["id"],
+            "data_columns": {
+                "entity_id": {
+                    "type": "UNIQUEIDENTIFIER",
+                    "nullable": True,
+                }
+            },
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+    )
+
+    metadata = metadata_loader.get_metadata("uuid_cast_test")
+    incoming = metadata_loader.pd.DataFrame({"entity_id": ["not-a-guid", None]})
+
+    with pytest.raises(
+        ValueError,
+        match=r"Column 'entity_id' contains value\(s\) incompatible with target type UNIQUEIDENTIFIER",
+    ):
+        metadata_loader._cast_data_columns(incoming, metadata)
+
+    metadata_loader.METADATA_REGISTRY.pop("uuid_cast_test", None)
+
+
+def test_run_dimension_raises_before_scd2_for_invalid_float_values(monkeypatch):
+    registry = {}
+    metadata_loader.register_metadata(
+        "invalid_float_dimension",
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": {
+                "measure_value": {
+                    "type": "REAL",
+                    "nullable": True,
+                }
+            },
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+        },
+        metadata_registry=registry,
+    )
+
+    engine = create_engine("sqlite:///:memory:")
+    apply_changes_called = False
+
+    def _unexpected_apply_changes(**_kwargs):
+        nonlocal apply_changes_called
+        apply_changes_called = True
+        return True
+
+    monkeypatch.setattr(metadata_loader, "apply_changes", _unexpected_apply_changes)
+
+    with pytest.raises(
+        ValueError,
+        match=r"Column 'measure_value' contains value\(s\) incompatible with target type REAL",
+    ):
+        metadata_loader.run_dimension(
+            engine,
+            "invalid_float_dimension",
+            metadata_registry=registry,
+            override_df=metadata_loader.pd.DataFrame(
+                [{"natural_key": "A1", "measure_value": "not-a-float"}]
+            ),
+        )
+
+    assert apply_changes_called is False
