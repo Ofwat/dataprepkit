@@ -1611,6 +1611,41 @@ def test_cast_data_columns_raises_for_invalid_boolean_values():
     metadata_loader.METADATA_REGISTRY.pop("boolean_cast_test", None)
 
 
+def test_cast_data_columns_accepts_pandas_boolean_values():
+    metadata_loader.METADATA_REGISTRY.pop("boolean_cast_valid_test", None)
+    metadata_loader.register_metadata(
+        "boolean_cast_valid_test",
+        {
+            "target_table": "dimtable",
+            "natural_key_cols": ["id"],
+            "data_columns": {
+                "is_active": {
+                    "type": "BIT",
+                    "nullable": True,
+                }
+            },
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+    )
+
+    metadata = metadata_loader.get_metadata("boolean_cast_valid_test")
+    incoming = metadata_loader.pd.DataFrame(
+        {
+            "is_active": metadata_loader.pd.Series(
+                [True, False, None],
+                dtype="boolean",
+            )
+        }
+    )
+
+    casted = metadata_loader._cast_data_columns(incoming, metadata)
+
+    assert casted["is_active"].tolist() == [True, False, metadata_loader.pd.NA]
+    metadata_loader.METADATA_REGISTRY.pop("boolean_cast_valid_test", None)
+
+
 def test_cast_data_columns_raises_for_invalid_uuid_values():
     metadata_loader.METADATA_REGISTRY.pop("uuid_cast_test", None)
     metadata_loader.register_metadata(

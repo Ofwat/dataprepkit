@@ -1545,6 +1545,11 @@ def _coerce_boolean_series(series: pd.Series, column: str, target_type: str) -> 
         if isinstance(value, bool):
             coerced.append(value)
             continue
+        if hasattr(value, "item"):
+            scalar_value = value.item()
+            if isinstance(scalar_value, bool):
+                coerced.append(scalar_value)
+                continue
         if isinstance(value, int) and value in {0, 1}:
             coerced.append(bool(value))
             continue
