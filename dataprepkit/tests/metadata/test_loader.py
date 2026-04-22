@@ -1835,3 +1835,128 @@ def test_dependency_and_stage_updates_accumulate_history():
         assert metric_types == {"metric1", "metric-A", "metric-B", "metric-C", "metric-D", "metric-E"}
     finally:
         METADATA_REGISTRY.pop(metadata_name, None)
+
+
+def test_map_measure_rerun_repoints_to_new_current_dim_measure_row():
+    engine = create_engine("sqlite:///:memory:")
+    measure_name = "st10_dim_measure"
+    map_name = "st10_map_measure"
+    METADATA_REGISTRY.pop(measure_name, None)
+    METADATA_REGISTRY.pop(map_name, None)
+    register_metadata(
+        measure_name,
+        {
+            "target_table": "dim_measure",
+            "natural_key_cols": ["Measure_Cd"],
+            "data_columns": {"Measure_Name": {"type": "TEXT", "nullable": True}},
+            "surrogate_key": "Measure_Instance_Id",
+            "join_numeric_key": "Measure_Id",
+            "filepath": "unused.csv",
+        },
+    )
+    register_metadata(
+        map_name,
+        {
+            "target_table": "map_measure",
+            "natural_key_cols": ["Legacy_BonCode"],
+            "data_columns": {
+                "Measure_Cd": {"type": "TEXT", "nullable": False},
+                "Measure_Instance_Id": {"type": "BIGINT", "nullable": True},
+            },
+            "surrogate_key": "Map_Measure_Instance_Id",
+            "join_numeric_key": "Map_Measure_Id",
+            "filepath": "unused.csv",
+            "dependencies": [
+                {
+                    "table": "dim_measure",
+                    "on": [{"source": "Measure_Cd", "target": "Measure_Cd"}],
+                    "select": {"Measure_Instance_Id": "Measure_Instance_Id"},
+                    "on_missing": "error",
+                }
+            ],
+        },
+    )
+
+    try:
+        run_dimension(
+            engine,
+            measure_name,
+            override_df=pd.DataFrame(
+                [{"Measure_Cd": "BN2710", "Measure_Name": "Number of sewer connections"}]
+            ),
+        )
+        run_dimension(
+            engine,
+            map_name,
+            override_df=pd.DataFrame(
+                [{"Legacy_BonCode": "BN2710_PR24", "Measure_Cd": "BN2710"}]
+            ),
+        )
+
+        with engine.connect() as conn:
+            initial_measure_id = conn.execute(
+                text(
+                    """
+                    SELECT Measure_Instance_Id
+                    FROM dim_measure
+                    WHERE Measure_Cd = 'BN2710' AND Current_Ind = 1
+                    """
+                )
+            ).scalar_one()
+            initial_map_id = conn.execute(
+                text(
+                    """
+                    SELECT Measure_Instance_Id
+                    FROM map_measure
+                    WHERE Legacy_BonCode = 'BN2710_PR24' AND Current_Ind = 1
+                    """
+                )
+            ).scalar_one()
+
+        run_dimension(
+            engine,
+            measure_name,
+            override_df=pd.DataFrame(
+                [{"Measure_Cd": "BN2710", "Measure_Name": "Number of sewer connections updated"}]
+            ),
+        )
+        run_dimension(
+            engine,
+            map_name,
+            override_df=pd.DataFrame(
+                [{"Legacy_BonCode": "BN2710_PR24", "Measure_Cd": "BN2710"}]
+            ),
+        )
+
+        with engine.connect() as conn:
+            final_measure_id = conn.execute(
+                text(
+                    """
+                    SELECT Measure_Instance_Id
+                    FROM dim_measure
+                    WHERE Measure_Cd = 'BN2710' AND Current_Ind = 1
+                    """
+                )
+            ).scalar_one()
+            map_rows = list(
+                conn.execute(
+                    text(
+                        """
+                        SELECT Measure_Instance_Id, Current_Ind
+                        FROM map_measure
+                        WHERE Legacy_BonCode = 'BN2710_PR24'
+                        ORDER BY Map_Measure_Instance_Id
+                        """
+                    )
+                )
+            )
+
+        assert initial_map_id == initial_measure_id
+        assert final_measure_id != initial_measure_id
+        assert map_rows == [
+            (initial_measure_id, 0),
+            (final_measure_id, 1),
+        ]
+    finally:
+        METADATA_REGISTRY.pop(measure_name, None)
+        METADATA_REGISTRY.pop(map_name, None)

@@ -754,6 +754,7 @@ def run_dimension(
             incoming.head(),
         )
     incoming = _apply_dependency_joins(incoming, metadata.dependencies, engine)
+    incoming = _cast_data_columns(incoming, metadata)
     logger.debug(
         "After dependency joins for %s: %d rows, columns=%s",
         metadata_name,
@@ -925,6 +926,7 @@ def run_dimension_copy_into(
     if metadata.processing_class:
         incoming = metadata.processing_class(incoming)
     incoming = _apply_dependency_joins(incoming, metadata.dependencies, engine)
+    incoming = _cast_data_columns(incoming, metadata)
 
     _, target_table = _split_table_name(metadata.target_table)
     batch_id = metadata.archive_batch_id or metadata.name
@@ -1588,6 +1590,8 @@ def _cast_data_columns(incoming: pd.DataFrame, metadata: DimensionMetadata) -> p
     uuid_types = {"UNIQUEIDENTIFIER", "UUID"}
     df = incoming.copy()
     for name, spec in metadata.data_columns.items():
+        if name not in df.columns:
+            continue
         if not spec.type:
             continue
         sql_type = spec.type.upper()
