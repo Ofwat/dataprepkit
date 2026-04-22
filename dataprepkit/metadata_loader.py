@@ -1609,8 +1609,11 @@ def _parse_temporal_value_for_sql(
     if not isinstance(value, str):
         return None
     raw = value.strip()
+    parse_formats = [fmt]
+    if "%S" not in fmt and "%M" in fmt:
+        parse_formats.append(f"{fmt}:%S")
     parse_attempts = [
-        lambda text: datetime.strptime(text, fmt),
+        *[lambda text, candidate_fmt=candidate_fmt: datetime.strptime(text, candidate_fmt) for candidate_fmt in parse_formats],
         lambda text: datetime.fromisoformat(text.replace("Z", "+00:00")),
     ]
     for parser in parse_attempts:
