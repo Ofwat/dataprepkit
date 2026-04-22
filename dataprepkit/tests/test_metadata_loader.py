@@ -863,8 +863,13 @@ def test_post_scd2_validation_rejects_multiple_current_rows_for_same_key():
             )
         )
 
-    with pytest.raises(RuntimeError, match="Multiple current rows found for a natural key"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"Multiple current rows found for natural key columns \['Service_Type_Cd'\]",
+    ) as exc_info:
         _post_scd2_validation(engine, "dim_service", ["Service_Type_Cd"])
+
+    assert "Example duplicate keys: [{'Service_Type_Cd': 'S1'}]" in str(exc_info.value)
 
 
 def test_post_scd2_validation_allows_deleted_current_row_with_closed_end_date():

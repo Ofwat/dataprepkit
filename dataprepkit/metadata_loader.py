@@ -1766,8 +1766,16 @@ def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence
     ]
 
     with engine.connect() as conn:
-        if conn.execute(current_dups_sql).first():
-            raise RuntimeError("Multiple current rows found for a natural key.")
+        duplicate_rows = conn.execute(current_dups_sql).mappings().fetchmany(10)
+        if duplicate_rows:
+            examples = [
+                {column: row[column] for column in natural_key_cols}
+                for row in duplicate_rows
+            ]
+            raise RuntimeError(
+                f"Multiple current rows found for natural key columns {list(natural_key_cols)}. "
+                f"Example duplicate keys: {examples}"
+            )
         for sql_stmt, message in validation_checks:
             if conn.execute(sql_stmt, {"effective_date_max": EFFECTIVE_DATE_MAX}).first():
                 raise RuntimeError(f"Post-SCD2 validation failed: {message}")
