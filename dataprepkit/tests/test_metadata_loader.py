@@ -105,6 +105,41 @@ def test_register_and_resolve_metadata_with_explicit_registry():
     assert "schema_test" not in metadata_loader.METADATA_REGISTRY
 
 
+def test_register_metadata_target_schema_does_not_override_dependency_schema():
+    registry = {}
+
+    metadata_loader.register_metadata(
+        "map_measure",
+        {
+            "target_table": "map_measure",
+            "target_schema": "test",
+            "natural_key_cols": ["Legacy_BonCode"],
+            "data_columns": {
+                "Measure_Cd": {"type": "TEXT"},
+                "Measure_Instance_Id": {"type": "BIGINT"},
+            },
+            "surrogate_key": "Map_Measure_Instance_Id",
+            "join_numeric_key": "Map_Measure_Id",
+            "filepath": "dummy",
+            "dependencies": [
+                {
+                    "table": "dim_measure",
+                    "schema": "prod",
+                    "on": [{"source": "Measure_Cd", "target": "Measure_Cd"}],
+                    "select": {"Measure_Instance_Id": "Measure_Instance_Id"},
+                }
+            ],
+        },
+        metadata_registry=registry,
+    )
+
+    entry = metadata_loader.get_metadata("map_measure", metadata_registry=registry)
+
+    assert entry.target_table == "test.map_measure"
+    assert entry.target_schema == "test"
+    assert entry.dependencies[0].schema_name == "prod"
+
+
 def test_expected_column_names_uses_configured_key_columns():
     metadata = DimensionMetadata(
         name="wrmp_scheme_classification",
@@ -644,41 +679,6 @@ def test_dependency_join_error_allows_matched_null_selected_values():
     ]
 
 
-def test_dependency_join_inner_keeps_matched_rows_with_null_selected_values():
-    engine = create_engine("sqlite:///:memory:")
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                """
-                CREATE TABLE dim_service (
-                    Service_Type_Cd TEXT NOT NULL,
-                    Current_Ind INTEGER NOT NULL,
-                    Policy_Flag TEXT
-                )
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                INSERT INTO dim_service (Service_Type_Cd, Current_Ind, Policy_Flag)
-                VALUES ('S1', 1, NULL)
-                """
-            )
-        )
-
-    incoming = metadata_loader.pd.DataFrame({"Service_Type_Cd": ["S1", "S2"]})
-    dependency = DependencyJoin(
-        table="dim_service",
-        how="inner",
-        on=[{"source": "Service_Type_Cd", "target": "Service_Type_Cd"}],
-        select={"Policy_Flag": "Policy_Flag"},
-        on_missing="null",
-    )
-
-    joined = metadata_loader._apply_dependency_joins(incoming, [dependency], engine)
-
-    assert joined.to_dict("records") == [
 def test_dependency_join_error_reports_missing_source_keys():
     engine = create_engine("sqlite:///:memory:")
     with engine.begin() as conn:
@@ -720,6 +720,41 @@ def test_dependency_join_error_reports_missing_source_keys():
     assert "Example missing source keys: [{'Service_Type_Cd': 'S2'}]" in str(exc_info.value)
 
 
+def test_dependency_join_inner_keeps_matched_rows_with_null_selected_values():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_service (
+                    Service_Type_Cd TEXT NOT NULL,
+                    Current_Ind INTEGER NOT NULL,
+                    Policy_Flag TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_service (Service_Type_Cd, Current_Ind, Policy_Flag)
+                VALUES ('S1', 1, NULL)
+                """
+            )
+        )
+
+    incoming = metadata_loader.pd.DataFrame({"Service_Type_Cd": ["S1", "S2"]})
+    dependency = DependencyJoin(
+        table="dim_service",
+        how="inner",
+        on=[{"source": "Service_Type_Cd", "target": "Service_Type_Cd"}],
+        select={"Policy_Flag": "Policy_Flag"},
+        on_missing="null",
+    )
+
+    joined = metadata_loader._apply_dependency_joins(incoming, [dependency], engine)
+
+    assert joined.to_dict("records") == [
         {"Service_Type_Cd": "S1", "Policy_Flag": None}
     ]
 
