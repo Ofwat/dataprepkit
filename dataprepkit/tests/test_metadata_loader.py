@@ -906,6 +906,42 @@ def test_post_scd2_validation_allows_deleted_current_row_with_closed_end_date():
     _post_scd2_validation(engine, "dim_service", ["Service_Type_Cd"])
 
 
+def test_post_scd2_validation_treats_case_variants_as_distinct_keys():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_service (
+                    Service_Type_Cd TEXT COLLATE NOCASE NOT NULL,
+                    Current_Ind INTEGER NOT NULL,
+                    Deleted_Ind INTEGER NOT NULL,
+                    Update_Date TEXT,
+                    Effective_Date_End TEXT NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_service (
+                    Service_Type_Cd,
+                    Current_Ind,
+                    Deleted_Ind,
+                    Update_Date,
+                    Effective_Date_End
+                )
+                VALUES
+                    ('Ret', 1, 0, NULL, '9999-12-31T23:59:59.999'),
+                    ('RET', 1, 0, NULL, '9999-12-31T23:59:59.999')
+                """
+            )
+        )
+
+    _post_scd2_validation(engine, "dim_service", ["Service_Type_Cd"])
+
+
 def test_evolve_table_columns_backfills_effective_dates_for_existing_rows():
     engine = create_engine("sqlite:///:memory:")
     with engine.begin() as conn:

@@ -1726,7 +1726,15 @@ def _capture_execution_time() -> datetime:
 
 
 def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence[str]) -> None:
-    key_expr = ", ".join(_quote_identifier(engine, col) for col in natural_key_cols)
+    column_types = _get_table_column_types(engine, table)
+    group_expr = ", ".join(
+        _case_sensitive_group_expression(engine, col, column_types)
+        for col in natural_key_cols
+    )
+    key_expr = ", ".join(
+        f"{_case_sensitive_group_expression(engine, col, column_types)} AS {_quote_identifier(engine, col)}"
+        for col in natural_key_cols
+    )
     current_ind_column = _quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS["current_ind"])
     deleted_ind_column = _quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS["deleted_ind"])
     update_date_column = _quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS["update_date"])
@@ -1736,7 +1744,7 @@ def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence
         SELECT {key_expr}, COUNT(*) AS cnt
         FROM {table}
         WHERE {current_ind_column} = 1
-        GROUP BY {key_expr}
+        GROUP BY {group_expr}
         HAVING COUNT(*) > 1
         """
     )
@@ -1779,6 +1787,37 @@ def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence
         for sql_stmt, message in validation_checks:
             if conn.execute(sql_stmt, {"effective_date_max": EFFECTIVE_DATE_MAX}).first():
                 raise RuntimeError(f"Post-SCD2 validation failed: {message}")
+
+
+def _get_table_column_types(engine: Engine, table_name: str) -> dict[str, str]:
+    inspector = inspect(engine)
+    schema, table = _split_table_name(table_name)
+    return {
+        column["name"].lower(): str(column["type"])
+        for column in inspector.get_columns(table, schema=schema)
+    }
+
+
+def _is_text_like_type(type_name: str | None) -> bool:
+    if not type_name:
+        return False
+    normalized = type_name.strip().upper()
+    return any(token in normalized for token in ("CHAR", "TEXT", "CLOB"))
+
+
+def _case_sensitive_group_expression(
+    engine: Engine,
+    column: str,
+    column_types: Mapping[str, str],
+) -> str:
+    quoted = _quote_identifier(engine, column)
+    if not _is_text_like_type(column_types.get(column.lower())):
+        return quoted
+    if engine.dialect.name == "sqlite":
+        return f"{quoted} COLLATE BINARY"
+    if engine.dialect.name == "mssql":
+        return f"{quoted} COLLATE Latin1_General_100_BIN2"
+    return quoted
 
 
 def _resolve_archive_destination(
