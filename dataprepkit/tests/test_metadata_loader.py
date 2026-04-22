@@ -798,7 +798,7 @@ def test_dependency_join_normalizes_numeric_like_source_keys_to_match_text_targe
     assert metadata_loader.pd.isna(joined.loc[1, "Interval_Instance_Id"])
 
 
-def test_dependency_join_filters_out_deleted_current_rows():
+def test_dependency_join_allows_deleted_current_rows():
     engine = create_engine("sqlite:///:memory:")
     with engine.begin() as conn:
         conn.execute(
@@ -833,7 +833,7 @@ def test_dependency_join_filters_out_deleted_current_rows():
     joined = metadata_loader._apply_dependency_joins(incoming, [dependency], engine)
 
     assert joined.to_dict("records") == [
-        {"Service_Type_Cd": "S1", "Policy_Flag": None}
+        {"Service_Type_Cd": "S1", "Policy_Flag": "deleted-current"}
     ]
 
 

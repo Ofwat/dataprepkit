@@ -1422,15 +1422,6 @@ def _apply_dependency_joins(
         where_clauses = []
         if dep.filter_target_current:
             where_clauses.append("[Current_Ind] = 1")
-            try:
-                inspector = inspect(engine)
-                dep_columns = {
-                    column["name"] for column in inspector.get_columns(table, schema=schema)
-                }
-            except Exception:
-                dep_columns = set()
-            if "Deleted_Ind" in dep_columns:
-                where_clauses.append("[Deleted_Ind] = 0")
         for expressions in dep.where.values():
             where_clauses.extend(expressions)
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
