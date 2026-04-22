@@ -322,6 +322,84 @@ def test_update_preserves_delete_flag_off():
     assert pd.notna(previous.iloc[0]["Update_Date"])
 
 
+def test_case_insensitive_business_key_match_marks_original_row_deleted():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS dimension"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dimension (
+                    surrogate_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                    join_key TEXT COLLATE NOCASE NOT NULL,
+                    join_numeric_key INTEGER NOT NULL,
+                    data_column TEXT,
+                    row_hash TEXT NOT NULL,
+                    Insert_Date TEXT NOT NULL,
+                    Update_Date TEXT,
+                    Effective_Date_Start TEXT NOT NULL,
+                    Effective_Date_End TEXT NOT NULL,
+                    Current_Ind INTEGER NOT NULL,
+                    Deleted_Ind INTEGER NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dimension (
+                    join_key,
+                    join_numeric_key,
+                    data_column,
+                    row_hash,
+                    Insert_Date,
+                    Update_Date,
+                    Effective_Date_Start,
+                    Effective_Date_End,
+                    Current_Ind,
+                    Deleted_Ind
+                )
+                VALUES (
+                    :join_key,
+                    :join_numeric_key,
+                    :data_column,
+                    :row_hash,
+                    :Insert_Date,
+                    :Update_Date,
+                    :Effective_Date_Start,
+                    :Effective_Date_End,
+                    :Current_Ind,
+                    :Deleted_Ind
+                )
+                """
+            ),
+            _build_initial_row("Bio", 2, "before"),
+        )
+
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=pd.DataFrame([{"join_key": "BIO", "data_column": "after"}]),
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    final = _read_table(engine)
+    deleted = final.loc[(final.join_key == "Bio") & (final.Deleted_Ind == 1)]
+    current = final.loc[(final.join_key == "BIO") & (final.Current_Ind == 1)]
+
+    assert len(deleted) == 1
+    assert deleted.iloc[0]["Current_Ind"] == 1
+    assert pd.notna(deleted.iloc[0]["Update_Date"])
+    assert len(current) == 1
+    assert current.iloc[0]["Deleted_Ind"] == 0
+    assert current.iloc[0]["join_numeric_key"] == 3
+
+
 def test_join_numeric_reused_for_existing_key():
     engine = create_engine("sqlite:///:memory:")
     initial_rows = [
