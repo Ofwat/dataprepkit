@@ -679,6 +679,47 @@ def test_dependency_join_inner_keeps_matched_rows_with_null_selected_values():
     joined = metadata_loader._apply_dependency_joins(incoming, [dependency], engine)
 
     assert joined.to_dict("records") == [
+def test_dependency_join_error_reports_missing_source_keys():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_service (
+                    Service_Type_Cd TEXT NOT NULL,
+                    Current_Ind INTEGER NOT NULL,
+                    Policy_Flag TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_service (Service_Type_Cd, Current_Ind, Policy_Flag)
+                VALUES ('S1', 1, 'flag-yes')
+                """
+            )
+        )
+
+    incoming = metadata_loader.pd.DataFrame({"Service_Type_Cd": ["S2"]})
+    dependency = DependencyJoin(
+        table="dim_service",
+        on=[{"source": "Service_Type_Cd", "target": "Service_Type_Cd"}],
+        select={"Policy_Flag": "Policy_Flag"},
+        on_missing="error",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"Missing dependency match in \[dim_service\] for source columns \['Service_Type_Cd'\]",
+    ) as exc_info:
+        metadata_loader._apply_dependency_joins(incoming, [dependency], engine)
+
+    assert "Required columns ['Policy_Flag'] were null for 1 row(s)." in str(exc_info.value)
+    assert "Example missing source keys: [{'Service_Type_Cd': 'S2'}]" in str(exc_info.value)
+
+
         {"Service_Type_Cd": "S1", "Policy_Flag": None}
     ]
 
@@ -1440,3 +1481,173 @@ def test_cast_data_columns_falls_back_to_additional_iso_datetime_strings():
     assert casted.loc[0, "ended_at"] == metadata_loader.pd.Timestamp("2014-04-01 00:00:00")
     assert metadata_loader.pd.isna(casted.loc[1, "ended_at"])
     metadata_loader.METADATA_REGISTRY.pop("iso_format_test_2", None)
+
+
+def test_cast_data_columns_raises_for_invalid_float_values():
+    metadata_loader.METADATA_REGISTRY.pop("float_cast_test", None)
+    metadata_loader.register_metadata(
+        "float_cast_test",
+        {
+            "target_table": "dimtable",
+            "natural_key_cols": ["id"],
+            "data_columns": {
+                "measure_value": {
+                    "type": "REAL",
+                    "nullable": True,
+                }
+            },
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+    )
+
+    metadata = metadata_loader.get_metadata("float_cast_test")
+    incoming = metadata_loader.pd.DataFrame({"measure_value": ["not-a-float", None]})
+
+    with pytest.raises(
+        ValueError,
+        match=r"Column 'measure_value' contains value\(s\) incompatible with target type REAL",
+    ):
+        metadata_loader._cast_data_columns(incoming, metadata)
+
+    metadata_loader.METADATA_REGISTRY.pop("float_cast_test", None)
+
+
+def test_cast_data_columns_raises_for_non_integral_integer_values():
+    metadata_loader.METADATA_REGISTRY.pop("integer_cast_test", None)
+    metadata_loader.register_metadata(
+        "integer_cast_test",
+        {
+            "target_table": "dimtable",
+            "natural_key_cols": ["id"],
+            "data_columns": {
+                "measure_id": {
+                    "type": "BIGINT",
+                    "nullable": True,
+                }
+            },
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+    )
+
+    metadata = metadata_loader.get_metadata("integer_cast_test")
+    incoming = metadata_loader.pd.DataFrame({"measure_id": [1.5, None]})
+
+    with pytest.raises(
+        ValueError,
+        match=r"Column 'measure_id' contains value\(s\) incompatible with target type BIGINT",
+    ):
+        metadata_loader._cast_data_columns(incoming, metadata)
+
+    metadata_loader.METADATA_REGISTRY.pop("integer_cast_test", None)
+
+
+def test_cast_data_columns_raises_for_invalid_boolean_values():
+    metadata_loader.METADATA_REGISTRY.pop("boolean_cast_test", None)
+    metadata_loader.register_metadata(
+        "boolean_cast_test",
+        {
+            "target_table": "dimtable",
+            "natural_key_cols": ["id"],
+            "data_columns": {
+                "is_active": {
+                    "type": "BIT",
+                    "nullable": True,
+                }
+            },
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+    )
+
+    metadata = metadata_loader.get_metadata("boolean_cast_test")
+    incoming = metadata_loader.pd.DataFrame({"is_active": ["maybe", None]})
+
+    with pytest.raises(
+        ValueError,
+        match=r"Column 'is_active' contains value\(s\) incompatible with target type BIT",
+    ):
+        metadata_loader._cast_data_columns(incoming, metadata)
+
+    metadata_loader.METADATA_REGISTRY.pop("boolean_cast_test", None)
+
+
+def test_cast_data_columns_raises_for_invalid_uuid_values():
+    metadata_loader.METADATA_REGISTRY.pop("uuid_cast_test", None)
+    metadata_loader.register_metadata(
+        "uuid_cast_test",
+        {
+            "target_table": "dimtable",
+            "natural_key_cols": ["id"],
+            "data_columns": {
+                "entity_id": {
+                    "type": "UNIQUEIDENTIFIER",
+                    "nullable": True,
+                }
+            },
+            "surrogate_key": "surrogate",
+            "join_numeric_key": "join_key",
+            "filepath": "dummy",
+        },
+    )
+
+    metadata = metadata_loader.get_metadata("uuid_cast_test")
+    incoming = metadata_loader.pd.DataFrame({"entity_id": ["not-a-guid", None]})
+
+    with pytest.raises(
+        ValueError,
+        match=r"Column 'entity_id' contains value\(s\) incompatible with target type UNIQUEIDENTIFIER",
+    ):
+        metadata_loader._cast_data_columns(incoming, metadata)
+
+    metadata_loader.METADATA_REGISTRY.pop("uuid_cast_test", None)
+
+
+def test_run_dimension_raises_before_scd2_for_invalid_float_values(monkeypatch):
+    registry = {}
+    metadata_loader.register_metadata(
+        "invalid_float_dimension",
+        {
+            "target_table": "dimension",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": {
+                "measure_value": {
+                    "type": "REAL",
+                    "nullable": True,
+                }
+            },
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+        },
+        metadata_registry=registry,
+    )
+
+    engine = create_engine("sqlite:///:memory:")
+    apply_changes_called = False
+
+    def _unexpected_apply_changes(**_kwargs):
+        nonlocal apply_changes_called
+        apply_changes_called = True
+        return True
+
+    monkeypatch.setattr(metadata_loader, "apply_changes", _unexpected_apply_changes)
+
+    with pytest.raises(
+        ValueError,
+        match=r"Column 'measure_value' contains value\(s\) incompatible with target type REAL",
+    ):
+        metadata_loader.run_dimension(
+            engine,
+            "invalid_float_dimension",
+            metadata_registry=registry,
+            override_df=metadata_loader.pd.DataFrame(
+                [{"natural_key": "A1", "measure_value": "not-a-float"}]
+            ),
+        )
+
+    assert apply_changes_called is False

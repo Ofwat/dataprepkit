@@ -1482,7 +1482,13 @@ def _apply_dependency_joins(
                 missing_rows.head(5).to_dict(orient="records"),
             )
             if dep.on_missing == "error":
-                raise RuntimeError(f"Dependency join {dep.table} produced missing values.")
+                raise RuntimeError(
+                    _format_missing_dependency_join_error(
+                        dep=dep,
+                        table_ref=table_ref,
+                        missing_rows=missing_rows,
+                    )
+                )
 
     return incoming
 
@@ -1500,10 +1506,93 @@ def _normalize_dependency_join_key(value: Any) -> str | None:
     return str(value)
 
 
+def _format_missing_dependency_join_error(
+    *,
+    dep: DependencyJoin,
+    table_ref: str,
+    missing_rows: pd.DataFrame,
+) -> str:
+    example_missing_keys = missing_rows[[relation["source"] for relation in dep.on]]
+    examples = example_missing_keys.drop_duplicates().head(10).to_dict(orient="records")
+    return (
+        f"Missing dependency match in {table_ref} for source columns "
+        f"{[relation['source'] for relation in dep.on]} -> target columns "
+        f"{[relation['target'] for relation in dep.on]}. "
+        f"Required columns {list(dep.select.values())} were null for {len(missing_rows)} row(s). "
+        f"Example missing source keys: {examples}"
+    )
+
+
+def _raise_incompatible_type_error(series: pd.Series, invalid_mask: pd.Series, column: str, target_type: str) -> None:
+    invalid_values = series.loc[invalid_mask].drop_duplicates().head(3).tolist()
+    raise ValueError(
+        f"Column '{column}' contains value(s) incompatible with target type {target_type}: "
+        f"{invalid_values}. SCD2 load aborted."
+    )
+
+
+def _coerce_boolean_series(series: pd.Series, column: str, target_type: str) -> pd.Series:
+    true_values = {"1", "true", "t", "yes", "y"}
+    false_values = {"0", "false", "f", "no", "n"}
+    coerced = []
+    invalid_mask = pd.Series(False, index=series.index, dtype="boolean")
+    for index, value in series.items():
+        if pd.isna(value):
+            coerced.append(pd.NA)
+            continue
+        if isinstance(value, bool):
+            coerced.append(value)
+            continue
+        if isinstance(value, int) and value in {0, 1}:
+            coerced.append(bool(value))
+            continue
+        if isinstance(value, float) and value in {0.0, 1.0}:
+            coerced.append(bool(int(value)))
+            continue
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in true_values:
+                coerced.append(True)
+                continue
+            if normalized in false_values:
+                coerced.append(False)
+                continue
+        coerced.append(pd.NA)
+        invalid_mask.loc[index] = True
+    if invalid_mask.any():
+        _raise_incompatible_type_error(series, invalid_mask, column, target_type)
+    return pd.Series(coerced, index=series.index, dtype="boolean")
+
+
+def _coerce_uuid_series(series: pd.Series, column: str, target_type: str) -> pd.Series:
+    coerced = []
+    invalid_mask = pd.Series(False, index=series.index, dtype="boolean")
+    for index, value in series.items():
+        if pd.isna(value):
+            coerced.append(None)
+            continue
+        try:
+            coerced.append(str(uuid.UUID(str(value).strip())))
+        except (AttributeError, TypeError, ValueError):
+            coerced.append(None)
+            invalid_mask.loc[index] = True
+    if invalid_mask.any():
+        _raise_incompatible_type_error(series, invalid_mask, column, target_type)
+    return pd.Series(coerced, index=series.index, dtype="object")
+
+
 def _cast_data_columns(incoming: pd.DataFrame, metadata: DimensionMetadata) -> pd.DataFrame:
+    integer_types = {"INT", "INTEGER", "BIGINT", "SMALLINT", "TINYINT"}
+    decimal_types = {"FLOAT", "REAL", "DECIMAL", "NUMERIC"}
+    boolean_types = {"BIT", "BOOLEAN", "BOOL"}
+    uuid_types = {"UNIQUEIDENTIFIER", "UUID"}
     df = incoming.copy()
     for name, spec in metadata.data_columns.items():
-        if spec.type and "DATETIME" in spec.type.upper():
+        if not spec.type:
+            continue
+        sql_type = spec.type.upper()
+        base_sql_type = re.split(r"[\s(]", sql_type, maxsplit=1)[0]
+        if "DATETIME" in sql_type or base_sql_type in {"DATE", "TIME"}:
             fmt = spec.parse_format or DEFAULT_DATETIME_INPUT_FORMAT
             with warnings.catch_warnings():
                 warnings.filterwarnings(
@@ -1523,7 +1612,33 @@ def _cast_data_columns(incoming: pd.DataFrame, metadata: DimensionMetadata) -> p
                         errors="coerce",
                         dayfirst=spec.dayfirst,
                     )
+                invalid_mask = df[name].notna() & parsed.isna()
+                if invalid_mask.any():
+                    _raise_incompatible_type_error(df[name], invalid_mask, name, spec.type)
+                if base_sql_type == "TIME":
+                    df[name] = parsed.dt.time
+                else:
+                    df[name] = parsed
+            continue
+        if base_sql_type in decimal_types | integer_types:
+            parsed = pd.to_numeric(df[name], errors="coerce")
+            invalid_mask = df[name].notna() & parsed.isna()
+            if base_sql_type in integer_types:
+                non_null_mask = parsed.notna()
+                whole_number_mask = (parsed[non_null_mask] % 1).eq(0)
+                invalid_mask.loc[non_null_mask] = invalid_mask.loc[non_null_mask] | ~whole_number_mask
+            if invalid_mask.any():
+                _raise_incompatible_type_error(df[name], invalid_mask, name, spec.type)
+            if base_sql_type in integer_types:
+                df[name] = parsed.astype("Int64")
+            else:
                 df[name] = parsed
+            continue
+        if base_sql_type in boolean_types:
+            df[name] = _coerce_boolean_series(df[name], name, spec.type)
+            continue
+        if base_sql_type in uuid_types:
+            df[name] = _coerce_uuid_series(df[name], name, spec.type)
     return df
 
 
