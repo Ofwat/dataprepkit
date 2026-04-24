@@ -378,9 +378,45 @@ def _get_existing_columns(engine: Engine, table_name: str | TableRef) -> set[str
     return {col["name"] for col in inspector.get_columns(table, schema)}
 
 
+def _get_column_types(engine: Engine, table_name: str | TableRef) -> dict[str, str]:
+    inspector = inspect(engine)
+    table_ref = _parse_table_ref(table_name)
+    schema = table_ref.schema
+    table = table_ref.table
+    if not inspector.has_table(table, schema):
+        return {}
+    return {
+        col["name"].lower(): str(col["type"])
+        for col in inspector.get_columns(table, schema)
+    }
+
+
 def _has_current_indicator(engine: Engine, table_name: str | TableRef) -> bool:
     columns = _get_existing_columns(engine, table_name)
     return any(col.lower() == "current_ind" for col in columns)
+
+
+def _is_text_like_type(type_name: str | None) -> bool:
+    if not type_name:
+        return False
+    normalized = type_name.strip().upper()
+    return any(token in normalized for token in ("CHAR", "TEXT", "CLOB"))
+
+
+def _case_sensitive_match_expression(
+    engine: Engine,
+    alias: str,
+    column: str,
+    column_types: Mapping[str, str],
+) -> str:
+    quoted = f"{alias}.{_quote_identifier(engine, column)}"
+    if not _is_text_like_type(column_types.get(column.lower())):
+        return quoted
+    if engine.dialect.name == "sqlite":
+        return f"{quoted} COLLATE BINARY"
+    if engine.dialect.name == "mssql":
+        return f"{quoted} COLLATE Latin1_General_100_BIN2"
+    return quoted
 
 
 def _ensure_fact_table(
@@ -771,8 +807,11 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
         raise RuntimeError("No base columns defined for temp table copy")
 
     def _apply_dimension(base_table: str, spec: DimensionJoinSpec, *, conn=None) -> None:
+        base_column_types = _get_column_types(engine, base_table)
+        dim_column_types = _get_column_types(engine, spec.dim_table)
         predicate = " AND ".join(
-            f"{base_table}.{s} = d.{dcol}"
+            f"{_case_sensitive_match_expression(engine, base_table, s, base_column_types)} = "
+            f"{_case_sensitive_match_expression(engine, 'd', dcol, dim_column_types)}"
             for s, dcol in zip(spec.staging_columns, spec.dim_columns)
         )
         dim_table_columns = _get_existing_columns(engine, spec.dim_table)
@@ -856,8 +895,11 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
                 )
 
     def _apply_extra_column(base_table: str, spec: ExtraColumnSpec, *, conn=None) -> None:
+        base_column_types = _get_column_types(engine, base_table)
+        dim_column_types = _get_column_types(engine, spec.dim_table)
         predicate = " AND ".join(
-            f"{base_table}.{s} = d.{dcol}"
+            f"{_case_sensitive_match_expression(engine, base_table, s, base_column_types)} = "
+            f"{_case_sensitive_match_expression(engine, 'd', dcol, dim_column_types)}"
             for s, dcol in zip(spec.staging_columns, spec.dim_columns)
         )
         current_clause = ""

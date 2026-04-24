@@ -1097,6 +1097,89 @@ def test_ingest_fact_respects_current_ind_filter_with_mixed_case_column():
     assert result == 101
 
 
+def test_ingest_fact_matches_dimension_keys_case_sensitively():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE staging (
+                    batch_id TEXT,
+                    Business_Unit_Cd TEXT COLLATE NOCASE,
+                    measure_value REAL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE fact (
+                    batch_id TEXT,
+                    Business_Unit_Instance_Id INTEGER,
+                    measure_value REAL,
+                    Insert_Date TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_business_unit (
+                    Business_Unit_Cd TEXT COLLATE NOCASE,
+                    Business_Unit_Instance_Id INTEGER,
+                    current_ind INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO staging (batch_id, Business_Unit_Cd, measure_value) VALUES ('B13','Bio', 1.0)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO dim_business_unit (Business_Unit_Cd, Business_Unit_Instance_Id, current_ind) VALUES ('BIO', 900, 1)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO dim_business_unit (Business_Unit_Cd, Business_Unit_Instance_Id, current_ind) VALUES ('Bio', 901, 1)"
+            )
+        )
+
+    config = FactConfig(
+        batch=FactBatchMetadata(fact_table="fact", validations={}),
+        dimensions=[
+            DimensionJoinSpec(
+                dim_table="dim_business_unit",
+                staging_columns=["Business_Unit_Cd"],
+                dim_columns=["Business_Unit_Cd"],
+                filter_target_current=True,
+                add_columns={"Business_Unit_Instance_Id": "Business_Unit_Instance_Id"},
+                require_not_null=["Business_Unit_Instance_Id"],
+            )
+        ],
+        fact_columns=["Business_Unit_Instance_Id", "measure_value"],
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={
+            "batch_id": None,
+            "Business_Unit_Cd": None,
+            "measure_value": None,
+        },
+    )
+
+    ingest_fact(engine, config, batch_id="B13")
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("SELECT Business_Unit_Instance_Id FROM fact WHERE batch_id='B13'")
+        ).scalar_one()
+    assert result == 901
+
+
 def test_ingest_fact_supports_explicit_table_refs(fact_engine):
     with fact_engine.begin() as conn:
         conn.execute(
