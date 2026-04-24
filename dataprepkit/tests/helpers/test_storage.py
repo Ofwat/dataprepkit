@@ -9,6 +9,7 @@ from dataprepkit.storage import (
     ArchivePath,
     WarehouseEndpoint,
     archive_dataframe_path,
+    get_current_env,
     get_warehouse_endpoint,
 )
 
@@ -131,3 +132,38 @@ def test_get_warehouse_endpoint_raises_when_warehouse_missing(monkeypatch):
         match="Warehouse 'Warehouse A' not found in workspace 'Workspace A'",
     ):
         get_warehouse_endpoint("Workspace A", "Warehouse A")
+
+
+def test_get_current_env_returns_matching_prefix(monkeypatch):
+    class _Fabric:
+        @staticmethod
+        def resolve_workspace_name():
+            return "preprod-sales"
+
+    monkeypatch.setattr(storage, "fabric", _Fabric)
+
+    assert get_current_env() == "preprod"
+
+
+def test_get_current_env_raises_for_missing_workspace_name(monkeypatch):
+    class _Fabric:
+        @staticmethod
+        def resolve_workspace_name():
+            return ""
+
+    monkeypatch.setattr(storage, "fabric", _Fabric)
+
+    with pytest.raises(ValueError, match="workspace_name is None or empty"):
+        get_current_env()
+
+
+def test_get_current_env_raises_when_no_environment_matches(monkeypatch):
+    class _Fabric:
+        @staticmethod
+        def resolve_workspace_name():
+            return "sandbox-sales"
+
+    monkeypatch.setattr(storage, "fabric", _Fabric)
+
+    with pytest.raises(RuntimeError, match="Expected one of: dev, prod, preprod"):
+        get_current_env()

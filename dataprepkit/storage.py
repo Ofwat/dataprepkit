@@ -157,6 +157,27 @@ class WarehouseEndpoint:
     resource_id: str | None
 
 
+def get_current_env(envs: list[str] | None = None) -> str:
+    if envs is None:
+        envs = ["dev", "prod", "preprod"]
+
+    if fabric is None:
+        raise ImportError("sempy.fabric is required to resolve the current environment.")
+
+    workspace_name = fabric.resolve_workspace_name()
+    if not workspace_name:
+        raise ValueError("Resolved workspace_name is None or empty.")
+
+    for env in envs:
+        if workspace_name.startswith(env):
+            return env
+
+    raise RuntimeError(
+        f"No matching environment found for workspace '{workspace_name}'. "
+        f"Expected one of: {', '.join(envs)}"
+    )
+
+
 def get_warehouse_endpoint(
     workspace_name: str,
     warehouse_display_name: str,
