@@ -13,8 +13,24 @@ from sqlalchemy import Engine, inspect, text
 from sqlalchemy.dialects.mssql import DATETIME2
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.sql.elements import quoted_name
+from dataprepkit.fact_loader import (
+    HashMismatchError as _HashMismatchError,
+    MissingStageFileError as _MissingStageFileError,
+    StageFileSpec as _StageFileSpec,
+    assert_columns_have_single_distinct_row as _assert_single_distinct_row,
+    assert_columns_not_null as _assert_columns_not_null,
+    verify_stage_file_hashes as _verify_stage_file_hashes,
+)
 from dataprepkit.helpers.schema import ensure_schema_exists
 from dataprepkit.storage import archive_dataframe_path
+
+
+HashMismatchError = _HashMismatchError
+MissingStageFileError = _MissingStageFileError
+StageFileSpec = _StageFileSpec
+assert_columns_have_single_distinct_row = _assert_single_distinct_row
+assert_columns_not_null = _assert_columns_not_null
+verify_stage_file_hashes = _verify_stage_file_hashes
 
 
 def _quote_mssql_identifier(identifier: str) -> str:
