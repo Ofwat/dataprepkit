@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 import pandas as pd
@@ -36,6 +36,20 @@ def _build_column_definition(name: str, column_type: str, *, nullable: bool) -> 
     return f"{name} {column_type}{null_sql}"
 
 
+def _case_insensitive_column_lookup(columns: Iterable[str]) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for column in columns:
+        key = column.casefold()
+        existing = lookup.get(key)
+        if existing is not None and existing != column:
+            raise RuntimeError(
+                "Column names must be unique ignoring case; "
+                f"found both '{existing}' and '{column}'."
+            )
+        lookup[key] = column
+    return lookup
+
+
 def _default_string_type(engine: Engine) -> str:
     if engine.dialect.name == "mssql":
         return "NVARCHAR(4000)"
@@ -68,7 +82,7 @@ def _get_column_type(
 ) -> str:
     inspector = inspect(engine)
     for candidate in inspector.get_columns(table, schema=schema):
-        if candidate["name"] == column:
+        if candidate["name"].casefold() == column.casefold():
             return _compile_column_type(engine, candidate["type"])
     location = f"{schema}.{table}" if schema else table
     raise ValueError(f"Column '{column}' not found in '{location}'.")
@@ -806,9 +820,12 @@ def load_fact_from_maps(
                 schema=fact_schema,
                 table=fact_table,
             )
+            existing_fact_column_lookup = _case_insensitive_column_lookup(
+                existing_fact_columns
+            )
             added_fact_columns: set[str] = set()
             for column_name, column_type, _ in column_definitions:
-                if column_name in existing_fact_columns:
+                if column_name.casefold() in existing_fact_column_lookup:
                     continue
                 _alter_table_add_column(
                     conn,

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 import re
-from typing import Any, Callable, Dict, Mapping, Sequence, Literal
+from typing import Any, Callable, Dict, Iterable, Mapping, Sequence, Literal
 
 import logging
 import pandas as pd
@@ -147,6 +147,24 @@ def _safe_identifier_token(identifier: str) -> str:
     normalized = (_normalize_bracket_identifier(identifier) or "").strip('"')
     token = re.sub(r"[^0-9A-Za-z_]+", "_", normalized).strip("_")
     return token or "col"
+
+
+def _case_insensitive_column_lookup(columns: Iterable[str]) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for column in columns:
+        key = column.casefold()
+        existing = lookup.get(key)
+        if existing is not None and existing != column:
+            raise RuntimeError(
+                "Column names must be unique ignoring case; "
+                f"found both '{existing}' and '{column}'."
+            )
+        lookup[key] = column
+    return lookup
+
+
+def _has_column_case_insensitive(columns: Iterable[str], column: str) -> bool:
+    return column.casefold() in _case_insensitive_column_lookup(columns)
 
 
 def _normalize_column_specs(
@@ -780,8 +798,14 @@ def run_dimension(
         available_columns,
         metadata.data_columns,
     )
-    has_batch_id = DEFAULT_SYSTEM_COLUMNS["batch_id"] in available_columns
-    has_archive_filename = DEFAULT_SYSTEM_COLUMNS["archive_filename"] in available_columns
+    has_batch_id = _has_column_case_insensitive(
+        available_columns,
+        DEFAULT_SYSTEM_COLUMNS["batch_id"],
+    )
+    has_archive_filename = _has_column_case_insensitive(
+        available_columns,
+        DEFAULT_SYSTEM_COLUMNS["archive_filename"],
+    )
     system_columns = DEFAULT_SYSTEM_COLUMNS
     if missing:
         logger.warning(
@@ -990,9 +1014,17 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
     schema_name, table_name = _split_table_name(metadata.target_table)
     ensure_schema_exists(engine, schema_name)
     if inspector.has_table(table_name, schema=schema_name):
-        current_columns = {col["name"] for col in inspector.get_columns(table_name, schema=schema_name)}
+        current_columns = {
+            col["name"]
+            for col in inspector.get_columns(table_name, schema=schema_name)
+        }
+        current_column_lookup = _case_insensitive_column_lookup(current_columns)
         expected_columns = _expected_column_names(metadata)
-        missing = expected_columns - current_columns
+        missing = {
+            column
+            for column in expected_columns
+            if column.casefold() not in current_column_lookup
+        }
         if missing:
             if metadata.schema_handling.mode == "evolve":
                 logger.info(
@@ -1402,8 +1434,9 @@ def _join_numeric_clause(engine: Engine, name: str) -> str:
 def _resolve_safe_data_columns(
     requested: Sequence[str], available: set[str]
 ) -> tuple[list[str], list[str]]:
-    safe = [col for col in requested if col in available]
-    missing = [col for col in requested if col not in available]
+    available_lookup = _case_insensitive_column_lookup(available)
+    safe = [col for col in requested if col.casefold() in available_lookup]
+    missing = [col for col in requested if col.casefold() not in available_lookup]
     if not safe and missing:
         raise RuntimeError("No safe data columns available to write.")
     return safe, missing

@@ -1385,6 +1385,96 @@ def test_load_fact_from_maps_append_mode_is_idempotent_for_same_batch_id():
     ]
 
 
+def test_load_fact_from_maps_append_mode_matches_metadata_columns_case_insensitively():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("ATTACH DATABASE ':memory:' AS facts"))
+        conn.execute(text("CREATE TABLE staging_fact (Measure_Cd TEXT, Value REAL)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_measure (
+                    Measure_Cd TEXT,
+                    Measure_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE facts.fact_result (
+                    Measure_Instance_Id INTEGER,
+                    Value REAL,
+                    batch_id TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_measure (Measure_Cd, Measure_Instance_Id)
+                VALUES ('MEASURE1', 200)
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO staging_fact (Measure_Cd, Value)
+                VALUES ('MEASURE1', 1.5)
+                """
+            )
+        )
+
+    load_fact_from_maps(
+        engine=engine,
+        lookup_map={
+            "Measure_Cd": {
+                "source": {
+                    "schema": "main",
+                    "table": "dim_measure",
+                    "lookup_column": "Measure_Cd",
+                    "value_column": "Measure_Instance_Id",
+                },
+                "target": {"column": "Measure_Instance_Id"},
+            }
+        },
+        data_columns=[{"column": "Value"}],
+        additional_columns=[],
+        metadata_columns=[
+            {
+                "target": {"column": "Batch_Id"},
+                "source": {"kind": "parameter", "name": "batch_id"},
+            }
+        ],
+        runtime_values={"batch_id": "BATCH1"},
+        staging_table="staging_fact",
+        staging_schema="main",
+        fact_table="fact_result",
+        fact_schema="facts",
+        mode="append",
+    )
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT batch_id, Measure_Instance_Id, Value
+                FROM facts.fact_result
+                """
+            )
+        ).mappings().all()
+        columns = conn.execute(text("PRAGMA facts.table_info(fact_result)")).fetchall()
+
+    assert rows == [
+        {"batch_id": "BATCH1", "Measure_Instance_Id": 200, "Value": 1.5}
+    ]
+    assert [column[1] for column in columns].count("batch_id") == 1
+
+
 def test_load_fact_from_maps_append_mode_skips_duplicate_rows_across_batches():
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
 

@@ -1005,6 +1005,71 @@ def test_post_scd2_validation_treats_case_variants_as_distinct_keys():
     _post_scd2_validation(engine, "dim_service", ["Service_Type_Cd"])
 
 
+def test_run_dimension_matches_system_columns_case_insensitively():
+    engine = create_engine("sqlite:///:memory:")
+    metadata_name = "case_system_dimension"
+    metadata_loader.METADATA_REGISTRY.pop(metadata_name, None)
+    metadata_loader.register_metadata(
+        metadata_name,
+        {
+            "target_table": "dim_case_system",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": {"data_column": {"type": "TEXT"}},
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+            "archive_batch_id": "batch1",
+        },
+    )
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_case_system (
+                    surrogate_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                    natural_key TEXT NOT NULL,
+                    join_numeric_key INTEGER NOT NULL,
+                    data_column TEXT,
+                    row_hash TEXT NOT NULL,
+                    Insert_Date TEXT NOT NULL,
+                    Update_Date TEXT,
+                    Effective_Date_Start TEXT NOT NULL,
+                    Effective_Date_End TEXT NOT NULL,
+                    Current_Ind INTEGER NOT NULL,
+                    Deleted_Ind INTEGER NOT NULL,
+                    batch_id TEXT NOT NULL DEFAULT '',
+                    archive_filename TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
+        )
+
+    try:
+        metadata_loader.run_dimension(
+            engine,
+            metadata_name,
+            override_df=metadata_loader.pd.DataFrame(
+                [{"natural_key": "A1", "data_column": "Alpha"}]
+            ),
+        )
+
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT batch_id, archive_filename
+                    FROM dim_case_system
+                    WHERE Current_Ind = 1
+                    """
+                )
+            ).mappings().one()
+
+        assert row["batch_id"] == "batch1"
+        assert row["archive_filename"] == "unused.csv"
+    finally:
+        metadata_loader.METADATA_REGISTRY.pop(metadata_name, None)
+
+
 def test_evolve_table_columns_backfills_effective_dates_for_existing_rows():
     engine = create_engine("sqlite:///:memory:")
     with engine.begin() as conn:
