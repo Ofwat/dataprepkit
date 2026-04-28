@@ -284,6 +284,12 @@ def apply_changes(
             if raw_staging_table:
                 conn.execute(text(f"DROP TABLE IF EXISTS {raw_staging_table}"))
             conn.execute(text(f"DROP TABLE IF EXISTS {staging_table}"))
+        _validate_current_join_numeric_unique(
+            conn,
+            target_table,
+            join_numeric_key_col,
+            cols["current_ind"],
+        )
         _validate_row_growth(conn, target_table, pre_total)
         return changes_applied
 
@@ -523,7 +529,7 @@ def _normalize_natural_key_value(value):
     if isinstance(value, bytes):
         value = value.decode("utf-8", errors="replace")
     if isinstance(value, str):
-        return value.strip()
+        return value
     if isinstance(value, float):
         if math.isnan(value):
             return None
@@ -599,11 +605,32 @@ def _build_natural_key_match_condition(
     columns: Sequence[str],
     column_types: Mapping[str, str],
 ) -> str:
-    return " AND ".join(
-        f"{_case_sensitive_match_expression(engine, left_alias, col, column_types)} = "
-        f"{_case_sensitive_match_expression(engine, right_alias, col, column_types)}"
-        for col in columns
-    )
+    conditions = []
+    for col in columns:
+        left_expr = _case_sensitive_match_expression(
+            engine,
+            left_alias,
+            col,
+            column_types,
+        )
+        right_expr = _case_sensitive_match_expression(
+            engine,
+            right_alias,
+            col,
+            column_types,
+        )
+        condition = f"{left_expr} = {right_expr}"
+        if engine.dialect.name == "mssql" and _is_text_like_type(
+            column_types.get(col.lower())
+        ):
+            quoted = _quote_identifier(engine, col)
+            condition = (
+                f"({condition} AND "
+                f"DATALENGTH({left_alias}.{quoted}) = "
+                f"DATALENGTH({right_alias}.{quoted}))"
+            )
+        conditions.append(condition)
+    return " AND ".join(conditions)
 
 
 def _apply_snapshot_to_target(
@@ -757,6 +784,38 @@ def _apply_snapshot_to_target(
         (delete_result.rowcount or 0) > 0
         or (update_result.rowcount or 0) > 0
         or (insert_result.rowcount or 0) > 0
+    )
+
+
+def _validate_current_join_numeric_unique(
+    conn,
+    target_table: str,
+    join_numeric_key_col: str,
+    current_ind_col: str,
+) -> None:
+    quote = lambda value: _quote_identifier(conn.engine, value)
+    join_numeric_column = quote(join_numeric_key_col)
+    current_ind_column = quote(current_ind_col)
+    duplicate_sql = text(
+        f"""
+        SELECT {join_numeric_column}, COUNT(*) AS cnt
+        FROM {target_table}
+        WHERE {current_ind_column} = 1
+        GROUP BY {join_numeric_column}
+        HAVING COUNT(*) > 1
+        """
+    )
+    duplicate_rows = conn.execute(duplicate_sql).fetchall()[:10]
+    if not duplicate_rows:
+        return
+
+    examples = [
+        {join_numeric_key_col: row[0]}
+        for row in duplicate_rows
+    ]
+    raise SCD2ValidationError(
+        f"Multiple current rows found for join numeric key column "
+        f"'{join_numeric_key_col}'. Example duplicate values: {examples}"
     )
 
 

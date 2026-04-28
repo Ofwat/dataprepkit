@@ -889,7 +889,12 @@ def run_dimension(
                     missing_cols,
                 )
     logger.info("SCD2 classification counts: not available")
-    _post_scd2_validation(engine, metadata.target_table, metadata.natural_key_cols)
+    _post_scd2_validation(
+        engine,
+        metadata.target_table,
+        metadata.natural_key_cols,
+        metadata.join_numeric_key,
+    )
     return incoming
 
 
@@ -1778,7 +1783,12 @@ def _capture_execution_time() -> datetime:
     return now.replace(microsecond=milliseconds)
 
 
-def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence[str]) -> None:
+def _post_scd2_validation(
+    engine: Engine,
+    table: str,
+    natural_key_cols: Sequence[str],
+    join_numeric_key_col: str | None = None,
+) -> None:
     column_types = _get_table_column_types(engine, table)
     group_expr = ", ".join(
         _case_sensitive_group_expression(engine, col, column_types)
@@ -1801,6 +1811,18 @@ def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence
         HAVING COUNT(*) > 1
         """
     )
+    current_join_numeric_dups_sql = None
+    if join_numeric_key_col is not None:
+        join_numeric_column = _quote_identifier(engine, join_numeric_key_col)
+        current_join_numeric_dups_sql = text(
+            f"""
+            SELECT {join_numeric_column}, COUNT(*) AS cnt
+            FROM {table}
+            WHERE {current_ind_column} = 1
+            GROUP BY {join_numeric_column}
+            HAVING COUNT(*) > 1
+            """
+        )
 
     dialect = engine.dialect.name
     top = "TOP 1 " if dialect == "mssql" else ""
@@ -1837,6 +1859,19 @@ def _post_scd2_validation(engine: Engine, table: str, natural_key_cols: Sequence
                 f"Multiple current rows found for natural key columns {list(natural_key_cols)}. "
                 f"Example duplicate keys: {examples}"
             )
+        if current_join_numeric_dups_sql is not None:
+            duplicate_join_rows = (
+                conn.execute(current_join_numeric_dups_sql).fetchall()[:10]
+            )
+            if duplicate_join_rows:
+                examples = [
+                    {join_numeric_key_col: row[0]}
+                    for row in duplicate_join_rows
+                ]
+                raise RuntimeError(
+                    f"Multiple current rows found for join numeric key column "
+                    f"'{join_numeric_key_col}'. Example duplicate values: {examples}"
+                )
         for sql_stmt, message in validation_checks:
             if conn.execute(sql_stmt, {"effective_date_max": EFFECTIVE_DATE_MAX}).first():
                 raise RuntimeError(f"Post-SCD2 validation failed: {message}")

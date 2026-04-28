@@ -872,6 +872,69 @@ def test_post_scd2_validation_rejects_multiple_current_rows_for_same_key():
     assert "Example duplicate keys: [{'Service_Type_Cd': 'S1'}]" in str(exc_info.value)
 
 
+def test_post_scd2_validation_rejects_multiple_current_rows_for_same_join_numeric():
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_service (
+                    Service_Type_Cd TEXT NOT NULL,
+                    join_numeric_key INTEGER NOT NULL,
+                    Current_Ind INTEGER NOT NULL,
+                    Deleted_Ind INTEGER NOT NULL,
+                    Update_Date TEXT,
+                    Effective_Date_End TEXT NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_service (
+                    Service_Type_Cd,
+                    join_numeric_key,
+                    Current_Ind,
+                    Deleted_Ind,
+                    Update_Date,
+                    Effective_Date_End
+                )
+                VALUES
+                    (
+                        'S1',
+                        1,
+                        1,
+                        1,
+                        '2026-03-18T10:00:00.000',
+                        '2026-03-18T10:00:00.000'
+                    ),
+                    (
+                        'S2',
+                        1,
+                        1,
+                        0,
+                        NULL,
+                        '9999-12-31T23:59:59.999'
+                    )
+                """
+            )
+        )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Multiple current rows found for join numeric key column 'join_numeric_key'",
+    ) as exc_info:
+        _post_scd2_validation(
+            engine,
+            "dim_service",
+            ["Service_Type_Cd"],
+            "join_numeric_key",
+        )
+
+    assert "Example duplicate values: [{'join_numeric_key': 1}]" in str(exc_info.value)
+
+
 def test_post_scd2_validation_allows_deleted_current_row_with_closed_end_date():
     engine = create_engine("sqlite:///:memory:")
     with engine.begin() as conn:

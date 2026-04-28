@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 
 from dataprepkit.scd2 import SCD2ValidationError
 from dataprepkit.scd2 import (
+    _build_natural_key_match_condition,
     EFFECTIVE_DATE_MAX,
     EFFECTIVE_DATE_MIN,
     _create_staging_table,
@@ -400,6 +401,26 @@ def test_case_insensitive_business_key_match_marks_original_row_deleted():
     assert current.iloc[0]["join_numeric_key"] == 3
 
 
+def test_mssql_text_key_match_requires_binary_value_and_length_match():
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    condition = _build_natural_key_match_condition(
+        _FakeEngine(),
+        "t",
+        "s",
+        ["Site_Cd"],
+        {"site_cd": "NVARCHAR(4000)"},
+    )
+
+    assert "t.[Site_Cd] COLLATE Latin1_General_100_BIN2" in condition
+    assert "s.[Site_Cd] COLLATE Latin1_General_100_BIN2" in condition
+    assert "DATALENGTH(t.[Site_Cd]) = DATALENGTH(s.[Site_Cd])" in condition
+
+
 def test_join_numeric_reused_for_existing_key():
     engine = create_engine("sqlite:///:memory:")
     initial_rows = [
@@ -595,6 +616,79 @@ def test_reinsert_after_delete_reuses_existing_join_numeric():
     final = _read_table(engine)
     current = final.loc[(final.join_key == "b1") & (final.Current_Ind == 1)].iloc[0]
     assert current["join_numeric_key"] == 2
+
+
+def test_trailing_space_business_key_gets_distinct_current_join_numeric():
+    engine = create_engine("sqlite:///:memory:")
+    _bootstrap_table(engine, [])
+
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=pd.DataFrame([{"join_key": "ABC", "data_column": "alpha"}]),
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+        execution_time="2026-04-28T10:00:00.000+00:00",
+    )
+
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=pd.DataFrame([{"join_key": "ABC ", "data_column": "alpha"}]),
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+        execution_time="2026-04-28T11:00:00.000+00:00",
+    )
+
+    final = _read_table(engine)
+    current = final.loc[final.Current_Ind == 1]
+    abc = current.loc[current.join_key == "ABC"].iloc[0]
+    abc_space = current.loc[current.join_key == "ABC "].iloc[0]
+
+    assert abc["Deleted_Ind"] == 1
+    assert abc_space["Deleted_Ind"] == 0
+    assert abc["join_numeric_key"] != abc_space["join_numeric_key"]
+    assert current["join_numeric_key"].is_unique
+
+
+def test_apply_changes_rejects_duplicate_current_join_numeric_keys():
+    engine = create_engine("sqlite:///:memory:")
+    deleted = _build_initial_row(
+        "a1",
+        1,
+        "a",
+        deleted_ind=1,
+        update_ts=datetime(2026, 4, 28, 11, 0, 0),
+    )
+    deleted["Effective_Date_End"] = deleted["Update_Date"]
+    _bootstrap_table(
+        engine,
+        [
+            deleted,
+            _build_initial_row("b1", 1, "b"),
+        ],
+    )
+
+    with pytest.raises(
+        SCD2ValidationError,
+        match="Multiple current rows found for join numeric key column 'join_numeric_key'",
+    ):
+        apply_changes(
+            engine=engine,
+            target_table="dimension",
+            incoming=pd.DataFrame([{"join_key": "b1", "data_column": "b"}]),
+            natural_key_cols=["join_key"],
+            data_cols=["data_column"],
+            join_numeric_key_col="join_numeric_key",
+            surrogate_key_col="surrogate_key",
+            system_columns=SYSTEM_COLUMNS,
+        )
 
 
 def test_delete_then_reinsert_keeps_exactly_one_current_row_per_business_key():
@@ -1099,6 +1193,7 @@ def test_apply_changes_openrowset_normalizes_existing_join_numeric_for_reuse(mon
     monkeypatch.setattr("dataprepkit.scd2._get_column_types", lambda *_: {"site_id": "BIGINT"})
     monkeypatch.setattr("dataprepkit.scd2._count_rows", lambda *_: 0)
     monkeypatch.setattr("dataprepkit.scd2._validate_row_growth", lambda *_: None)
+    monkeypatch.setattr("dataprepkit.scd2._validate_current_join_numeric_unique", lambda *_: None)
     monkeypatch.setattr("dataprepkit.scd2._create_staging_table", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("dataprepkit.scd2._insert_snapshot_rows_from_raw", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("dataprepkit.scd2._apply_snapshot_to_target", lambda *_args, **_kwargs: False)
@@ -1182,6 +1277,7 @@ def test_apply_changes_openrowset_reuses_join_numeric_when_natural_key_is_numeri
     )
     monkeypatch.setattr("dataprepkit.scd2._count_rows", lambda *_: 0)
     monkeypatch.setattr("dataprepkit.scd2._validate_row_growth", lambda *_: None)
+    monkeypatch.setattr("dataprepkit.scd2._validate_current_join_numeric_unique", lambda *_: None)
     monkeypatch.setattr("dataprepkit.scd2._create_staging_table", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("dataprepkit.scd2._insert_snapshot_rows_from_raw", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("dataprepkit.scd2._apply_snapshot_to_target", lambda *_args, **_kwargs: False)
@@ -1265,6 +1361,7 @@ def test_apply_changes_openrowset_normalizes_integer_like_data_columns(monkeypat
     )
     monkeypatch.setattr("dataprepkit.scd2._count_rows", lambda *_: 0)
     monkeypatch.setattr("dataprepkit.scd2._validate_row_growth", lambda *_: None)
+    monkeypatch.setattr("dataprepkit.scd2._validate_current_join_numeric_unique", lambda *_: None)
     monkeypatch.setattr("dataprepkit.scd2._create_staging_table", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("dataprepkit.scd2._insert_snapshot_rows_from_raw", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("dataprepkit.scd2._apply_snapshot_to_target", lambda *_args, **_kwargs: False)
