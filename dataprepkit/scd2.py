@@ -295,6 +295,8 @@ def apply_changes(
                             preserve_mssql_types=True,
                         )
                     },
+                    source_df=snapshot_df,
+                    natural_key_cols=natural_key_cols,
                 )
             else:
                 _insert_snapshot_rows(
@@ -548,7 +550,13 @@ def _insert_snapshot_rows(
         if records:
             conn.execute(insert_sql, records)
     except IntegrityError as exc:
-        raise SCD2ValidationError("Incoming data contains duplicate natural keys.") from exc
+        raise SCD2ValidationError(
+            _duplicate_natural_keys_error_message(
+                incoming_df,
+                natural_key_cols,
+                database_detected=True,
+            )
+        ) from exc
 
 
 def _insert_snapshot_rows_from_raw(
@@ -559,6 +567,8 @@ def _insert_snapshot_rows_from_raw(
     columns: Sequence[str],
     column_types: Mapping[str, str],
     column_type_overrides: Mapping[str, str] | None = None,
+    source_df: pd.DataFrame | None = None,
+    natural_key_cols: Sequence[str] | None = None,
 ) -> None:
     rendered_columns = ", ".join(_quote_identifier(conn.engine, col) for col in columns)
     select_parts = []
@@ -586,7 +596,13 @@ def _insert_snapshot_rows_from_raw(
     try:
         conn.execute(insert_sql)
     except IntegrityError as exc:
-        raise SCD2ValidationError("Incoming data contains duplicate natural keys.") from exc
+        raise SCD2ValidationError(
+            _duplicate_natural_keys_error_message(
+                source_df,
+                natural_key_cols or [],
+                database_detected=True,
+            )
+        ) from exc
 
 
 def _normalize_existing_join_numeric_for_raw(value) -> str | None:
@@ -627,12 +643,82 @@ def _raise_if_duplicate_natural_keys(
     *,
     sample_limit: int = 10,
 ) -> None:
-    if not natural_key_cols or incoming_df.empty:
+    examples = _find_duplicate_natural_keys(
+        incoming_df,
+        natural_key_cols,
+        sample_limit=sample_limit,
+    )
+    if not examples:
         return
+    raise SCD2ValidationError(
+        _duplicate_natural_keys_error_message(
+            incoming_df,
+            natural_key_cols,
+            examples=examples,
+        )
+    )
+
+
+def _duplicate_natural_keys_error_message(
+    incoming_df: pd.DataFrame | None,
+    natural_key_cols: Sequence[str],
+    *,
+    database_detected: bool = False,
+    examples: list[dict[str, object]] | None = None,
+) -> str:
+    base = "Incoming data contains duplicate natural keys."
+    if not natural_key_cols:
+        return base
+    examples = examples or _find_duplicate_natural_keys(
+        incoming_df,
+        natural_key_cols,
+        trim_strings=database_detected,
+        casefold_strings=database_detected,
+    )
+    detail = (
+        " after staging normalization/collation"
+        if database_detected
+        else ""
+    )
+    if examples:
+        return (
+            f"Incoming data contains duplicate natural keys{detail}. "
+            f"Natural key columns: {list(natural_key_cols)}. "
+            f"Example duplicate keys: {examples}"
+        )
+    if database_detected:
+        return (
+            f"Incoming data contains duplicate natural keys{detail}. "
+            f"Natural key columns: {list(natural_key_cols)}. "
+            "Unable to isolate duplicate keys from the in-memory snapshot."
+        )
+    return (
+        f"{base} Natural key columns: {list(natural_key_cols)}."
+    )
+
+
+def _find_duplicate_natural_keys(
+    incoming_df: pd.DataFrame | None,
+    natural_key_cols: Sequence[str],
+    *,
+    sample_limit: int = 10,
+    trim_strings: bool = False,
+    casefold_strings: bool = False,
+) -> list[dict[str, object]]:
+    if incoming_df is None or not natural_key_cols or incoming_df.empty:
+        return []
+    if not natural_key_cols or incoming_df.empty:
+        return []
     key_frame = incoming_df.loc[:, list(natural_key_cols)].copy()
     normalized = key_frame.copy()
     for column in natural_key_cols:
-        normalized[column] = normalized[column].map(_normalize_natural_key_value)
+        normalized[column] = normalized[column].map(
+            lambda value: _normalize_duplicate_key_value(
+                value,
+                trim_strings=trim_strings,
+                casefold_strings=casefold_strings,
+            )
+        )
     duplicate_counts = (
         normalized.groupby(list(natural_key_cols), dropna=False)
         .size()
@@ -640,17 +726,28 @@ def _raise_if_duplicate_natural_keys(
     )
     duplicates = duplicate_counts.loc[duplicate_counts["count"] > 1]
     if duplicates.empty:
-        return
+        return []
     examples = []
     for _, row in duplicates.head(sample_limit).iterrows():
         example = {col: row[col] for col in natural_key_cols}
         example["count"] = int(row["count"])
         examples.append(example)
-    raise SCD2ValidationError(
-        "Incoming data contains duplicate natural keys. "
-        f"Natural key columns: {list(natural_key_cols)}. "
-        f"Example duplicate keys: {examples}"
-    )
+    return examples
+
+
+def _normalize_duplicate_key_value(
+    value,
+    *,
+    trim_strings: bool = False,
+    casefold_strings: bool = False,
+):
+    normalized = _normalize_natural_key_value(value)
+    if isinstance(normalized, str):
+        if trim_strings:
+            normalized = normalized.strip()
+        if casefold_strings:
+            normalized = normalized.casefold()
+    return normalized
 
 
 def _is_integer_like_type(type_name: str) -> bool:

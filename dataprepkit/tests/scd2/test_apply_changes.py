@@ -1189,7 +1189,11 @@ def test_insert_snapshot_rows_from_raw_maps_integrity_to_validation_error():
         def execute(self, _statement, _params=None):
             raise IntegrityError("INSERT", {}, Exception("dup"))
 
-    with pytest.raises(SCD2ValidationError, match="duplicate natural keys"):
+    source_df = pd.DataFrame([{"Site_Cd": "A "}, {"Site_Cd": "a"}])
+    with pytest.raises(
+        SCD2ValidationError,
+        match=r"duplicate natural keys after staging normalization/collation",
+    ) as exc_info:
         _insert_snapshot_rows_from_raw(
             _FakeConn(),
             raw_table="stg_raw",
@@ -1197,7 +1201,39 @@ def test_insert_snapshot_rows_from_raw_maps_integrity_to_validation_error():
             columns=["Site_Cd", "existing_join_numeric"],
             column_types={"site_cd": "NVARCHAR(4000)"},
             column_type_overrides={"existing_join_numeric": "BIGINT"},
+            source_df=source_df,
+            natural_key_cols=["Site_Cd"],
         )
+    assert "{'Site_Cd': 'a', 'count': 2}" in str(exc_info.value)
+
+
+def test_insert_snapshot_rows_maps_integrity_to_explicit_duplicate_key_error():
+    class _FakeConn:
+        engine = type("E", (), {"dialect": type("D", (), {"name": "sqlite"})()})()
+
+        def execute(self, _statement, _params=None):
+            raise IntegrityError("INSERT", {}, Exception("dup"))
+
+    incoming = pd.DataFrame(
+        [
+            {"join_key": "A ", "data_column": "x", "row_hash": "h1"},
+            {"join_key": "a", "data_column": "y", "row_hash": "h2"},
+        ]
+    )
+
+    with pytest.raises(
+        SCD2ValidationError,
+        match=r"duplicate natural keys after staging normalization/collation",
+    ) as exc_info:
+        _insert_snapshot_rows(
+            _FakeConn(),
+            "stage_table",
+            incoming,
+            natural_key_cols=["join_key"],
+            data_cols=["data_column"],
+            hash_col="row_hash",
+        )
+    assert "{'join_key': 'a', 'count': 2}" in str(exc_info.value)
 
 
 def test_normalize_existing_join_numeric_for_raw_keeps_integer_text():
