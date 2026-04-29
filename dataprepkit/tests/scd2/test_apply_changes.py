@@ -1109,6 +1109,46 @@ def test_create_staging_table_uses_override_type_for_existing_join_numeric():
     assert params == {}
 
 
+def test_create_staging_table_uses_binary_collation_for_mssql_text_natural_keys():
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    class _FakeConn:
+        engine = _FakeEngine()
+
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, params=None):
+            self.calls.append((str(statement), dict(params or {})))
+
+    conn = _FakeConn()
+    _create_staging_table(
+        conn,
+        "temp_snapshot",
+        natural_key_cols=["Business_Unit_Cd"],
+        data_cols=["Business_Unit_Name"],
+        hash_col="row_hash",
+        column_types={
+            "business_unit_cd": "NVARCHAR(4000)",
+            "business_unit_name": "NVARCHAR(4000)",
+            "row_hash": "NVARCHAR(4000)",
+        },
+        preserve_mssql_types=True,
+    )
+
+    sql, params = conn.calls[0]
+    assert (
+        "[Business_Unit_Cd] NVARCHAR(4000) COLLATE Latin1_General_100_BIN2 NOT NULL"
+        in sql
+    )
+    assert "UNIQUE([Business_Unit_Cd])" in sql
+    assert params == {}
+
+
 def test_insert_snapshot_rows_from_raw_honors_type_overrides():
     class _FakeDialect:
         name = "mssql"

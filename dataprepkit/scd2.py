@@ -463,8 +463,17 @@ def _create_staging_table(
     column_defs = []
     nullable_set = set(nullable_data_cols or [])
     for col in natural_key_cols:
+        column_type = _column_type_for_column(
+            col,
+            column_types,
+            conn.engine,
+            preserve_mssql_types=preserve_mssql_types,
+        )
+        collation_clause = ""
+        if dialect == "mssql" and _is_text_like_type(column_type):
+            collation_clause = " COLLATE Latin1_General_100_BIN2"
         column_defs.append(
-            f"{quote(col)} {_column_type_for_column(col, column_types, conn.engine, preserve_mssql_types=preserve_mssql_types)} NOT NULL"
+            f"{quote(col)} {column_type}{collation_clause} NOT NULL"
         )
     for col in data_cols:
         null_clause = (
