@@ -763,6 +763,65 @@ def test_apply_changes_returns_true_when_data_changes():
 
     assert changed
 
+
+def test_apply_changes_can_return_change_summary():
+    engine = create_engine("sqlite:///:memory:")
+    deleted = _build_initial_row(
+        "d1",
+        4,
+        "d-old",
+        deleted_ind=1,
+        update_ts=datetime(2026, 1, 8, 15, 0, 0),
+    )
+    deleted["Effective_Date_End"] = deleted["Update_Date"]
+    _bootstrap_table(
+        engine,
+        [
+            _build_initial_row("a1", 1, "a"),
+            _build_initial_row("b1", 2, "b-old"),
+            _build_initial_row("c1", 3, "c"),
+            deleted,
+        ],
+    )
+
+    summary = apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=pd.DataFrame(
+            [
+                {"join_key": "a1", "data_column": "a"},
+                {"join_key": "b1", "data_column": "b-new"},
+                {"join_key": "d1", "data_column": "d-new"},
+                {"join_key": "e1", "data_column": "e"},
+            ]
+        ),
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+        return_summary=True,
+    )
+
+    assert summary.incoming_rows == 4
+    assert summary.target_rows_before == 4
+    assert summary.target_rows_after == 7
+    assert summary.new_rows == 1
+    assert summary.inserted_rows == 3
+    assert summary.new_natural_keys == [{"join_key": "e1"}]
+    assert summary.edited_rows == 1
+    assert summary.edited_rows_detail == [
+        {"join_key": "b1", "changes": {"data_column": {"from": "b-old", "to": "b-new"}}}
+    ]
+    assert summary.edited_natural_keys == [{"join_key": "b1"}]
+    assert summary.soft_deleted_rows == 1
+    assert summary.soft_deleted_natural_keys == [{"join_key": "c1"}]
+    assert summary.reactivated_rows == 1
+    assert summary.reactivated_natural_keys == [{"join_key": "d1"}]
+    assert summary.unchanged_rows == 1
+    assert summary.changes_applied
+
+
 def test_reject_duplicate_natural_keys():
     engine = create_engine("sqlite:///:memory:")
     _bootstrap_table(engine, [])

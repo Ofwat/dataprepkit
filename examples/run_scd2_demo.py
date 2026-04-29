@@ -1,6 +1,8 @@
 """SQLite demo that uses the metadata loader to drive the SCD2 API."""
 
-from datetime import datetime
+import logging
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -19,8 +21,12 @@ def _create_schema(engine):
         row_hash TEXT,
         Insert_Date TEXT NOT NULL,
         Update_Date TEXT,
+        Effective_Date_Start TEXT NOT NULL,
+        Effective_Date_End TEXT NOT NULL,
         Current_Ind INTEGER NOT NULL,
-        Deleted_Ind INTEGER NOT NULL
+        Deleted_Ind INTEGER NOT NULL,
+        Batch_Id TEXT NOT NULL DEFAULT '',
+        Archive_Filename TEXT NOT NULL DEFAULT ''
     )
     """
     with engine.begin() as conn:
@@ -75,12 +81,22 @@ def _summarize(engine, label):
 
 def _validate(engine, expected_current: int):
     with engine.connect() as conn:
-        result = conn.execute(text("SELECT COUNT(*) FROM dimension WHERE Current_Ind = 1"))
+        result = conn.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM dimension
+                WHERE Current_Ind = 1
+                  AND Deleted_Ind = 0
+                """
+            )
+        )
         current_count = result.scalar()
-    assert current_count == expected_current, "Current rows should not decrease"
+    assert current_count == expected_current, "Active current rows should match"
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     engine = create_engine("sqlite:///:memory:")
     _register_demo_metadata()
     _create_schema(engine)
@@ -123,7 +139,10 @@ def main():
         }
     )
     _validate(engine, expected_current)
-    print("SCD2 demo completed successfully at", datetime.utcnow().isoformat())
+    print(
+        "SCD2 demo completed successfully at",
+        datetime.now(timezone.utc).isoformat(),
+    )
 
 
 if __name__ == "__main__":

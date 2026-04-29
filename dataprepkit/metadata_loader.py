@@ -20,6 +20,7 @@ from dataprepkit.scd2 import (
     DEFAULT_SYSTEM_COLUMNS,
     EFFECTIVE_DATE_MAX,
     EFFECTIVE_DATE_MIN,
+    SCD2ChangeSummary,
     _compute_row_hash,
     apply_changes,
 )
@@ -752,7 +753,7 @@ def run_dimension(
         list(incoming.columns),
     )
     incoming = _cast_data_columns(incoming, metadata)
-    _ensure_target_table(engine, metadata)
+    schema_columns_added = _ensure_target_table(engine, metadata) or []
     _apply_table_description(engine, metadata)
     if metadata.column_renames:
         incoming = incoming.rename(columns=metadata.column_renames)
@@ -792,11 +793,14 @@ def run_dimension(
     )
     logger.info("Execution timestamp: %s", execution_time_iso)
     available_columns = _get_target_columns(engine, metadata.target_table)
-    safe_data_columns, missing = _handle_schema_drift(
+    safe_data_columns, missing, drift_columns_added = _handle_schema_drift(
         engine,
         metadata,
         available_columns,
         metadata.data_columns,
+    )
+    schema_columns_added = sorted(
+        {*schema_columns_added, *drift_columns_added}
     )
     has_batch_id = _has_column_case_insensitive(
         available_columns,
@@ -828,31 +832,35 @@ def run_dimension(
     )
     start_ts = datetime.now(timezone.utc)
     changes_applied = False
+    change_summary = SCD2ChangeSummary(incoming_rows=rows_processed)
     try:
-            changes_applied = apply_changes(
-                engine=engine,
-                target_table=metadata.target_table,
-                incoming=incoming,
-                natural_key_cols=list(metadata.natural_key_cols),
-                data_cols=safe_data_columns,
-                join_numeric_key_col=metadata.join_numeric_key,
-                surrogate_key_col=metadata.surrogate_key,
-                system_columns=system_columns,
-                nullable_columns=[
-                    name
-                    for name, spec in metadata.data_columns.items()
-                    if spec.nullable
-                ],
-                execution_time=execution_time_iso,
-                batch_id=metadata_batch_id,
-                archive_filename=archive_filename,
-                has_batch_id=has_batch_id,
-                has_archive_filename=has_archive_filename,
-                staging_use_openrowset_parquet=staging_use_openrowset_parquet,
-                staging_parquet_base_dir=staging_parquet_base_dir,
-                staging_copy_source_base_url=staging_copy_source_base_url,
-                staging_copy_into_options=staging_copy_into_options,
-            )
+        apply_result = apply_changes(
+            engine=engine,
+            target_table=metadata.target_table,
+            incoming=incoming,
+            natural_key_cols=list(metadata.natural_key_cols),
+            data_cols=safe_data_columns,
+            join_numeric_key_col=metadata.join_numeric_key,
+            surrogate_key_col=metadata.surrogate_key,
+            system_columns=system_columns,
+            nullable_columns=[
+                name
+                for name, spec in metadata.data_columns.items()
+                if spec.nullable
+            ],
+            execution_time=execution_time_iso,
+            batch_id=metadata_batch_id,
+            archive_filename=archive_filename,
+            has_batch_id=has_batch_id,
+            has_archive_filename=has_archive_filename,
+            staging_use_openrowset_parquet=staging_use_openrowset_parquet,
+            staging_parquet_base_dir=staging_parquet_base_dir,
+            staging_copy_source_base_url=staging_copy_source_base_url,
+            staging_copy_into_options=staging_copy_into_options,
+            return_summary=True,
+        )
+        change_summary = _coerce_scd2_change_summary(apply_result, rows_processed)
+        changes_applied = bool(change_summary)
     except Exception as exc:
         duration = (datetime.now(timezone.utc) - start_ts).total_seconds()
         logger.error("SCD2 invocation failed for %s: %s", metadata.name, exc)
@@ -869,6 +877,8 @@ def run_dimension(
         return incoming
     else:
         required_reserved_values = set(metadata.required_reserved_source_values)
+        reserved_members_upserted = 0
+        reserved_members_deleted = 0
         for member in metadata.reserved_source_members:
             reserved_row = reserved_rows.get(member.source_value)
             if reserved_row is not None:
@@ -884,22 +894,51 @@ def run_dimension(
                     batch_id=metadata_batch_id,
                     archive_filename=archive_filename,
                 )
+                reserved_members_upserted += 1
                 changes_applied = True
             elif member.source_value not in required_reserved_values:
-                changes_applied = bool(
-                    _delete_reserved_member(
-                        engine,
-                        metadata,
-                        member.source_value,
-                    )
-                ) or changes_applied
+                deleted_reserved = _delete_reserved_member(
+                    engine,
+                    metadata,
+                    member.source_value,
+                )
+                reserved_members_deleted += deleted_reserved
+                changes_applied = bool(deleted_reserved) or changes_applied
         duration = (datetime.now(timezone.utc) - start_ts).total_seconds()
+        final_target_rows = _count_target_rows(engine, metadata.target_table)
         logger.info("Run policy on success: %s", metadata.run_policy.on_table_failure)
         logger.info(
             "Table %s completed in %.3fs (rows=%d)",
             metadata.target_table,
             duration,
             rows_processed,
+        )
+        logger.info(
+            "Dimension load summary for %s: "
+            "input_rows=%d, target_rows_before=%d, target_rows_after=%d, "
+            "inserted_rows=%d, new_rows=%d, new_keys=%s, "
+            "edited_rows=%d, edited_changes=%s, "
+            "soft_deleted_rows=%d, soft_deleted_keys=%s, "
+            "reactivated_rows=%d, reactivated_keys=%s, unchanged_rows=%d, "
+            "schema_columns_added=%s, reserved_members_upserted=%d, "
+            "reserved_members_deleted=%d",
+            metadata.target_table,
+            rows_processed,
+            change_summary.target_rows_before,
+            final_target_rows,
+            change_summary.inserted_rows,
+            change_summary.new_rows,
+            change_summary.new_natural_keys or [],
+            change_summary.edited_rows,
+            change_summary.edited_rows_detail or [],
+            change_summary.soft_deleted_rows,
+            change_summary.soft_deleted_natural_keys or [],
+            change_summary.reactivated_rows,
+            change_summary.reactivated_natural_keys or [],
+            change_summary.unchanged_rows,
+            schema_columns_added,
+            reserved_members_upserted,
+            reserved_members_deleted,
         )
         if archive_dest:
             if {"batch_id", "archive_filename"} <= system_columns.keys():
@@ -912,7 +951,6 @@ def run_dimension(
                     archive_dest,
                     missing_cols,
                 )
-    logger.info("SCD2 classification counts: not available")
     _post_scd2_validation(
         engine,
         metadata.target_table,
@@ -996,6 +1034,27 @@ def _get_target_columns(engine: Engine, table_name: str) -> set[str]:
     return {col["name"] for col in inspector.get_columns(table, schema=schema)}
 
 
+def _count_target_rows(engine: Engine, table_name: str) -> int:
+    inspector = inspect(engine)
+    schema, table = _split_table_name(table_name)
+    if not inspector.has_table(table, schema=schema):
+        return 0
+    with engine.connect() as conn:
+        return conn.execute(text(f"SELECT COUNT(1) FROM {table_name}")).scalar() or 0
+
+
+def _coerce_scd2_change_summary(
+    result: object,
+    incoming_rows: int,
+) -> SCD2ChangeSummary:
+    if isinstance(result, SCD2ChangeSummary):
+        return result
+    return SCD2ChangeSummary(
+        incoming_rows=incoming_rows,
+        changes_applied_override=bool(result),
+    )
+
+
 def _column_spec_clause(name: str, spec: ColumnSpec, engine: Engine) -> str:
     column_type = spec.type or _column_type_for_engine(engine)
     constraints = []
@@ -1009,7 +1068,7 @@ def _column_spec_clause(name: str, spec: ColumnSpec, engine: Engine) -> str:
     return f"{_quote_identifier(engine, name)} {column_type} {constraint_sql}".strip()
 
 
-def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
+def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> list[str]:
     inspector = inspect(engine)
     schema_name, table_name = _split_table_name(metadata.target_table)
     ensure_schema_exists(engine, schema_name)
@@ -1033,7 +1092,7 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
                     missing,
                     metadata.schema_handling.mode,
                 )
-                _evolve_table_columns(engine, metadata, missing)
+                return _evolve_table_columns(engine, metadata, missing)
             else:
                 logger.warning(
                     "Existing table '%s' is missing metadata columns %s; schema handling=%s",
@@ -1041,7 +1100,7 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
                     missing,
                     metadata.schema_handling.mode,
                 )
-        return
+        return []
     natural_specs = {
         **{col: spec for col, spec in metadata.natural_key_specs.items()},
         **{
@@ -1090,6 +1149,7 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> None:
                 )
             )
         )
+    return []
 
 
 def _split_table_name(name: str) -> tuple[str | None, str]:
@@ -1355,7 +1415,8 @@ def _evolve_table_columns(
     engine: Engine,
     metadata: DimensionMetadata,
     missing_columns: set[str],
-) -> None:
+) -> list[str]:
+    added: list[str] = []
     with engine.begin() as conn:
         for column in sorted(missing_columns):
             if column in {
@@ -1363,6 +1424,7 @@ def _evolve_table_columns(
                 DEFAULT_SYSTEM_COLUMNS["effective_date_end"],
             }:
                 _evolve_effective_date_column(conn, engine, metadata.target_table, column)
+                added.append(column)
                 logger.info(
                     "Evolved table %s by adding column %s for mode=%s",
                     metadata.target_table,
@@ -1377,7 +1439,14 @@ def _evolve_table_columns(
             clause = _column_spec_clause(column, spec, engine)
             add_sql = text(f"ALTER TABLE {metadata.target_table} ADD {clause}")
             conn.execute(add_sql)
-            logger.info("Evolved table %s by adding column %s for mode=%s", metadata.target_table, column, metadata.schema_handling.mode)
+            added.append(column)
+            logger.info(
+                "Evolved table %s by adding column %s for mode=%s",
+                metadata.target_table,
+                column,
+                metadata.schema_handling.mode,
+            )
+    return added
 
 
 def _evolve_effective_date_column(conn: Connection, engine: Engine, table_name: str, column: str) -> None:
@@ -1747,23 +1816,28 @@ def _handle_schema_drift(
     metadata: DimensionMetadata,
     available_columns: set[str],
     requested_columns: Mapping[str, ColumnSpec],
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str]]:
     requested_names = list(requested_columns.keys())
     safe, missing = _resolve_safe_data_columns(requested_names, available_columns)
+    added: list[str] = []
     if missing:
         plan = f"Missing columns: {missing}"
         if metadata.schema_handling.mode == "evolve":
             missing_specs = {name: requested_columns[name] for name in missing}
-            _evolve_schema(engine, metadata.target_table, missing_specs)
+            added = _evolve_schema(engine, metadata.target_table, missing_specs)
             safe = list(requested_columns)
-            logger.info("Schema evolution applied for %s: added %s", metadata.target_table, missing)
+            logger.info(
+                "Schema evolution applied for %s: added %s",
+                metadata.target_table,
+                missing,
+            )
         else:
             logger.warning(
                 "Schema evolution plan for %s: %s",
                 metadata.target_table,
                 plan,
             )
-    return safe, missing
+    return safe, missing, added
 
 
 def _column_type_for_engine(engine: Engine) -> str:
@@ -1792,7 +1866,12 @@ def _system_column_type(column: str, engine: Engine) -> str:
     return "DATETIME"
 
 
-def _evolve_schema(engine: Engine, table_name: str, missing: Mapping[str, ColumnSpec]) -> None:
+def _evolve_schema(
+    engine: Engine,
+    table_name: str,
+    missing: Mapping[str, ColumnSpec],
+) -> list[str]:
+    added: list[str] = []
     with engine.begin() as conn:
         for column, spec in missing.items():
             column_type = spec.type or _column_type_for_engine(engine)
@@ -1806,8 +1885,13 @@ def _evolve_schema(engine: Engine, table_name: str, missing: Mapping[str, Column
             constraint_sql = " ".join(constraints)
             definition = f"{column_type} {constraint_sql}".strip()
             conn.execute(
-                text(f"ALTER TABLE {table_name} ADD COLUMN {_quote_identifier(engine, column)} {definition}")
+                text(
+                    f"ALTER TABLE {table_name} "
+                    f"ADD COLUMN {_quote_identifier(engine, column)} {definition}"
+                )
             )
+            added.append(column)
+    return added
 
 
 def _capture_execution_time() -> datetime:

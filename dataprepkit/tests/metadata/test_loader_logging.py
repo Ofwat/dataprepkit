@@ -185,7 +185,7 @@ def test_run_dimension_logs_execution_time(monkeypatch, caplog):
     )
 
     assert "Execution timestamp" in caplog.text
-    assert "SCD2 classification counts: not available" in caplog.text
+    assert "Dimension load summary for dimension" in caplog.text
     assert captured.get("execution_time") is not None
     METADATA_REGISTRY.pop("dummy_dimension", None)
 
@@ -395,7 +395,7 @@ def test_schema_suggest_logs_plan(monkeypatch, caplog):
     METADATA_REGISTRY.pop(metadata_name, None)
 
 
-def test_schema_evolve_adds_columns(monkeypatch):
+def test_schema_evolve_adds_columns(monkeypatch, caplog):
     engine = create_engine("sqlite:///:memory:")
     _create_dimension_table(engine)
     metadata_name = "evolve_plan"
@@ -418,6 +418,7 @@ def test_schema_evolve_adds_columns(monkeypatch):
         captured["data_cols"] = kwargs["data_cols"]
 
     monkeypatch.setattr("dataprepkit.metadata_loader.apply_changes", fake_apply_changes)
+    caplog.set_level(logging.INFO)
 
     run_dimension(
         engine,
@@ -429,6 +430,7 @@ def test_schema_evolve_adds_columns(monkeypatch):
     columns = {col["name"] for col in inspector.get_columns("dimension")}
     assert "extra_add" in columns
     assert captured["data_cols"] == ["data_column", "extra_add"]
+    assert "schema_columns_added=['extra_add']" in caplog.text
     METADATA_REGISTRY.pop(metadata_name, None)
 
 
@@ -512,6 +514,42 @@ def test_metrics_logged(caplog, monkeypatch):
     )
 
     assert "Table dimension completed in" in caplog.text
+    assert "Dimension load summary for dimension" in caplog.text
+    assert "inserted_rows=1" in caplog.text
+    assert "new_rows=1" in caplog.text
+    assert "new_keys=[{'natural_key': 'x'}]" in caplog.text
+    assert "edited_rows=0" in caplog.text
+    assert "edited_changes=[]" in caplog.text
+    assert "soft_deleted_rows=0" in caplog.text
+    assert "soft_deleted_keys=[]" in caplog.text
+    assert "reactivated_keys=[]" in caplog.text
+    METADATA_REGISTRY.pop("dummy_dimension", None)
+
+
+def test_metrics_logged_include_edited_natural_keys(caplog):
+    engine = create_engine("sqlite:///:memory:")
+    _create_dimension_table(engine)
+    _register_dummy_dimension_metadata()
+    caplog.set_level(logging.INFO)
+
+    run_dimension(
+        engine,
+        "dummy_dimension",
+        override_df=pd.DataFrame([{"natural_key": "x", "data_column": "before"}]),
+    )
+    caplog.clear()
+
+    run_dimension(
+        engine,
+        "dummy_dimension",
+        override_df=pd.DataFrame([{"natural_key": "x", "data_column": "after"}]),
+    )
+
+    assert "edited_rows=1" in caplog.text
+    assert (
+        "edited_changes=[{'natural_key': 'x', 'changes': {'data_column': {'from': 'before', 'to': 'after'}}}]"
+        in caplog.text
+    )
     METADATA_REGISTRY.pop("dummy_dimension", None)
 
 
