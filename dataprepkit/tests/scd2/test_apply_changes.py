@@ -833,7 +833,10 @@ def test_reject_duplicate_natural_keys():
         ]
     )
 
-    with pytest.raises(SCD2ValidationError):
+    with pytest.raises(
+        SCD2ValidationError,
+        match=r"Incoming data contains duplicate natural keys.*Example duplicate keys",
+    ) as exc_info:
         apply_changes(
             engine=engine,
             target_table="dimension",
@@ -844,6 +847,7 @@ def test_reject_duplicate_natural_keys():
             surrogate_key_col="surrogate_key",
             system_columns=SYSTEM_COLUMNS,
         )
+    assert "{'join_key': 'a1', 'count': 2}" in str(exc_info.value)
 
 
 def test_execution_time_is_consistent(monkeypatch):

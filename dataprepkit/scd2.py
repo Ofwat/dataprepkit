@@ -144,6 +144,7 @@ def apply_changes(
         raise SCD2ValidationError("Incoming data must include all natural key columns.")
     if not set(data_cols).issubset(incoming_df.columns):
         raise SCD2ValidationError("Incoming data must include all declared data columns.")
+    _raise_if_duplicate_natural_keys(incoming_df, natural_key_cols)
 
     hash_col = cols["row_hash"]
     incoming_df[hash_col] = incoming_df.apply(lambda row: _compute_row_hash(row, data_cols), axis=1)
@@ -618,6 +619,38 @@ def _normalize_integer_like_value_for_raw(value) -> str | None:
         if value.is_integer():
             return str(int(value))
     return str(value)
+
+
+def _raise_if_duplicate_natural_keys(
+    incoming_df: pd.DataFrame,
+    natural_key_cols: Sequence[str],
+    *,
+    sample_limit: int = 10,
+) -> None:
+    if not natural_key_cols or incoming_df.empty:
+        return
+    key_frame = incoming_df.loc[:, list(natural_key_cols)].copy()
+    normalized = key_frame.copy()
+    for column in natural_key_cols:
+        normalized[column] = normalized[column].map(_normalize_natural_key_value)
+    duplicate_counts = (
+        normalized.groupby(list(natural_key_cols), dropna=False)
+        .size()
+        .reset_index(name="count")
+    )
+    duplicates = duplicate_counts.loc[duplicate_counts["count"] > 1]
+    if duplicates.empty:
+        return
+    examples = []
+    for _, row in duplicates.head(sample_limit).iterrows():
+        example = {col: row[col] for col in natural_key_cols}
+        example["count"] = int(row["count"])
+        examples.append(example)
+    raise SCD2ValidationError(
+        "Incoming data contains duplicate natural keys. "
+        f"Natural key columns: {list(natural_key_cols)}. "
+        f"Example duplicate keys: {examples}"
+    )
 
 
 def _is_integer_like_type(type_name: str) -> bool:
