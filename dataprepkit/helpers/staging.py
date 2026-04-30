@@ -1,4 +1,5 @@
 import re
+import shutil
 from typing import Literal
 from pathlib import Path
 import uuid
@@ -193,46 +194,47 @@ def stage_dataframe(
             parquet_path = Path(path_info.file_path)
             part_dir = parquet_path.with_suffix("")
             part_dir.mkdir(parents=True, exist_ok=True)
-            total_rows = len(normalized_df)
-            if total_rows == 0:
-                normalized_df.to_parquet(part_dir / "part-00000.parquet", index=index)
-            else:
-                for part_idx, start in enumerate(
-                    range(0, total_rows, openrowset_max_rows_per_file)
-                ):
-                    chunk = normalized_df.iloc[start : start + openrowset_max_rows_per_file]
-                    chunk.to_parquet(part_dir / f"part-{part_idx:05d}.parquet", index=index)
+            try:
+                total_rows = len(normalized_df)
+                if total_rows == 0:
+                    normalized_df.to_parquet(part_dir / "part-00000.parquet", index=index)
+                else:
+                    for part_idx, start in enumerate(
+                        range(0, total_rows, openrowset_max_rows_per_file)
+                    ):
+                        chunk = normalized_df.iloc[start : start + openrowset_max_rows_per_file]
+                        chunk.to_parquet(part_dir / f"part-{part_idx:05d}.parquet", index=index)
 
-            source_url = (
-                f"{resolved_copy_source_base_url.rstrip('/')}/{resolved_table}/{part_dir.name}/*.parquet"
-            )
-            schema_sql = (
-                _quote_mssql_identifier(str(schema_for_sql))
-                if schema_for_sql is not None
-                else None
-            )
-            table_sql = _quote_mssql_identifier(str(table_for_sql))
-            destination_table = (
-                f"{schema_sql}.{table_sql}" if schema_sql is not None else table_sql
-            )
+                source_url = (
+                    f"{resolved_copy_source_base_url.rstrip('/')}/{resolved_table}/{part_dir.name}/*.parquet"
+                )
+                schema_sql = (
+                    _quote_mssql_identifier(str(schema_for_sql))
+                    if schema_for_sql is not None
+                    else None
+                )
+                table_sql = _quote_mssql_identifier(str(table_for_sql))
+                destination_table = (
+                    f"{schema_sql}.{table_sql}" if schema_sql is not None else table_sql
+                )
 
-            options_sql = copy_into_options.strip()
-            if options_sql and not options_sql.startswith(","):
-                options_sql = f", {options_sql}"
+                options_sql = copy_into_options.strip()
+                if options_sql and not options_sql.startswith(","):
+                    options_sql = f", {options_sql}"
 
-            with engine.begin() as conn:
-                if if_exists == "replace" and table_exists:
-                    try:
-                        conn.execute(text(f"TRUNCATE TABLE {destination_table}"))
-                    except ProgrammingError:
-                        conn.execute(text(f"DELETE FROM {destination_table}"))
-                selected_columns = [_quote_mssql_identifier(str(col)) for col in df.columns]
-                if not selected_columns:
-                    return
-                columns_sql = ", ".join(selected_columns)
-                escaped_source = source_url.replace("'", "''")
-                openrowset_sql = text(
-                    f"""
+                with engine.begin() as conn:
+                    if if_exists == "replace" and table_exists:
+                        try:
+                            conn.execute(text(f"TRUNCATE TABLE {destination_table}"))
+                        except ProgrammingError:
+                            conn.execute(text(f"DELETE FROM {destination_table}"))
+                    selected_columns = [_quote_mssql_identifier(str(col)) for col in df.columns]
+                    if not selected_columns:
+                        return
+                    columns_sql = ", ".join(selected_columns)
+                    escaped_source = source_url.replace("'", "''")
+                    openrowset_sql = text(
+                        f"""
                     INSERT INTO {destination_table} ({columns_sql})
                     SELECT {columns_sql}
                     FROM OPENROWSET(
@@ -240,8 +242,10 @@ def stage_dataframe(
                         FORMAT = 'PARQUET'{options_sql}
                     ) AS src
                     """
-                )
-                conn.execute(openrowset_sql)
+                    )
+                    conn.execute(openrowset_sql)
+            finally:
+                shutil.rmtree(part_dir, ignore_errors=True)
             return
 
         if dtype_overrides:

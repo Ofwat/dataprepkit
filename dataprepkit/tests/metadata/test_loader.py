@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
@@ -798,6 +800,7 @@ def test_stage_dataframe_copy_into_writes_parquet_and_executes_copy(monkeypatch,
     assert "/*.parquet'" in copy_sql
     assert copy_params == {}
     assert copy_sql.startswith("\n                    INSERT INTO [dbo].[stage_table]")
+    assert not Path(written["path"]).parent.exists()
 
 
 def test_stage_dataframe_copy_into_accepts_separate_source_base_url(monkeypatch, tmp_path):
