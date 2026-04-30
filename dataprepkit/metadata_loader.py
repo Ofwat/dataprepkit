@@ -429,6 +429,78 @@ def _reserved_member_mask(
     return mask
 
 
+def _include_unchanged_reserved_rows(
+    engine: Engine,
+    metadata: DimensionMetadata,
+    incoming: pd.DataFrame,
+    reserved_rows: Mapping[str, pd.Series],
+    data_columns: Sequence[str],
+) -> pd.DataFrame:
+    unchanged_rows = []
+    for member in metadata.reserved_source_members:
+        row = reserved_rows.get(member.source_value)
+        if row is not None and _reserved_member_is_current(
+            engine,
+            metadata,
+            member,
+            row,
+            data_columns,
+        ):
+            unchanged_rows.append(row)
+    if not unchanged_rows:
+        return incoming
+    return pd.concat([incoming, pd.DataFrame(unchanged_rows)], ignore_index=True)
+
+
+def _reserved_member_is_current(
+    engine: Engine,
+    metadata: DimensionMetadata,
+    member: ReservedSourceMember,
+    row: pd.Series,
+    data_columns: Sequence[str],
+) -> bool:
+    row_hash = _compute_row_hash(row, data_columns)
+    natural_key_values = {
+        column: _normalize_value_for_sql(row[column])
+        for column in metadata.natural_key_cols
+    }
+    data_values = {
+        column: _normalize_value_for_sql(row.get(column))
+        for column in data_columns
+    }
+    quote = lambda value: _quote_identifier(engine, value)
+    select_columns = [
+        metadata.join_numeric_key,
+        DEFAULT_SYSTEM_COLUMNS["row_hash"],
+        DEFAULT_SYSTEM_COLUMNS["update_date"],
+        DEFAULT_SYSTEM_COLUMNS["effective_date_start"],
+        DEFAULT_SYSTEM_COLUMNS["effective_date_end"],
+        DEFAULT_SYSTEM_COLUMNS["current_ind"],
+        DEFAULT_SYSTEM_COLUMNS["deleted_ind"],
+        *metadata.natural_key_cols,
+        *data_columns,
+    ]
+    with engine.connect() as conn:
+        existing = conn.execute(
+            text(
+                f"""
+                SELECT {', '.join(quote(column) for column in select_columns)}
+                FROM {metadata.target_table}
+                WHERE {quote(metadata.surrogate_key)} = :surrogate_key
+                """
+            ),
+            {"surrogate_key": member.surrogate_key},
+        ).fetchone()
+    return existing is not None and _reserved_member_matches(
+        existing._mapping,
+        metadata=metadata,
+        natural_key_values=natural_key_values,
+        data_values=data_values,
+        row_hash=row_hash,
+        join_numeric_key=member.join_numeric_key,
+    )
+
+
 def _upsert_reserved_member(
     engine: Engine,
     metadata: DimensionMetadata,
@@ -440,7 +512,7 @@ def _upsert_reserved_member(
     has_archive_filename: bool,
     batch_id: str,
     archive_filename: str,
-) -> None:
+) -> bool:
     row_hash = _compute_row_hash(row, data_columns)
     natural_key_values = {
         column: _normalize_value_for_sql(row[column])
@@ -453,10 +525,23 @@ def _upsert_reserved_member(
 
     with engine.begin() as conn:
         quote = lambda value: _quote_identifier(engine, value)
+        select_columns = [
+            metadata.surrogate_key,
+            metadata.join_numeric_key,
+            DEFAULT_SYSTEM_COLUMNS["row_hash"],
+            DEFAULT_SYSTEM_COLUMNS["update_date"],
+            DEFAULT_SYSTEM_COLUMNS["effective_date_start"],
+            DEFAULT_SYSTEM_COLUMNS["effective_date_end"],
+            DEFAULT_SYSTEM_COLUMNS["current_ind"],
+            DEFAULT_SYSTEM_COLUMNS["deleted_ind"],
+            DEFAULT_SYSTEM_COLUMNS["insert_date"],
+            *metadata.natural_key_cols,
+            *data_columns,
+        ]
         existing = conn.execute(
             text(
                 f"""
-                SELECT {quote(metadata.surrogate_key)}, {quote(metadata.join_numeric_key)}, {quote(DEFAULT_SYSTEM_COLUMNS['insert_date'])}
+                SELECT {', '.join(quote(column) for column in select_columns)}
                 FROM {metadata.target_table}
                 WHERE {quote(metadata.surrogate_key)} = :surrogate_key
                 """
@@ -480,7 +565,16 @@ def _upsert_reserved_member(
                 batch_id=batch_id,
                 archive_filename=archive_filename,
             )
-            return
+            return True
+        if _reserved_member_matches(
+            existing._mapping,
+            metadata=metadata,
+            natural_key_values=natural_key_values,
+            data_values=data_values,
+            row_hash=row_hash,
+            join_numeric_key=join_numeric_key,
+        ):
+            return False
         _update_reserved_member(
             conn=conn,
             metadata=metadata,
@@ -490,12 +584,38 @@ def _upsert_reserved_member(
             row_hash=row_hash,
             join_numeric_key=join_numeric_key,
             execution_time=execution_time,
-            insert_date=existing[2] or execution_time,
+            insert_date=(
+                existing._mapping[DEFAULT_SYSTEM_COLUMNS["insert_date"]]
+                or execution_time
+            ),
             has_batch_id=has_batch_id,
             has_archive_filename=has_archive_filename,
             batch_id=batch_id,
             archive_filename=archive_filename,
         )
+        return True
+
+
+def _reserved_member_matches(
+    existing: Mapping[str, Any],
+    metadata: DimensionMetadata,
+    natural_key_values: Mapping[str, Any],
+    data_values: Mapping[str, Any],
+    row_hash: str,
+    join_numeric_key: int,
+) -> bool:
+    expected = {
+        metadata.join_numeric_key: join_numeric_key,
+        DEFAULT_SYSTEM_COLUMNS["row_hash"]: row_hash,
+        DEFAULT_SYSTEM_COLUMNS["update_date"]: None,
+        DEFAULT_SYSTEM_COLUMNS["effective_date_start"]: EFFECTIVE_DATE_MIN,
+        DEFAULT_SYSTEM_COLUMNS["effective_date_end"]: EFFECTIVE_DATE_MAX,
+        DEFAULT_SYSTEM_COLUMNS["current_ind"]: 1,
+        DEFAULT_SYSTEM_COLUMNS["deleted_ind"]: 0,
+        **natural_key_values,
+        **data_values,
+    }
+    return all(existing[column] == value for column, value in expected.items())
 
 
 def _raise_on_reserved_member_conflict(
@@ -822,6 +942,13 @@ def run_dimension(
         metadata=metadata,
         incoming=incoming,
     )
+    scd2_incoming = _include_unchanged_reserved_rows(
+        engine=engine,
+        metadata=metadata,
+        incoming=incoming,
+        reserved_rows=reserved_rows,
+        data_columns=safe_data_columns,
+    )
 
     rows_processed = len(incoming)
     logger.info(
@@ -837,7 +964,7 @@ def run_dimension(
         apply_result = apply_changes(
             engine=engine,
             target_table=metadata.target_table,
-            incoming=incoming,
+            incoming=scd2_incoming,
             natural_key_cols=list(metadata.natural_key_cols),
             data_cols=safe_data_columns,
             join_numeric_key_col=metadata.join_numeric_key,
@@ -882,7 +1009,7 @@ def run_dimension(
         for member in metadata.reserved_source_members:
             reserved_row = reserved_rows.get(member.source_value)
             if reserved_row is not None:
-                _upsert_reserved_member(
+                reserved_changed = _upsert_reserved_member(
                     engine=engine,
                     metadata=metadata,
                     member=member,
@@ -895,7 +1022,7 @@ def run_dimension(
                     archive_filename=archive_filename,
                 )
                 reserved_members_upserted += 1
-                changes_applied = True
+                changes_applied = reserved_changed or changes_applied
             elif member.source_value not in required_reserved_values:
                 deleted_reserved = _delete_reserved_member(
                     engine,

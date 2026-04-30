@@ -682,3 +682,47 @@ def test_archive_snapshot_runs_only_on_changes(monkeypatch, tmp_path):
     assert len(archive_paths) == 1
     assert metadata_name in archive_paths[0].name
     METADATA_REGISTRY.pop(metadata_name, None)
+
+
+def test_archive_snapshot_skips_unchanged_reserved_member(monkeypatch, tmp_path):
+    engine = create_engine("sqlite:///:memory:")
+    table = "dimension_archive_reserved"
+    metadata_name = "archive_reserved"
+    _create_dimension_table_with_archive(engine, table)
+    register_metadata(
+        metadata_name,
+        {
+            "target_table": table,
+            "natural_key_cols": ["natural_key"],
+            "data_columns": ["data_column"],
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+            "archive_path": str(tmp_path / "snapshots_reserved"),
+            "reserved_source_members": [
+                {
+                    "source_value": "NA",
+                    "surrogate_key": -1,
+                    "join_numeric_key": -1,
+                }
+            ],
+        },
+    )
+
+    archive_calls = []
+    monkeypatch.setattr(
+        "dataprepkit.metadata_loader._archive_snapshot",
+        lambda *args, **kwargs: archive_calls.append(True),
+    )
+    incoming = pd.DataFrame(
+        [
+            {"natural_key": "NA", "data_column": "Not Applicable"},
+            {"natural_key": "A1", "data_column": "Alpha"},
+        ]
+    )
+
+    run_dimension(engine, metadata_name, override_df=incoming)
+    run_dimension(engine, metadata_name, override_df=incoming)
+
+    assert len(archive_calls) == 1
+    METADATA_REGISTRY.pop(metadata_name, None)
