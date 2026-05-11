@@ -259,6 +259,90 @@ def test_load_fact_from_maps_builds_fact_table_from_staging_and_dimensions():
     }
 
 
+def test_load_fact_from_maps_honors_data_column_schema_overrides():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE staging_fact (Value TEXT, External_Row_Id TEXT)"))
+        conn.execute(
+            text(
+                """
+                INSERT INTO staging_fact (Value, External_Row_Id)
+                VALUES ('10.5', 'row-1')
+                """
+            )
+        )
+
+    load_fact_from_maps(
+        engine=engine,
+        lookup_map={},
+        data_columns=[
+            {
+                "column": "Value",
+                "type": "NUMERIC(12, 2)",
+                "nullable": False,
+                "comment": "Actual inserted value",
+            },
+            {
+                "column": "External_Row_Id",
+                "type": "TEXT",
+                "nullable": False,
+                "unique": True,
+            },
+        ],
+        additional_columns=[],
+        staging_table="staging_fact",
+        staging_schema=None,
+        fact_table="fact_result",
+    )
+
+    with engine.connect() as conn:
+        columns = conn.execute(text("PRAGMA table_info(fact_result)")).mappings().all()
+        indexes = conn.execute(text("PRAGMA index_list(fact_result)")).mappings().all()
+
+    column_info = {column["name"]: column for column in columns}
+    assert column_info["Value"]["type"] == "NUMERIC(12, 2)"
+    assert column_info["Value"]["notnull"] == 1
+    assert column_info["External_Row_Id"]["type"] == "TEXT"
+    assert column_info["External_Row_Id"]["notnull"] == 1
+    assert any(
+        index["name"] == "ux_fact_result_External_Row_Id" and index["unique"] == 1
+        for index in indexes
+    )
+
+
+def test_load_fact_from_maps_enforces_unique_data_column():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE staging_fact (External_Row_Id TEXT)"))
+        conn.execute(
+            text(
+                """
+                INSERT INTO staging_fact (External_Row_Id)
+                VALUES ('row-1'), ('row-1')
+                """
+            )
+        )
+
+    with pytest.raises(Exception):
+        load_fact_from_maps(
+            engine=engine,
+            lookup_map={},
+            data_columns=[
+                {
+                    "column": "External_Row_Id",
+                    "type": "TEXT",
+                    "unique": True,
+                }
+            ],
+            additional_columns=[],
+            staging_table="staging_fact",
+            staging_schema=None,
+            fact_table="fact_result",
+        )
+
+
 def test_load_fact_from_maps_drops_and_recreates_existing_fact_table():
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
 

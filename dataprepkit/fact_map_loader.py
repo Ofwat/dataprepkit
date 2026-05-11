@@ -36,6 +36,10 @@ def _build_column_definition(name: str, column_type: str, *, nullable: bool) -> 
     return f"{name} {column_type}{null_sql}"
 
 
+def _unique_index_name(table: str, column: str) -> str:
+    return f"ux_{table}_{column}"
+
+
 def _case_insensitive_column_lookup(columns: Iterable[str]) -> dict[str, str]:
     lookup: dict[str, str] = {}
     for column in columns:
@@ -88,6 +92,24 @@ def _get_column_type(
     raise ValueError(f"Column '{column}' not found in '{location}'.")
 
 
+def _resolve_data_column_type(
+    engine: Engine,
+    *,
+    schema: str | None,
+    table: str,
+    column: Mapping[str, object],
+) -> str:
+    configured_type = column.get("type")
+    if configured_type:
+        return str(configured_type)
+    return _get_column_type(
+        engine,
+        schema=schema,
+        table=table,
+        column=str(column["column"]),
+    )
+
+
 def _get_table_columns(
     engine: Engine,
     *,
@@ -119,13 +141,26 @@ def _table_exists(
     return inspect(engine).has_table(table, schema=schema)
 
 
+def _index_exists(
+    engine: Engine,
+    *,
+    schema: str | None,
+    table: str,
+    index_name: str,
+) -> bool:
+    return any(
+        candidate["name"].casefold() == index_name.casefold()
+        for candidate in inspect(engine).get_indexes(table, schema=schema)
+    )
+
+
 def _validate_staging_columns(
     engine: Engine,
     *,
     schema: str | None,
     table: str,
     lookup_map: Mapping[str, Mapping[str, object]],
-    data_columns: Sequence[Mapping[str, str]],
+    data_columns: Sequence[Mapping[str, object]],
     expected_lookup_columns: Sequence[str] | None = None,
 ) -> tuple[set[str], list[dict[str, object]]]:
     staging_columns = _get_table_columns(engine, schema=schema, table=table)
@@ -357,6 +392,7 @@ def _alter_table_add_column(
     table: str,
     column_name: str,
     column_type: str,
+    nullable: bool,
 ) -> None:
     add_keyword = "ADD" if engine.dialect.name == "mssql" else "ADD COLUMN"
     conn.execute(
@@ -366,8 +402,36 @@ def _alter_table_add_column(
             {add_keyword} {_build_column_definition(
                 _quote_identifier(engine, column_name),
                 column_type,
-                nullable=True,
+                nullable=nullable,
             )}
+            """
+        )
+    )
+
+
+def _create_unique_index(
+    conn,
+    engine: Engine,
+    *,
+    schema: str | None,
+    table: str,
+    column: str,
+) -> None:
+    index_name = _unique_index_name(table, column)
+    if _index_exists(engine, schema=schema, table=table, index_name=index_name):
+        return
+
+    index_sql = _quote_identifier(engine, index_name)
+    table_sql = _render_table_name(engine, schema, table)
+    if engine.dialect.name == "sqlite" and schema:
+        index_sql = f"{_quote_identifier(engine, schema)}.{index_sql}"
+        table_sql = _quote_identifier(engine, table)
+
+    conn.execute(
+        text(
+            f"""
+            CREATE UNIQUE INDEX {index_sql}
+            ON {table_sql} ({_quote_identifier(engine, column)})
             """
         )
     )
@@ -533,7 +597,7 @@ def load_fact_from_maps(
     *,
     engine: Engine,
     lookup_map: Mapping[str, Mapping[str, object]],
-    data_columns: Sequence[Mapping[str, str]],
+    data_columns: Sequence[Mapping[str, object]],
     additional_columns: Sequence[Mapping[str, object]],
     metadata_columns: Sequence[Mapping[str, object]] | None = None,
     runtime_values: Mapping[str, object] | None = None,
@@ -568,6 +632,8 @@ def load_fact_from_maps(
 
     column_definitions: list[tuple[str, str, bool]] = []
     column_comments: dict[str, str] = {}
+    data_column_nullability: dict[str, bool] = {}
+    unique_data_columns: list[str] = []
     base_selects: list[str] = []
     base_joins: list[str] = []
     metadata_selects: list[str] = []
@@ -689,28 +755,32 @@ def load_fact_from_maps(
             column_comments[target_column] = str(target["comment"])
 
     for column in data_columns:
-        column_name = column["column"]
+        column_name = str(column["column"])
         if column_name not in staging_columns:
             continue
         base_selects.append(
             f"s.{_quote_identifier(engine, column_name)} "
             f"AS {_quote_identifier(engine, column_name)}"
         )
+        nullable = bool(column.get("nullable", True))
         column_definitions.append(
             (
                 column_name,
-                _get_column_type(
+                _resolve_data_column_type(
                     engine,
                     schema=staging_schema,
                     table=staging_table,
-                    column=column_name,
+                    column=column,
                 ),
-                True,
+                nullable,
             )
         )
+        data_column_nullability[column_name.casefold()] = nullable
         duplicate_check_columns.append(column_name)
+        if column.get("unique", False):
+            unique_data_columns.append(column_name)
         if column.get("comment"):
-            column_comments[column_name] = column["comment"]
+            column_comments[column_name] = str(column["comment"])
 
     final_selects = [
         f"b.{_quote_identifier(engine, name)} AS {_quote_identifier(engine, name)}"
@@ -834,6 +904,7 @@ def load_fact_from_maps(
                     table=fact_table,
                     column_name=column_name,
                     column_type=column_type,
+                    nullable=data_column_nullability.get(column_name.casefold(), True),
                 )
                 added_fact_columns.add(column_name)
             for active_lookup in active_lookups:
@@ -878,6 +949,14 @@ def load_fact_from_maps(
                 )
             ):
                 return
+        for column_name in unique_data_columns:
+            _create_unique_index(
+                conn,
+                engine,
+                schema=fact_schema,
+                table=fact_table,
+                column=column_name,
+            )
         conn.execute(
             text(
                 f"""
