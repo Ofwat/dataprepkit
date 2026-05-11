@@ -343,6 +343,53 @@ def test_load_fact_from_maps_enforces_unique_data_column():
         )
 
 
+def test_load_fact_from_maps_append_mode_backfills_new_data_column():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE staging_fact (Value REAL, Quality_Flag TEXT)"))
+        conn.execute(
+            text(
+                """
+                INSERT INTO staging_fact (Value, Quality_Flag)
+                VALUES (1.5, 'new'), (2.5, 'checked')
+                """
+            )
+        )
+        conn.execute(text("CREATE TABLE fact_result (Value REAL)"))
+        conn.execute(text("INSERT INTO fact_result (Value) VALUES (1.5)"))
+
+    load_fact_from_maps(
+        engine=engine,
+        lookup_map={},
+        data_columns=[
+            {"column": "Value"},
+            {
+                "column": "Quality_Flag",
+                "type": "TEXT",
+                "nullable": False,
+                "backfill_existing_rows": "legacy",
+            },
+        ],
+        additional_columns=[],
+        staging_table="staging_fact",
+        staging_schema=None,
+        fact_table="fact_result",
+        mode="append",
+    )
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT Value, Quality_Flag FROM fact_result ORDER BY Value")
+        ).mappings().all()
+
+    assert rows == [
+        {"Value": 1.5, "Quality_Flag": "legacy"},
+        {"Value": 1.5, "Quality_Flag": "new"},
+        {"Value": 2.5, "Quality_Flag": "checked"},
+    ]
+
+
 def test_load_fact_from_maps_drops_and_recreates_existing_fact_table():
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
 

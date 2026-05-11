@@ -409,6 +409,27 @@ def _alter_table_add_column(
     )
 
 
+def _alter_column_not_null(
+    conn,
+    engine: Engine,
+    *,
+    schema: str | None,
+    table: str,
+    column_name: str,
+    column_type: str,
+) -> None:
+    if engine.dialect.name != "mssql":
+        return
+    conn.execute(
+        text(
+            f"""
+            ALTER TABLE {_render_table_name(engine, schema, table)}
+            ALTER COLUMN {_quote_identifier(engine, column_name)} {column_type} NOT NULL
+            """
+        )
+    )
+
+
 def _create_unique_index(
     conn,
     engine: Engine,
@@ -633,6 +654,8 @@ def load_fact_from_maps(
     column_definitions: list[tuple[str, str, bool]] = []
     column_comments: dict[str, str] = {}
     data_column_nullability: dict[str, bool] = {}
+    data_column_backfills: dict[str, object] = {}
+    data_column_types: dict[str, str] = {}
     unique_data_columns: list[str] = []
     base_selects: list[str] = []
     base_joins: list[str] = []
@@ -763,19 +786,25 @@ def load_fact_from_maps(
             f"AS {_quote_identifier(engine, column_name)}"
         )
         nullable = bool(column.get("nullable", True))
+        column_type = _resolve_data_column_type(
+            engine,
+            schema=staging_schema,
+            table=staging_table,
+            column=column,
+        )
         column_definitions.append(
             (
                 column_name,
-                _resolve_data_column_type(
-                    engine,
-                    schema=staging_schema,
-                    table=staging_table,
-                    column=column,
-                ),
+                column_type,
                 nullable,
             )
         )
         data_column_nullability[column_name.casefold()] = nullable
+        data_column_types[column_name.casefold()] = column_type
+        if "backfill_existing_rows" in column:
+            data_column_backfills[column_name.casefold()] = column[
+                "backfill_existing_rows"
+            ]
         duplicate_check_columns.append(column_name)
         if column.get("unique", False):
             unique_data_columns.append(column_name)
@@ -897,6 +926,8 @@ def load_fact_from_maps(
             for column_name, column_type, _ in column_definitions:
                 if column_name.casefold() in existing_fact_column_lookup:
                     continue
+                column_key = column_name.casefold()
+                has_data_backfill = column_key in data_column_backfills
                 _alter_table_add_column(
                     conn,
                     engine,
@@ -904,9 +935,36 @@ def load_fact_from_maps(
                     table=fact_table,
                     column_name=column_name,
                     column_type=column_type,
-                    nullable=data_column_nullability.get(column_name.casefold(), True),
+                    nullable=(
+                        True
+                        if has_data_backfill
+                        else data_column_nullability.get(column_key, True)
+                    ),
                 )
                 added_fact_columns.add(column_name)
+            for column_name in added_fact_columns:
+                column_key = column_name.casefold()
+                if column_key not in data_column_backfills:
+                    continue
+                conn.execute(
+                    text(
+                        f"""
+                        UPDATE {fact_sql}
+                        SET {_quote_identifier(engine, column_name)} = :backfill_value
+                        WHERE {_quote_identifier(engine, column_name)} IS NULL
+                        """
+                    ),
+                    {"backfill_value": data_column_backfills[column_key]},
+                )
+                if not data_column_nullability.get(column_key, True):
+                    _alter_column_not_null(
+                        conn,
+                        engine,
+                        schema=fact_schema,
+                        table=fact_table,
+                        column_name=column_name,
+                        column_type=data_column_types[column_key],
+                    )
             for active_lookup in active_lookups:
                 target_column = active_lookup["config"]["target"]["column"]
                 if target_column not in added_fact_columns:
