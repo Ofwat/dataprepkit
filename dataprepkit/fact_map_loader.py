@@ -567,6 +567,38 @@ def _resolve_lookup_value(
     return row["resolved_value"]
 
 
+def _validate_projected_row_count(
+    conn,
+    *,
+    staging_sql: str,
+    base_select_sql: str,
+    join_sql: str,
+    projected_rows_sql: str,
+    params: Mapping[str, object],
+) -> None:
+    staging_count = conn.execute(
+        text(f"SELECT COUNT(1) FROM {staging_sql}")
+    ).scalar_one()
+    projected_count = conn.execute(
+        text(
+            f"""
+            WITH base_rows AS (
+                SELECT {base_select_sql}
+                FROM {staging_sql} s
+                {join_sql}
+            )
+            SELECT COUNT(1) FROM ({projected_rows_sql}) projected_rows
+            """
+        ),
+        dict(params),
+    ).scalar_one()
+    if projected_count != staging_count:
+        raise RuntimeError(
+            "Projected fact row count must match staging row count before insert. "
+            f"Staging rows: {staging_count}; projected fact rows: {projected_count}."
+        )
+
+
 def _validate_lookup_matches(
     engine: Engine,
     *,
@@ -995,6 +1027,14 @@ def load_fact_from_maps(
             f"SELECT 1 FROM {fact_sql} e WHERE {duplicate_predicate}"
             f")"
         )
+    insert_params = {
+        **{
+            key: value
+            for active_lookup in active_lookups
+            for key, value in active_lookup["lookup_params"].items()
+        },
+        **metadata_params,
+    }
 
     with engine.begin() as conn:
         if mode == "replace":
@@ -1104,6 +1144,14 @@ def load_fact_from_maps(
                 table=fact_table,
                 column=column_name,
             )
+        _validate_projected_row_count(
+            conn,
+            staging_sql=staging_sql,
+            base_select_sql=base_select_sql,
+            join_sql=join_sql,
+            projected_rows_sql=projected_rows_sql,
+            params=insert_params,
+        )
         conn.execute(
             text(
                 f"""
@@ -1116,14 +1164,7 @@ def load_fact_from_maps(
                 {final_source_sql}
                 """
             ),
-            {
-                **{
-                    key: value
-                    for active_lookup in active_lookups
-                    for key, value in active_lookup["lookup_params"].items()
-                },
-                **metadata_params,
-            },
+            insert_params,
         )
 
     _apply_comments(

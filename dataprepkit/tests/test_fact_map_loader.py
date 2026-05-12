@@ -311,6 +311,59 @@ def test_load_fact_from_maps_matches_lookup_keys_case_sensitively():
     assert rows == [{"Measure_Instance_Id": 202}]
 
 
+def test_load_fact_from_maps_rejects_projected_row_count_mismatch():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE staging_fact (Measure_Cd TEXT)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_measure (
+                    Measure_Cd TEXT,
+                    Measure_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(text("INSERT INTO staging_fact (Measure_Cd) VALUES ('BIO')"))
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_measure (Measure_Cd, Measure_Instance_Id)
+                VALUES ('BIO', 201), ('BIO', 202)
+                """
+            )
+        )
+
+    with pytest.raises(RuntimeError, match="Projected fact row count"):
+        load_fact_from_maps(
+            engine=engine,
+            lookup_map={
+                "Measure_Cd": {
+                    "source": {
+                        "table": "dim_measure",
+                        "lookup_column": "Measure_Cd",
+                        "value_column": "Measure_Instance_Id",
+                    },
+                    "target": {"column": "Measure_Instance_Id"},
+                }
+            },
+            data_columns=[],
+            additional_columns=[],
+            staging_table="staging_fact",
+            staging_schema=None,
+            fact_table="fact_result",
+        )
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT COUNT(1) AS row_count FROM fact_result")
+        ).mappings().one()
+
+    assert rows["row_count"] == 0
+
+
 def test_load_fact_from_maps_honors_data_column_schema_overrides():
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
 
