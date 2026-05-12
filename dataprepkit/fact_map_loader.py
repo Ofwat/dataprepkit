@@ -66,6 +66,27 @@ def _default_datetime_type(engine: Engine) -> str:
     return "TEXT"
 
 
+def _is_text_like_type(type_name: str | None) -> bool:
+    if not type_name:
+        return False
+    normalized = type_name.strip().upper()
+    return any(token in normalized for token in ("CHAR", "TEXT", "CLOB"))
+
+
+def _case_sensitive_match_expression(
+    engine: Engine,
+    expression: str,
+    column_type: str | None,
+) -> str:
+    if not _is_text_like_type(column_type):
+        return expression
+    if engine.dialect.name == "sqlite":
+        return f"{expression} COLLATE BINARY"
+    if engine.dialect.name == "mssql":
+        return f"{expression} COLLATE Latin1_General_100_BIN2"
+    return expression
+
+
 def _fact_pk_clause(engine: Engine, column_name: str) -> str:
     if engine.dialect.name == "mssql":
         return f"{_quote_identifier(engine, column_name)} INT IDENTITY(1,1) PRIMARY KEY"
@@ -300,10 +321,37 @@ def _format_missing_lookup_error(
             f"OR {dim_alias}.{_quote_identifier(engine, current_column)} IS NULL)"
         )
 
-    effective_lookup_sql = lookup_sql or f"s.{_quote_identifier(engine, staging_column)}"
+    effective_lookup_sql = (
+        lookup_sql or f"s.{_quote_identifier(engine, staging_column)}"
+    )
+    dim_lookup_type = _get_column_type(
+        engine,
+        schema=dim_schema,
+        table=dim_table,
+        column=dim_lookup_column,
+    )
+    staging_lookup_type = (
+        dim_lookup_type
+        if lookup_value is not None
+        else _get_column_type(
+            engine,
+            schema=staging_schema,
+            table=staging_table,
+            column=staging_column,
+        )
+    )
+    dim_lookup_sql = _case_sensitive_match_expression(
+        engine,
+        f"{dim_alias}.{_quote_identifier(engine, dim_lookup_column)}",
+        dim_lookup_type,
+    )
+    effective_lookup_sql = _case_sensitive_match_expression(
+        engine,
+        effective_lookup_sql,
+        staging_lookup_type,
+    )
     predicate = (
-        f"{dim_alias}.{_quote_identifier(engine, dim_lookup_column)} = "
-        f"{effective_lookup_sql}{current_clause}"
+        f"{dim_lookup_sql} = {effective_lookup_sql}{current_clause}"
     )
     where_clause = f"{dim_alias}.{_quote_identifier(engine, required_column)} IS NULL"
     sample_select = (
@@ -481,12 +529,28 @@ def _resolve_lookup_value(
             f" AND ({dim_alias}.{_quote_identifier(engine, current_column)} = 1 "
             f"OR {dim_alias}.{_quote_identifier(engine, current_column)} IS NULL)"
         )
+    lookup_column_type = _get_column_type(
+        engine,
+        schema=dim_schema,
+        table=dim_table,
+        column=dim_lookup_column,
+    )
+    dim_lookup_sql = _case_sensitive_match_expression(
+        engine,
+        f"{dim_alias}.{_quote_identifier(engine, dim_lookup_column)}",
+        lookup_column_type,
+    )
+    lookup_value_sql = _case_sensitive_match_expression(
+        engine,
+        ":lookup_value",
+        lookup_column_type,
+    )
     row = conn.execute(
         text(
             f"""
             SELECT {dim_alias}.{_quote_identifier(engine, required_column)} AS resolved_value
             FROM {dim_sql} {dim_alias}
-            WHERE {dim_alias}.{_quote_identifier(engine, dim_lookup_column)} = :lookup_value
+            WHERE {dim_lookup_sql} = {lookup_value_sql}
             {current_clause}
             """
         ),
@@ -699,6 +763,32 @@ def load_fact_from_maps(
         source_lookup_column = source["lookup_column"]
         source_value_column = source["value_column"]
         alias = f"lookup_{index}"
+        source_lookup_type = _get_column_type(
+            engine,
+            schema=source_schema,
+            table=source_table,
+            column=source_lookup_column,
+        )
+        staging_lookup_type = (
+            source_lookup_type
+            if active_lookup["lookup_value"] is not None
+            else _get_column_type(
+                engine,
+                schema=staging_schema,
+                table=staging_table,
+                column=staging_column,
+            )
+        )
+        source_lookup_sql = _case_sensitive_match_expression(
+            engine,
+            f"{alias}.{_quote_identifier(engine, source_lookup_column)}",
+            source_lookup_type,
+        )
+        staging_lookup_sql = _case_sensitive_match_expression(
+            engine,
+            str(active_lookup["lookup_sql"]),
+            staging_lookup_type,
+        )
         current_clause = ""
         current_column = _get_current_indicator_column(
             engine,
@@ -714,8 +804,7 @@ def load_fact_from_maps(
         base_joins.append(
             "LEFT JOIN "
             f"{_render_table_name(engine, source_schema, source_table)} {alias} "
-            f"ON {alias}.{_quote_identifier(engine, source_lookup_column)} = "
-            f"{active_lookup['lookup_sql']}{current_clause}"
+            f"ON {source_lookup_sql} = {staging_lookup_sql}{current_clause}"
         )
         base_selects.append(
             f"{alias}.{_quote_identifier(engine, source_value_column)} "

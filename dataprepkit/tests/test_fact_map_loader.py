@@ -259,6 +259,58 @@ def test_load_fact_from_maps_builds_fact_table_from_staging_and_dimensions():
     }
 
 
+def test_load_fact_from_maps_matches_lookup_keys_case_sensitively():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE staging_fact (Measure_Cd TEXT COLLATE NOCASE)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_measure (
+                    Measure_Cd TEXT COLLATE NOCASE,
+                    Measure_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(text("INSERT INTO staging_fact (Measure_Cd) VALUES ('BIO')"))
+        conn.execute(
+            text(
+                """
+                INSERT INTO dim_measure (Measure_Cd, Measure_Instance_Id)
+                VALUES ('Bio', 201), ('BIO', 202)
+                """
+            )
+        )
+
+    load_fact_from_maps(
+        engine=engine,
+        lookup_map={
+            "Measure_Cd": {
+                "source": {
+                    "table": "dim_measure",
+                    "lookup_column": "Measure_Cd",
+                    "value_column": "Measure_Instance_Id",
+                },
+                "target": {"column": "Measure_Instance_Id"},
+            }
+        },
+        data_columns=[],
+        additional_columns=[],
+        staging_table="staging_fact",
+        staging_schema=None,
+        fact_table="fact_result",
+    )
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT Measure_Instance_Id FROM fact_result")
+        ).mappings().all()
+
+    assert rows == [{"Measure_Instance_Id": 202}]
+
+
 def test_load_fact_from_maps_honors_data_column_schema_overrides():
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
 
