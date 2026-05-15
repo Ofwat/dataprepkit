@@ -107,6 +107,33 @@ class SQLDatabaseEndpoint:
     resource_id: str | None
 
 
+@dataclass(frozen=True)
+class SQLMetadataRefresh:
+    sql_endpoint_id: str
+    operation_id: str | None
+    location: str | None
+    status_code: int
+    data: dict
+
+
+def _get_header(headers: dict, name: str) -> str | None:
+    return headers.get(name) or headers.get(name.lower())
+
+
+def _response_json(response) -> dict:
+    return response.json() if response.content else {}
+
+
+def _retry_after_seconds(headers: dict, default: float) -> float:
+    retry_after = _get_header(headers, "Retry-After")
+    if retry_after is None:
+        return default
+    try:
+        return float(retry_after)
+    except ValueError:
+        return default
+
+
 def get_sql_db_endpoint(workspace_name: str, sql_db_display_name: str) -> SQLDatabaseEndpoint:
     if credentials is None:
         raise ImportError("notebookutils.credentials is required for Fabric SQL metadata.")
@@ -147,6 +174,112 @@ def get_sql_db_endpoint(workspace_name: str, sql_db_display_name: str) -> SQLDat
 
     raise ValueError(
         f"SQL database '{sql_db_display_name}' not found in workspace '{workspace_name}'"
+    )
+
+
+def refresh_sql_endpoint(
+    workspace_name: str,
+    sql_endpoint_display_name: str,
+    recreate_tables: bool = False,
+    timeout_minutes: int = 15,
+    wait_for_completion: bool = True,
+    poll_interval_seconds: float = 5.0,
+    max_wait_seconds: float | None = None,
+) -> SQLMetadataRefresh:
+    if credentials is None:
+        raise ImportError("notebookutils.credentials is required for Fabric SQL metadata.")
+    token = credentials.getToken("https://api.fabric.microsoft.com")
+
+    if fabric is None:
+        raise ImportError("sempy.fabric is required to list workspaces.")
+
+    if requests is None:
+        raise ImportError("requests is required to call the Fabric SQL metadata API.")
+
+    ws_df = fabric.list_workspaces()
+    matches = ws_df[ws_df["Name"] == workspace_name]
+
+    if matches.empty:
+        raise ValueError(f"Workspace '{workspace_name}' not found")
+
+    workspace_id = matches["Id"].iloc[0]
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    endpoints_url = (
+        f"https://api.fabric.microsoft.com/v1/workspaces/{workspace_id}/sqlEndpoints"
+    )
+    endpoints_response = requests.get(endpoints_url, headers=headers)
+    endpoints_response.raise_for_status()
+
+    for endpoint in endpoints_response.json().get("value", []):
+        if endpoint.get("displayName") != sql_endpoint_display_name:
+            continue
+
+        sql_endpoint_id = endpoint.get("id")
+        refresh_url = (
+            "https://api.fabric.microsoft.com/v1/workspaces/"
+            f"{workspace_id}/sqlEndpoints/{sql_endpoint_id}/refreshMetadata"
+        )
+        payload = {
+            "recreateTables": recreate_tables,
+            "timeout": {"value": timeout_minutes, "timeUnit": "Minutes"},
+        }
+        refresh_response = requests.post(refresh_url, headers=headers, json=payload)
+        refresh_response.raise_for_status()
+        operation_id = _get_header(refresh_response.headers, "x-ms-operation-id")
+        location = _get_header(refresh_response.headers, "Location")
+        data = _response_json(refresh_response)
+
+        if wait_for_completion and refresh_response.status_code == 202:
+            if operation_id is None:
+                raise RuntimeError(
+                    "Fabric refresh returned 202 without an operation ID."
+                )
+
+            operation_url = (
+                f"https://api.fabric.microsoft.com/v1/operations/{operation_id}"
+            )
+            elapsed_seconds = 0.0
+            sleep_seconds = _retry_after_seconds(
+                refresh_response.headers,
+                poll_interval_seconds,
+            )
+
+            while True:
+                if max_wait_seconds is not None and elapsed_seconds >= max_wait_seconds:
+                    raise TimeoutError(
+                        "Timed out waiting for SQL endpoint metadata refresh "
+                        f"operation '{operation_id}'."
+                    )
+                time.sleep(sleep_seconds)
+                elapsed_seconds += sleep_seconds
+
+                status_response = requests.get(operation_url, headers=headers)
+                status_response.raise_for_status()
+                data = _response_json(status_response)
+                location = _get_header(status_response.headers, "Location") or location
+
+                if data.get("status") in {"Succeeded", "Failed"}:
+                    break
+
+                sleep_seconds = _retry_after_seconds(
+                    status_response.headers,
+                    poll_interval_seconds,
+                )
+
+        return SQLMetadataRefresh(
+            sql_endpoint_id=sql_endpoint_id,
+            operation_id=operation_id,
+            location=location,
+            status_code=refresh_response.status_code,
+            data=data,
+        )
+
+    raise ValueError(
+        "SQL endpoint "
+        f"'{sql_endpoint_display_name}' not found in workspace '{workspace_name}'"
     )
 
 
