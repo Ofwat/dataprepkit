@@ -684,6 +684,28 @@ def test_archive_snapshot_runs_only_on_changes(monkeypatch, tmp_path):
     METADATA_REGISTRY.pop(metadata_name, None)
 
 
+def test_archive_snapshot_writes_once_for_repeated_identical_load(tmp_path, caplog):
+    engine = create_engine("sqlite:///:memory:")
+    table = "dimension_archive_real_skip"
+    metadata_name = "archive_real_skip"
+    archive_path = tmp_path / "snapshots_real_skip"
+    _create_dimension_table_with_archive(engine, table)
+    _register_archive_metadata(metadata_name, table, archive_path)
+
+    incoming = pd.DataFrame([{"natural_key": "x", "data_column": "v"}])
+    caplog.set_level(logging.WARNING)
+
+    run_dimension(engine, metadata_name, override_df=incoming)
+    first_files = list(archive_path.glob("*.parquet"))
+    if not first_files and not caplog.text:
+        pytest.skip("Parquet writing not available in this environment")
+
+    run_dimension(engine, metadata_name, override_df=incoming)
+
+    assert len(list(archive_path.glob("*.parquet"))) == len(first_files)
+    METADATA_REGISTRY.pop(metadata_name, None)
+
+
 def test_archive_snapshot_skips_unchanged_reserved_member(monkeypatch, tmp_path):
     engine = create_engine("sqlite:///:memory:")
     table = "dimension_archive_reserved"

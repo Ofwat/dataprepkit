@@ -908,7 +908,7 @@ def _apply_snapshot_to_target(
           )
         """
     )
-    delete_result = conn.execute(delete_sql, {"execution_time": execution_time})
+    conn.execute(delete_sql, {"execution_time": execution_time})
 
     update_changed_sql = text(
         f"""
@@ -925,7 +925,7 @@ def _apply_snapshot_to_target(
           )
         """
     )
-    update_changed_result = conn.execute(
+    conn.execute(
         update_changed_sql,
         {"execution_time": execution_time},
     )
@@ -944,7 +944,7 @@ def _apply_snapshot_to_target(
           )
         """
     )
-    update_reactivated_result = conn.execute(
+    conn.execute(
         update_reactivated_sql,
         {"execution_time": execution_time},
     )
@@ -1029,15 +1029,7 @@ def _apply_snapshot_to_target(
         params["batch_id"] = batch_id
     if has_archive_filename and archive_filename is not None:
         params["archive_filename"] = archive_filename
-    insert_result = conn.execute(insert_sql, params)
-    if summary.inserted_rows == 0 and (insert_result.rowcount or 0) > 0:
-        summary.inserted_rows = insert_result.rowcount or 0
-    if summary.edited_rows == 0 and (update_changed_result.rowcount or 0) > 0:
-        summary.edited_rows = update_changed_result.rowcount or 0
-    if summary.soft_deleted_rows == 0 and (delete_result.rowcount or 0) > 0:
-        summary.soft_deleted_rows = delete_result.rowcount or 0
-    if summary.reactivated_rows == 0 and (update_reactivated_result.rowcount or 0) > 0:
-        summary.reactivated_rows = update_reactivated_result.rowcount or 0
+    conn.execute(insert_sql, params)
     return summary
 
 
