@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 from dataprepkit.metadata_loader import (
     METADATA_REGISTRY,
     _post_scd2_validation,
+    _reserved_member_matches,
     register_metadata,
     run_dimension,
 )
@@ -703,6 +704,42 @@ def test_archive_snapshot_writes_once_for_repeated_identical_load(tmp_path, capl
     run_dimension(engine, metadata_name, override_df=incoming)
 
     assert len(list(archive_path.glob("*.parquet"))) == len(first_files)
+    METADATA_REGISTRY.pop(metadata_name, None)
+
+
+def test_reserved_member_match_accepts_equivalent_timestamp_values():
+    metadata_name = "archive_reserved_timestamp"
+    register_metadata(
+        metadata_name,
+        {
+            "target_table": "dimension_reserved_timestamp",
+            "natural_key_cols": ["natural_key"],
+            "data_columns": ["data_column"],
+            "surrogate_key": "surrogate_key",
+            "join_numeric_key": "join_numeric_key",
+            "filepath": "unused.csv",
+        },
+    )
+    metadata = METADATA_REGISTRY[metadata_name]
+
+    assert _reserved_member_matches(
+        {
+            "join_numeric_key": -1,
+            "row_hash": "abc",
+            "Update_Date": None,
+            "Effective_Date_Start": pd.Timestamp("1900-01-01 00:00:00"),
+            "Effective_Date_End": pd.Timestamp("9999-12-31 23:59:59.999"),
+            "Current_Ind": 1,
+            "Deleted_Ind": 0,
+            "natural_key": "NA",
+            "data_column": "Not Applicable",
+        },
+        metadata=metadata,
+        natural_key_values={"natural_key": "NA"},
+        data_values={"data_column": "Not Applicable"},
+        row_hash="abc",
+        join_numeric_key=-1,
+    )
     METADATA_REGISTRY.pop(metadata_name, None)
 
 

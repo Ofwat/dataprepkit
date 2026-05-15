@@ -615,7 +615,32 @@ def _reserved_member_matches(
         **natural_key_values,
         **data_values,
     }
-    return all(existing[column] == value for column, value in expected.items())
+    return all(
+        _reserved_member_value_matches(existing[column], value)
+        for column, value in expected.items()
+    )
+
+
+def _reserved_member_value_matches(existing: Any, expected: Any) -> bool:
+    if existing == expected:
+        return True
+    if existing is None or expected is None:
+        return existing is None and expected is None
+    existing_ts = _try_parse_timestamp(existing)
+    expected_ts = _try_parse_timestamp(expected)
+    if existing_ts is not None and expected_ts is not None:
+        return existing_ts == expected_ts
+    return existing == expected
+
+
+def _try_parse_timestamp(value: Any) -> pd.Timestamp | None:
+    try:
+        timestamp = pd.Timestamp(value)
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(timestamp):
+        return None
+    return timestamp
 
 
 def _raise_on_reserved_member_conflict(
