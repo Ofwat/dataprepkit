@@ -9,9 +9,10 @@ from pandas.api.types import (
     is_datetime64_any_dtype,
     is_datetime64tz_dtype,
     is_object_dtype,
+    is_string_dtype,
 )
 from sqlalchemy import Engine, inspect, text
-from sqlalchemy.dialects.mssql import DATETIME2
+from sqlalchemy.dialects.mssql import DATETIME2, NVARCHAR
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.sql.elements import quoted_name
 from dataprepkit.fact_loader import (
@@ -95,6 +96,16 @@ def _normalize_for_parquet(df: pd.DataFrame) -> pd.DataFrame:
     return normalized
 
 
+def _mssql_dtype_overrides(df: pd.DataFrame) -> dict[str, object]:
+    overrides: dict[str, object] = {}
+    for col, dtype in df.dtypes.items():
+        if is_datetime64_any_dtype(dtype) or is_datetime64tz_dtype(dtype):
+            overrides[col] = DATETIME2(precision=3)
+        elif is_object_dtype(dtype) or is_string_dtype(dtype):
+            overrides[col] = NVARCHAR(length=4000)
+    return overrides
+
+
 def stage_dataframe(
     engine: Engine,
     table_name: str,
@@ -156,11 +167,7 @@ def stage_dataframe(
         schema_for_sql = None
 
     if engine.dialect.name == "mssql":
-        dtype_overrides = {
-            col: DATETIME2(precision=3)
-            for col, dtype in df.dtypes.items()
-            if is_datetime64_any_dtype(dtype) or is_datetime64tz_dtype(dtype)
-        }
+        dtype_overrides = _mssql_dtype_overrides(df)
 
         if use_copy_into_parquet:
             if not parquet_base_dir:

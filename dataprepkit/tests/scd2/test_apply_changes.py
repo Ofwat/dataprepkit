@@ -269,6 +269,31 @@ def test_apply_changes_repeated_insert_is_idempotent():
     assert first_count == second_count == len(initial_rows), "Repeated inserts should not add rows"
 
 
+def test_apply_changes_non_parquet_preserves_unicode_natural_key_and_data():
+    engine = create_engine("sqlite:///:memory:")
+    _bootstrap_table(engine, [])
+
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=pd.DataFrame(
+            [{"join_key": "ŵ-key", "join_numeric_key": 1, "data_column": "name ŵ"}]
+        ),
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    final = _read_table(engine)
+    current = final.loc[final.Current_Ind == 1].iloc[0]
+    assert current["join_key"] == "ŵ-key"
+    assert current["data_column"] == "name ŵ"
+    assert current["join_key"] != "w-key"
+    assert current["data_column"] != "name w"
+
+
 def test_delete_marks_row_as_historical():
     engine = create_engine("sqlite:///:memory:")
     initial_rows = [

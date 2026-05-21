@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.dialects.mssql import DATETIME2
+from sqlalchemy.dialects.mssql import DATETIME2, NVARCHAR
 from sqlalchemy.exc import ProgrammingError
 
 from dataprepkit.metadata_loader import (
@@ -711,6 +711,57 @@ def test_stage_dataframe_mssql_datetime_columns_use_datetime2(monkeypatch):
     assert dtype["start_ts"].precision == 3
     assert dtype["end_ts"].precision == 3
     assert "id" not in dtype
+
+
+def test_stage_dataframe_copy_into_creates_unicode_raw_string_columns(monkeypatch, tmp_path):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeConn:
+        def execute(self, statement, params=None):
+            pass
+
+    class _FakeBegin:
+        def __enter__(self):
+            return _FakeConn()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+        def begin(self):
+            return _FakeBegin()
+
+    class _FakeInspector:
+        @staticmethod
+        def has_table(_table, schema=None):
+            return False
+
+    captured = {}
+
+    def fake_to_sql(self, name, con, if_exists, index, schema, dtype=None):
+        captured["dtype"] = dtype
+
+    monkeypatch.setattr("dataprepkit.helpers.staging.ensure_schema_exists", lambda *_: None)
+    monkeypatch.setattr("dataprepkit.helpers.staging.inspect", lambda _: _FakeInspector())
+    monkeypatch.setattr(pd.DataFrame, "to_sql", fake_to_sql)
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", lambda self, path, index=False: None)
+
+    stage_dataframe(
+        _FakeEngine(),
+        "stage_table",
+        pd.DataFrame({"Name": ["ŵ"], "Amount": [1]}),
+        schema="dbo",
+        use_copy_into_parquet=True,
+        parquet_base_dir=str(tmp_path),
+    )
+
+    dtype = captured["dtype"]
+    assert isinstance(dtype["Name"], NVARCHAR)
+    assert dtype["Name"].length == 4000
+    assert "Amount" not in dtype
 
 
 def test_stage_dataframe_copy_into_requires_parquet_base_dir():
