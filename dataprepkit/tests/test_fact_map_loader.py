@@ -1902,7 +1902,7 @@ def test_load_fact_from_maps_append_mode_inserts_changed_rows_across_batches():
     ]
 
 
-def test_load_fact_from_maps_append_mode_adds_lookup_column_and_backfills_existing_rows():
+def test_load_fact_from_maps_append_mode_uses_distinct_fallbacks_for_existing_and_new_rows():
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
 
     with engine.begin() as conn:
