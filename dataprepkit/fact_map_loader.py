@@ -73,6 +73,30 @@ def _is_text_like_type(type_name: str | None) -> bool:
     return any(token in normalized for token in ("CHAR", "TEXT", "CLOB"))
 
 
+def _is_float_like_type(type_name: str | None) -> bool:
+    if not type_name:
+        return False
+    normalized = type_name.strip().upper().split("(", maxsplit=1)[0].strip()
+    return normalized in {"FLOAT", "REAL"}
+
+
+def _data_column_select_expression(
+    engine: Engine,
+    *,
+    column_name: str,
+    staging_type: str | None,
+    target_type: str | None,
+) -> str:
+    source_expr = f"s.{_quote_identifier(engine, column_name)}"
+    if (
+        engine.dialect.name == "mssql"
+        and _is_float_like_type(staging_type)
+        and _is_text_like_type(target_type)
+    ):
+        return f"CONVERT(VARCHAR(4000), CAST({source_expr} AS DECIMAL(38,18)))"
+    return source_expr
+
+
 def _case_sensitive_match_expression(
     engine: Engine,
     expression: str,
@@ -902,17 +926,28 @@ def load_fact_from_maps(
         column_name = str(column["column"])
         if column_name not in staging_columns:
             continue
-        base_selects.append(
-            f"s.{_quote_identifier(engine, column_name)} "
-            f"AS {_quote_identifier(engine, column_name)}"
+        staging_type = _get_column_type(
+            engine,
+            schema=staging_schema,
+            table=staging_table,
+            column=column_name,
         )
-        nullable = bool(column.get("nullable", True))
         column_type = _resolve_data_column_type(
             engine,
             schema=staging_schema,
             table=staging_table,
             column=column,
         )
+        source_expr = _data_column_select_expression(
+            engine,
+            column_name=column_name,
+            staging_type=staging_type,
+            target_type=column_type,
+        )
+        base_selects.append(
+            f"{source_expr} AS {_quote_identifier(engine, column_name)}"
+        )
+        nullable = bool(column.get("nullable", True))
         column_definitions.append(
             (
                 column_name,

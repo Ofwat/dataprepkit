@@ -3,12 +3,49 @@ from sqlalchemy import create_engine, text
 import shutil
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
 import dataprepkit.fact_map_loader as fact_map_loader_module
 from dataprepkit.fact_map_loader import load_fact_from_maps
+
+
+def test_data_column_select_expression_casts_mssql_float_to_text():
+    engine = SimpleNamespace(dialect=SimpleNamespace(name="mssql"))
+
+    expression = fact_map_loader_module._data_column_select_expression(
+        engine,
+        column_name="Measure_Value",
+        staging_type="FLOAT",
+        target_type="VARCHAR(4000)",
+    )
+
+    assert expression == (
+        "CONVERT(VARCHAR(4000), "
+        "CAST(s.[Measure_Value] AS DECIMAL(38,18)))"
+    )
+
+
+def test_data_column_select_expression_keeps_non_float_types_unchanged():
+    engine = SimpleNamespace(dialect=SimpleNamespace(name="mssql"))
+
+    decimal_expression = fact_map_loader_module._data_column_select_expression(
+        engine,
+        column_name="Measure_Value",
+        staging_type="DECIMAL(20,14)",
+        target_type="VARCHAR(4000)",
+    )
+    numeric_target_expression = fact_map_loader_module._data_column_select_expression(
+        engine,
+        column_name="Measure_Value",
+        staging_type="FLOAT",
+        target_type="DECIMAL(38,18)",
+    )
+
+    assert decimal_expression == "s.[Measure_Value]"
+    assert numeric_target_expression == "s.[Measure_Value]"
 
 
 def test_load_fact_from_maps_builds_fact_table_from_staging_and_dimensions():
