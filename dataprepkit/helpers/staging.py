@@ -77,6 +77,17 @@ def _clean_sql_type(type_name: str) -> str:
     return re.sub(r"\s+COLLATE\s+\S+", "", cleaned, flags=re.IGNORECASE)
 
 
+def _render_reflected_sql_type(
+    column_type,
+    engine: Engine,
+) -> str:
+    if isinstance(column_type, str):
+        rendered = column_type
+    else:
+        rendered = column_type.compile(dialect=engine.dialect)
+    return _clean_sql_type(rendered)
+
+
 def _render_table_name(engine: Engine, schema: str | None, table: str) -> str:
     if engine.dialect.name == "mssql":
         table_sql = _quote_mssql_identifier(table)
@@ -403,7 +414,7 @@ def clone_table(
     column_defs: list[str] = []
     for column in columns:
         name = str(column["name"])
-        col_type = _clean_sql_type(str(column["type"]))
+        col_type = _render_reflected_sql_type(column["type"], target_engine)
         col_def = f"{_quote_identifier(target_engine, name)} {col_type}"
         col_def += " NULL" if column.get("nullable") else " NOT NULL"
         if column.get("autoincrement") and target_engine.dialect.name == "mssql":
@@ -482,7 +493,7 @@ def clone_table(
                 _quote_identifier(target_engine, str(column["name"])) for column in columns
             )
             select_sql = ", ".join(
-                f"TRY_CAST(NULLIF(src.{_quote_identifier(target_engine, str(column['name']))}, '') AS {_clean_sql_type(str(column['type']))})"
+                f"TRY_CAST(NULLIF(src.{_quote_identifier(target_engine, str(column['name']))}, '') AS {_render_reflected_sql_type(column['type'], target_engine)})"
                 for column in columns
             )
             insert_sql = text(

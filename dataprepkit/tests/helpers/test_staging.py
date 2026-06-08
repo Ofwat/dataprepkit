@@ -344,6 +344,7 @@ def test_clone_table_uses_parquet_branch_when_requested(monkeypatch, tmp_path):
     assert captured["kwargs"]["use_copy_into_parquet"] is True
     assert captured["kwargs"]["parquet_base_dir"] == str(tmp_path)
     assert captured["kwargs"]["copy_source_base_url"] == "https://example.test"
+    assert any("DATETIME2(3)" in statement for statement in target_engine.statements)
     assert any(
         "INSERT INTO [main].[source_table]" in statement
         for statement in target_engine.statements
