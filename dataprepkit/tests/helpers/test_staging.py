@@ -2,11 +2,12 @@ import hashlib
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 
 from dataprepkit.helpers.staging import (
     HashMismatchError,
     StageFileSpec,
+    clone_table,
     assert_columns_have_single_distinct_row,
     assert_columns_not_null,
     verify_stage_file_hashes,
@@ -136,3 +137,75 @@ def test_staging_validation_helpers_raise():
             schema="main",
             columns=["a"],
         )
+
+
+def test_clone_table_recreates_schema_and_copies_rows():
+    source_engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    target_engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with source_engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE source_table (
+                    id INTEGER PRIMARY KEY,
+                    code TEXT NOT NULL,
+                    value TEXT,
+                    CONSTRAINT uq_source_table_code UNIQUE (code)
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO source_table (id, code, value)
+                VALUES (1, 'A', 'alpha'), (2, 'B', 'beta')
+                """
+            )
+        )
+
+    with target_engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE source_table (
+                    id INTEGER PRIMARY KEY,
+                    code TEXT,
+                    value TEXT,
+                    obsolete TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO source_table (id, code, value, obsolete)
+                VALUES (99, 'Z', 'old', 'legacy')
+                """
+            )
+        )
+
+    clone_table(source_engine, target_engine, "main", "source_table")
+
+    target_inspector = inspect(target_engine)
+    assert [column["name"] for column in target_inspector.get_columns("source_table")] == [
+        "id",
+        "code",
+        "value",
+    ]
+    assert target_inspector.get_pk_constraint("source_table")["constrained_columns"] == [
+        "id"
+    ]
+    assert any(
+        unique_constraint["column_names"] == ["code"]
+        for unique_constraint in target_inspector.get_unique_constraints("source_table")
+    )
+
+    with target_engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT id, code, value FROM source_table ORDER BY id")
+        ).fetchall()
+
+    assert rows == [(1, "A", "alpha"), (2, "B", "beta")]

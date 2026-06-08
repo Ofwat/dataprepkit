@@ -66,6 +66,105 @@ def _split_qualified_name(name: str) -> tuple[str | None, str]:
     return None, name
 
 
+def _quote_identifier(engine: Engine, identifier: str) -> str:
+    if engine.dialect.name == "mssql":
+        return _quote_mssql_identifier(identifier)
+    return f'"{identifier.replace(chr(34), chr(34) * 2)}"'
+
+
+def _render_table_name(engine: Engine, schema: str | None, table: str) -> str:
+    if engine.dialect.name == "mssql":
+        table_sql = _quote_mssql_identifier(table)
+        if schema:
+            return f"{_quote_mssql_identifier(schema)}.{table_sql}"
+        return table_sql
+    if schema and schema.lower() not in {"main", "temp"}:
+        return f"{_quote_identifier(engine, schema)}.{_quote_identifier(engine, table)}"
+    return _quote_identifier(engine, table)
+
+
+def _get_unique_constraints(
+    engine: Engine,
+    table_name: str,
+    schema: str | None,
+) -> dict[str, list[str]]:
+    if engine.dialect.name == "mssql":
+        full_name = (
+            f"{_quote_mssql_identifier(schema)}.{_quote_mssql_identifier(table_name)}"
+            if schema
+            else _quote_mssql_identifier(table_name)
+        )
+        with engine.connect() as conn:
+            unique_rows = conn.execute(
+                text(
+                    """
+                    SELECT
+                        i.name AS constraint_name,
+                        c.name AS column_name
+                    FROM sys.indexes i
+                    JOIN sys.index_columns ic
+                        ON i.object_id = ic.object_id
+                        AND i.index_id = ic.index_id
+                    JOIN sys.columns c
+                        ON c.object_id = ic.object_id
+                        AND c.column_id = ic.column_id
+                    WHERE i.is_unique = 1
+                      AND i.is_primary_key = 0
+                      AND i.object_id = OBJECT_ID(:tbl)
+                    ORDER BY i.name, ic.key_ordinal
+                    """
+                ),
+                {"tbl": full_name},
+            ).fetchall()
+        uniques: dict[str, list[str]] = {}
+        for row in unique_rows:
+            uniques.setdefault(row.constraint_name, []).append(row.column_name)
+        return uniques
+
+    inspector = inspect(engine)
+    uniques = {}
+    for idx, constraint in enumerate(
+        inspector.get_unique_constraints(table_name, schema=schema)
+    ):
+        columns = constraint.get("column_names") or []
+        if not columns:
+            continue
+        name = constraint.get("name") or f"UQ_{table_name}_{idx}"
+        uniques[name] = list(columns)
+    return uniques
+
+
+def _insert_rows(
+    engine: Engine,
+    table_sql: str,
+    columns: list[dict[str, object]],
+    rows: list[dict[str, object]],
+    *,
+    identity_cols: list[str] | None = None,
+) -> None:
+    if not rows:
+        return
+
+    column_list = ", ".join(
+        _quote_identifier(engine, str(column["name"])) for column in columns
+    )
+    bind_list = ", ".join(f":{column['name']}" for column in columns)
+    insert_sql = text(
+        f"INSERT INTO {table_sql} ({column_list}) VALUES ({bind_list})"
+    )
+
+    with engine.begin() as conn:
+        identity_enabled = False
+        if identity_cols and engine.dialect.name == "mssql":
+            conn.execute(text(f"SET IDENTITY_INSERT {table_sql} ON"))
+            identity_enabled = True
+        try:
+            conn.execute(insert_sql, rows)
+        finally:
+            if identity_enabled:
+                conn.execute(text(f"SET IDENTITY_INSERT {table_sql} OFF"))
+
+
 def _normalize_for_parquet(df: pd.DataFrame) -> pd.DataFrame:
     normalized = df.copy()
     for col in normalized.columns:
@@ -265,6 +364,93 @@ def stage_dataframe(
         if_exists=if_exists,
         index=index,
         schema=schema_for_sql,
+    )
+
+
+def clone_table(
+    source_engine: Engine,
+    target_engine: Engine,
+    schema_name: str,
+    table_name: str,
+) -> None:
+    """
+    Clone a table schema and data from one engine into another.
+    """
+    if not schema_name:
+        raise ValueError("schema_name must be provided")
+    if not table_name:
+        raise ValueError("table_name must be provided")
+
+    source_inspector = inspect(source_engine)
+    target_inspector = inspect(target_engine)
+
+    columns = source_inspector.get_columns(table_name, schema=schema_name)
+    pk = source_inspector.get_pk_constraint(table_name, schema=schema_name)
+    identity_cols = [column["name"] for column in columns if column.get("autoincrement")]
+    uniques = _get_unique_constraints(source_engine, table_name, schema_name)
+
+    column_defs: list[str] = []
+    for column in columns:
+        name = str(column["name"])
+        col_type = str(column["type"]).replace('COLLATE "', "COLLATE ").replace('"', "")
+        col_def = f"{_quote_identifier(target_engine, name)} {col_type}"
+        col_def += " NULL" if column.get("nullable") else " NOT NULL"
+        if column.get("autoincrement") and target_engine.dialect.name == "mssql":
+            col_def += " IDENTITY(1,1)"
+        column_defs.append(col_def)
+
+    constraints: list[str] = []
+    if pk and pk.get("constrained_columns"):
+        pk_name = pk.get("name") or f"PK_{table_name}"
+        pk_cols = ", ".join(
+            _quote_identifier(target_engine, column_name)
+            for column_name in pk["constrained_columns"]
+        )
+        constraints.append(
+            f"CONSTRAINT {_quote_identifier(target_engine, pk_name)} PRIMARY KEY ({pk_cols})"
+        )
+
+    for unique_name, unique_columns in uniques.items():
+        unique_cols_sql = ", ".join(
+            _quote_identifier(target_engine, column_name) for column_name in unique_columns
+        )
+        constraints.append(
+            f"CONSTRAINT {_quote_identifier(target_engine, unique_name)} "
+            f"UNIQUE ({unique_cols_sql})"
+        )
+
+    target_table_sql = _render_table_name(target_engine, schema_name, table_name)
+    ddl = (
+        f"CREATE TABLE {target_table_sql} ("
+        f"{', '.join(column_defs + constraints)}"
+        f")"
+    )
+
+    rows = []
+    select_columns = ", ".join(
+        _quote_identifier(source_engine, str(column["name"])) for column in columns
+    )
+    select_sql = text(
+        "SELECT "
+        f"{select_columns} "
+        f"FROM {_render_table_name(source_engine, schema_name, table_name)}"
+    )
+    with source_engine.connect() as source_conn:
+        rows = [dict(row._mapping) for row in source_conn.execute(select_sql)]
+
+    if target_inspector.has_table(table_name, schema=schema_name):
+        with target_engine.begin() as target_conn:
+            target_conn.execute(text(f"DROP TABLE IF EXISTS {target_table_sql}"))
+
+    with target_engine.begin() as target_conn:
+        target_conn.execute(text(ddl))
+
+    _insert_rows(
+        target_engine,
+        target_table_sql,
+        columns,
+        rows,
+        identity_cols=identity_cols,
     )
 
 
