@@ -73,7 +73,8 @@ def _quote_identifier(engine: Engine, identifier: str) -> str:
 
 
 def _clean_sql_type(type_name: str) -> str:
-    return str(type_name).replace('COLLATE "', "COLLATE ").replace('"', "")
+    cleaned = str(type_name).replace('"', "")
+    return re.sub(r"\s+COLLATE\s+\S+", "", cleaned, flags=re.IGNORECASE)
 
 
 def _render_table_name(engine: Engine, schema: str | None, table: str) -> str:
