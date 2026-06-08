@@ -8,6 +8,7 @@ import pandas as pd
 from pandas.api.types import (
     is_datetime64_any_dtype,
     is_datetime64tz_dtype,
+    is_numeric_dtype,
     is_object_dtype,
 )
 from sqlalchemy import Engine, inspect, text
@@ -243,6 +244,46 @@ def _load_rows_via_parquet(
             conn.execute(openrowset_sql)
     finally:
         shutil.rmtree(part_dir, ignore_errors=True)
+
+
+def _normalize_clone_dataframe_for_parquet(df: pd.DataFrame) -> pd.DataFrame:
+    normalized = df.copy()
+    for col in normalized.columns:
+        series = normalized[col]
+        if is_datetime64_any_dtype(series.dtype) or is_datetime64tz_dtype(series.dtype):
+            normalized[col] = series.map(
+                lambda value: (
+                    None
+                    if pd.isna(value)
+                    else pd.Timestamp(value).strftime("%Y-%m-%d %H:%M:%S.%f")
+                )
+            )
+            continue
+        if is_numeric_dtype(series.dtype):
+            normalized[col] = series.map(
+                lambda value: (
+                    None
+                    if pd.isna(value)
+                    else str(int(value))
+                    if isinstance(value, float) and value.is_integer()
+                    else str(value)
+                )
+            )
+            continue
+        if not is_object_dtype(series.dtype):
+            continue
+        normalized[col] = series.map(
+            lambda value: (
+                None
+                if pd.isna(value)
+                else str(int(value))
+                if isinstance(value, float) and value.is_integer()
+                else value.decode("utf-8", errors="replace")
+                if isinstance(value, (bytes, bytearray))
+                else str(value)
+            )
+        )
+    return normalized
 
 
 def _normalize_for_parquet(df: pd.DataFrame) -> pd.DataFrame:
@@ -532,18 +573,58 @@ def clone_table(
         target_conn.execute(text(ddl))
 
     if staging_use_openrowset_parquet:
-        _load_rows_via_parquet(
-            target_engine,
-            target_table_sql,
-            table_name,
-            columns,
-            rows,
-            schema_name=schema_name,
-            staging_parquet_base_dir=staging_parquet_base_dir or "",
-            staging_copy_source_base_url=staging_copy_source_base_url,
-            staging_copy_into_options=staging_copy_into_options,
-            staging_openrowset_max_rows_per_file=staging_openrowset_max_rows_per_file,
+        raw_table_name = f"{table_name}__raw"
+        raw_table_sql = _render_table_name(target_engine, schema_name, raw_table_name)
+        raw_df = _normalize_clone_dataframe_for_parquet(
+            pd.DataFrame(rows, columns=[str(column["name"]) for column in columns])
         )
+        with target_engine.begin() as conn:
+            conn.execute(text(f"DROP TABLE IF EXISTS {raw_table_sql}"))
+        try:
+            stage_dataframe(
+                target_engine,
+                raw_table_name,
+                raw_df,
+                if_exists="replace",
+                index=False,
+                schema=schema_name,
+                use_copy_into_parquet=True,
+                parquet_base_dir=staging_parquet_base_dir,
+                copy_source_base_url=staging_copy_source_base_url,
+                copy_into_options=staging_copy_into_options,
+                openrowset_max_rows_per_file=staging_openrowset_max_rows_per_file,
+            )
+
+            select_parts = []
+            for column in columns:
+                column_name = str(column["name"])
+                quoted = _quote_identifier(target_engine, column_name)
+                target_type = str(column["type"]).replace('COLLATE "', "COLLATE ").replace(
+                    '"', ""
+                )
+                select_parts.append(
+                    f"TRY_CAST(NULLIF(src.{quoted}, '') AS {target_type})"
+                )
+            select_sql = ", ".join(select_parts)
+            insert_sql = text(
+                f"""
+                INSERT INTO {target_table_sql} ({', '.join(_quote_identifier(target_engine, str(column["name"])) for column in columns)})
+                SELECT {select_sql}
+                FROM {raw_table_sql} src
+                """
+            )
+
+            with target_engine.begin() as conn:
+                if identity_cols and target_engine.dialect.name == "mssql":
+                    conn.execute(text(f"SET IDENTITY_INSERT {target_table_sql} ON"))
+                try:
+                    conn.execute(insert_sql)
+                finally:
+                    if identity_cols and target_engine.dialect.name == "mssql":
+                        conn.execute(text(f"SET IDENTITY_INSERT {target_table_sql} OFF"))
+        finally:
+            with target_engine.begin() as conn:
+                conn.execute(text(f"DROP TABLE IF EXISTS {raw_table_sql}"))
         return
 
     _insert_rows(

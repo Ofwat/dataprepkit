@@ -212,39 +212,121 @@ def test_clone_table_recreates_schema_and_copies_rows():
 
 
 def test_clone_table_uses_parquet_branch_when_requested(monkeypatch, tmp_path):
-    source_engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    target_engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    class _FakeRow:
+        def __init__(self, mapping):
+            self._mapping = mapping
 
-    with source_engine.begin() as conn:
-        conn.execute(
-            text(
-                """
-                CREATE TABLE source_table (
-                    id INTEGER PRIMARY KEY,
-                    code TEXT NOT NULL
-                )
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                INSERT INTO source_table (id, code)
-                VALUES (1, 'A'), (2, 'B')
-                """
-            )
-        )
+    class _FakeResult:
+        def __init__(self, rows):
+            self._rows = [_FakeRow(row) for row in rows]
+
+        def __iter__(self):
+            return iter(self._rows)
+
+        def fetchall(self):
+            return self._rows
+
+    class _FakeSourceConn:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, statement, params=None):
+            text = str(statement)
+            if "sys.indexes" in text:
+                return _FakeResult([])
+            assert "SELECT" in text
+            return _FakeResult(self._rows)
+
+    class _FakeTxnConn:
+        def __init__(self, statements):
+            self.statements = statements
+
+        def execute(self, statement):
+            self.statements.append(str(statement))
+
+    class _FakeTxn:
+        def __init__(self, statements):
+            self._conn = _FakeTxnConn(statements)
+
+        def __enter__(self):
+            return self._conn
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        def __init__(self, rows=None):
+            self.dialect = _FakeDialect()
+            self._rows = rows or []
+            self.statements = []
+
+        def connect(self):
+            return _FakeSourceConn(self._rows)
+
+        def begin(self):
+            return _FakeTxn(self.statements)
+
+    class _FakeInspector:
+        def __init__(self, columns=None, has_table=False):
+            self._columns = columns or []
+            self._has_table = has_table
+
+        def get_columns(self, table, schema=None):
+            return self._columns
+
+        def get_pk_constraint(self, table, schema=None):
+            return {"constrained_columns": ["Measure_Instance_Id"], "name": None}
+
+        def has_table(self, table, schema=None):
+            return self._has_table
+
+    source_engine = _FakeEngine(
+        rows=[
+            {
+                "Measure_Instance_Id": 1,
+                "Measure_Id": 10,
+                "Measure_Cd": "A",
+                "Insert_Date": "2024-01-01 00:00:00.000",
+            },
+            {
+                "Measure_Instance_Id": 2,
+                "Measure_Id": 20,
+                "Measure_Cd": "B",
+                "Insert_Date": "2024-01-02 00:00:00.000",
+            },
+        ]
+    )
+    target_engine = _FakeEngine()
+
+    source_columns = [
+        {"name": "Measure_Instance_Id", "type": "INT", "nullable": False},
+        {"name": "Measure_Id", "type": "INT", "nullable": False},
+        {"name": "Measure_Cd", "type": "NVARCHAR(100)", "nullable": True},
+        {"name": "Insert_Date", "type": "DATETIME2(3)", "nullable": False},
+    ]
+    source_inspector = _FakeInspector(columns=source_columns)
+    target_inspector = _FakeInspector(has_table=True)
+
+    def _fake_inspect(engine):
+        return source_inspector if engine is source_engine else target_inspector
 
     captured = {}
 
-    def _fake_load_rows_via_parquet(*args, **kwargs):
+    def _fake_stage_dataframe(*args, **kwargs):
         captured["args"] = args
         captured["kwargs"] = kwargs
 
-    monkeypatch.setattr(
-        "dataprepkit.helpers.staging._load_rows_via_parquet",
-        _fake_load_rows_via_parquet,
-    )
+    monkeypatch.setattr("dataprepkit.helpers.staging.inspect", _fake_inspect)
+    monkeypatch.setattr("dataprepkit.helpers.staging.stage_dataframe", _fake_stage_dataframe)
 
     clone_table(
         source_engine,
@@ -256,6 +338,20 @@ def test_clone_table_uses_parquet_branch_when_requested(monkeypatch, tmp_path):
         staging_copy_source_base_url="https://example.test",
     )
 
-    assert captured["kwargs"]["schema_name"] == "main"
-    assert captured["kwargs"]["staging_parquet_base_dir"]
-    assert [row["id"] for row in captured["args"][4]] == [1, 2]
+    assert captured["args"][1] == "source_table__raw"
+    assert captured["kwargs"]["schema"] == "main"
+    assert captured["kwargs"]["use_copy_into_parquet"] is True
+    assert captured["kwargs"]["parquet_base_dir"] == str(tmp_path)
+    assert captured["kwargs"]["copy_source_base_url"] == "https://example.test"
+    assert any(
+        "INSERT INTO [main].[source_table]" in statement
+        for statement in target_engine.statements
+    )
+    assert any(
+        "FROM [main].[source_table__raw] src" in statement
+        for statement in target_engine.statements
+    )
+    assert any(
+        "DROP TABLE IF EXISTS [main].[source_table__raw]" in statement
+        for statement in target_engine.statements
+    )
