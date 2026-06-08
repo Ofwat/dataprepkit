@@ -8,7 +8,6 @@ import pandas as pd
 from pandas.api.types import (
     is_datetime64_any_dtype,
     is_datetime64tz_dtype,
-    is_numeric_dtype,
     is_object_dtype,
 )
 from sqlalchemy import Engine, inspect, text
@@ -71,6 +70,10 @@ def _quote_identifier(engine: Engine, identifier: str) -> str:
     if engine.dialect.name == "mssql":
         return _quote_mssql_identifier(identifier)
     return f'"{identifier.replace(chr(34), chr(34) * 2)}"'
+
+
+def _clean_sql_type(type_name: str) -> str:
+    return str(type_name).replace('COLLATE "', "COLLATE ").replace('"', "")
 
 
 def _render_table_name(engine: Engine, schema: str | None, table: str) -> str:
@@ -164,126 +167,6 @@ def _insert_rows(
         finally:
             if identity_enabled:
                 conn.execute(text(f"SET IDENTITY_INSERT {table_sql} OFF"))
-
-
-def _load_rows_via_parquet(
-    engine: Engine,
-    table_sql: str,
-    table_name: str,
-    columns: list[dict[str, object]],
-    rows: list[dict[str, object]],
-    *,
-    schema_name: str,
-    staging_parquet_base_dir: str,
-    staging_copy_source_base_url: str | None = None,
-    staging_copy_into_options: str = "",
-    staging_openrowset_max_rows_per_file: int = 1_000_000,
-) -> None:
-    if engine.dialect.name != "mssql":
-        raise ValueError("Parquet OpenRowSet loading is only supported for MSSQL targets.")
-    if not staging_parquet_base_dir:
-        raise ValueError(
-            "staging_parquet_base_dir is required when "
-            "staging_use_openrowset_parquet=True."
-        )
-    if staging_openrowset_max_rows_per_file < 1:
-        raise ValueError("staging_openrowset_max_rows_per_file must be >= 1.")
-
-    df = pd.DataFrame(rows, columns=[str(column["name"]) for column in columns])
-    path_info = archive_dataframe_path(
-        table_name=table_name,
-        batch_id=f"clone_{uuid.uuid4().hex[:8]}",
-        base_dir=staging_parquet_base_dir,
-    )
-    normalized_df = _normalize_for_parquet(df)
-    parquet_path = Path(path_info.file_path)
-    part_dir = parquet_path.with_suffix("")
-    part_dir.mkdir(parents=True, exist_ok=True)
-
-    try:
-        total_rows = len(normalized_df)
-        if total_rows == 0:
-            normalized_df.to_parquet(part_dir / "part-00000.parquet", index=False)
-        else:
-            for part_idx, start in enumerate(
-                range(0, total_rows, staging_openrowset_max_rows_per_file)
-            ):
-                chunk = normalized_df.iloc[
-                    start : start + staging_openrowset_max_rows_per_file
-                ]
-                chunk.to_parquet(part_dir / f"part-{part_idx:05d}.parquet", index=False)
-
-        resolved_copy_source_base_url = (
-            staging_copy_source_base_url or staging_parquet_base_dir
-        )
-        source_url = (
-            f"{resolved_copy_source_base_url.rstrip('/')}/{table_name}/{part_dir.name}/*.parquet"
-        )
-        destination_table = table_sql
-
-        options_sql = staging_copy_into_options.strip()
-        if options_sql and not options_sql.startswith(","):
-            options_sql = f", {options_sql}"
-
-        selected_columns = [_quote_mssql_identifier(str(col["name"])) for col in columns]
-        if not selected_columns:
-            return
-        columns_sql = ", ".join(selected_columns)
-        escaped_source = source_url.replace("'", "''")
-        openrowset_sql = text(
-            f"""
-            INSERT INTO {destination_table} ({columns_sql})
-            SELECT {columns_sql}
-            FROM OPENROWSET(
-                BULK '{escaped_source}',
-                FORMAT = 'PARQUET'{options_sql}
-            ) AS src
-            """
-        )
-        with engine.begin() as conn:
-            conn.execute(openrowset_sql)
-    finally:
-        shutil.rmtree(part_dir, ignore_errors=True)
-
-
-def _normalize_clone_dataframe_for_parquet(df: pd.DataFrame) -> pd.DataFrame:
-    normalized = df.copy()
-    for col in normalized.columns:
-        series = normalized[col]
-        if is_datetime64_any_dtype(series.dtype) or is_datetime64tz_dtype(series.dtype):
-            normalized[col] = series.map(
-                lambda value: (
-                    None
-                    if pd.isna(value)
-                    else pd.Timestamp(value).strftime("%Y-%m-%d %H:%M:%S.%f")
-                )
-            )
-            continue
-        if is_numeric_dtype(series.dtype):
-            normalized[col] = series.map(
-                lambda value: (
-                    None
-                    if pd.isna(value)
-                    else str(int(value))
-                    if isinstance(value, float) and value.is_integer()
-                    else str(value)
-                )
-            )
-            continue
-        if not is_object_dtype(series.dtype):
-            continue
-        normalized[col] = series.map(
-            lambda value: (
-                None
-                if pd.isna(value)
-                else str(int(value))
-                if isinstance(value, float) and value.is_integer()
-                else value.decode("utf-8", errors="replace")
-                if isinstance(value, (bytes, bytearray))
-                else str(value)
-            )
-        )
-    return normalized
 
 
 def _normalize_for_parquet(df: pd.DataFrame) -> pd.DataFrame:
@@ -519,7 +402,7 @@ def clone_table(
     column_defs: list[str] = []
     for column in columns:
         name = str(column["name"])
-        col_type = str(column["type"]).replace('COLLATE "', "COLLATE ").replace('"', "")
+        col_type = _clean_sql_type(str(column["type"]))
         col_def = f"{_quote_identifier(target_engine, name)} {col_type}"
         col_def += " NULL" if column.get("nullable") else " NOT NULL"
         if column.get("autoincrement") and target_engine.dialect.name == "mssql":
@@ -575,9 +458,8 @@ def clone_table(
     if staging_use_openrowset_parquet:
         raw_table_name = f"{table_name}__raw"
         raw_table_sql = _render_table_name(target_engine, schema_name, raw_table_name)
-        raw_df = _normalize_clone_dataframe_for_parquet(
-            pd.DataFrame(rows, columns=[str(column["name"]) for column in columns])
-        )
+        raw_df = pd.DataFrame(rows, columns=[str(column["name"]) for column in columns])
+        raw_df = raw_df.astype("string")
         with target_engine.begin() as conn:
             conn.execute(text(f"DROP TABLE IF EXISTS {raw_table_sql}"))
         try:
@@ -595,20 +477,16 @@ def clone_table(
                 openrowset_max_rows_per_file=staging_openrowset_max_rows_per_file,
             )
 
-            select_parts = []
-            for column in columns:
-                column_name = str(column["name"])
-                quoted = _quote_identifier(target_engine, column_name)
-                target_type = str(column["type"]).replace('COLLATE "', "COLLATE ").replace(
-                    '"', ""
-                )
-                select_parts.append(
-                    f"TRY_CAST(NULLIF(src.{quoted}, '') AS {target_type})"
-                )
-            select_sql = ", ".join(select_parts)
+            insert_columns_sql = ", ".join(
+                _quote_identifier(target_engine, str(column["name"])) for column in columns
+            )
+            select_sql = ", ".join(
+                f"TRY_CAST(NULLIF(src.{_quote_identifier(target_engine, str(column['name']))}, '') AS {_clean_sql_type(str(column['type']))})"
+                for column in columns
+            )
             insert_sql = text(
                 f"""
-                INSERT INTO {target_table_sql} ({', '.join(_quote_identifier(target_engine, str(column["name"])) for column in columns)})
+                INSERT INTO {target_table_sql} ({insert_columns_sql})
                 SELECT {select_sql}
                 FROM {raw_table_sql} src
                 """

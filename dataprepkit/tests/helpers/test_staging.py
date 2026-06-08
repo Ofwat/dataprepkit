@@ -339,6 +339,7 @@ def test_clone_table_uses_parquet_branch_when_requested(monkeypatch, tmp_path):
     )
 
     assert captured["args"][1] == "source_table__raw"
+    assert all(str(dtype).startswith("string") for dtype in captured["args"][2].dtypes)
     assert captured["kwargs"]["schema"] == "main"
     assert captured["kwargs"]["use_copy_into_parquet"] is True
     assert captured["kwargs"]["parquet_base_dir"] == str(tmp_path)
