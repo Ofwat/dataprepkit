@@ -165,6 +165,87 @@ def _insert_rows(
                 conn.execute(text(f"SET IDENTITY_INSERT {table_sql} OFF"))
 
 
+def _load_rows_via_parquet(
+    engine: Engine,
+    table_sql: str,
+    table_name: str,
+    columns: list[dict[str, object]],
+    rows: list[dict[str, object]],
+    *,
+    schema_name: str,
+    staging_parquet_base_dir: str,
+    staging_copy_source_base_url: str | None = None,
+    staging_copy_into_options: str = "",
+    staging_openrowset_max_rows_per_file: int = 1_000_000,
+) -> None:
+    if engine.dialect.name != "mssql":
+        raise ValueError("Parquet OpenRowSet loading is only supported for MSSQL targets.")
+    if not staging_parquet_base_dir:
+        raise ValueError(
+            "staging_parquet_base_dir is required when "
+            "staging_use_openrowset_parquet=True."
+        )
+    if staging_openrowset_max_rows_per_file < 1:
+        raise ValueError("staging_openrowset_max_rows_per_file must be >= 1.")
+
+    df = pd.DataFrame(rows, columns=[str(column["name"]) for column in columns])
+    path_info = archive_dataframe_path(
+        table_name=table_name,
+        batch_id=f"clone_{uuid.uuid4().hex[:8]}",
+        base_dir=staging_parquet_base_dir,
+    )
+    normalized_df = _normalize_for_parquet(df)
+    parquet_path = Path(path_info.file_path)
+    part_dir = parquet_path.with_suffix("")
+    part_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        total_rows = len(normalized_df)
+        if total_rows == 0:
+            normalized_df.to_parquet(part_dir / "part-00000.parquet", index=False)
+        else:
+            for part_idx, start in enumerate(
+                range(0, total_rows, staging_openrowset_max_rows_per_file)
+            ):
+                chunk = normalized_df.iloc[
+                    start : start + staging_openrowset_max_rows_per_file
+                ]
+                chunk.to_parquet(part_dir / f"part-{part_idx:05d}.parquet", index=False)
+
+        resolved_copy_source_base_url = (
+            staging_copy_source_base_url or staging_parquet_base_dir
+        )
+        source_url = (
+            f"{resolved_copy_source_base_url.rstrip('/')}/{table_name}/{part_dir.name}/*.parquet"
+        )
+        schema_sql = _quote_mssql_identifier(schema_name)
+        destination_table = f"{schema_sql}.{table_sql}"
+
+        options_sql = staging_copy_into_options.strip()
+        if options_sql and not options_sql.startswith(","):
+            options_sql = f", {options_sql}"
+
+        selected_columns = [_quote_mssql_identifier(str(col["name"])) for col in columns]
+        if not selected_columns:
+            return
+        columns_sql = ", ".join(selected_columns)
+        escaped_source = source_url.replace("'", "''")
+        openrowset_sql = text(
+            f"""
+            INSERT INTO {destination_table} ({columns_sql})
+            SELECT {columns_sql}
+            FROM OPENROWSET(
+                BULK '{escaped_source}',
+                FORMAT = 'PARQUET'{options_sql}
+            ) AS src
+            """
+        )
+        with engine.begin() as conn:
+            conn.execute(openrowset_sql)
+    finally:
+        shutil.rmtree(part_dir, ignore_errors=True)
+
+
 def _normalize_for_parquet(df: pd.DataFrame) -> pd.DataFrame:
     normalized = df.copy()
     for col in normalized.columns:
@@ -372,6 +453,12 @@ def clone_table(
     target_engine: Engine,
     schema_name: str,
     table_name: str,
+    *,
+    staging_use_openrowset_parquet: bool = False,
+    staging_parquet_base_dir: str | None = None,
+    staging_copy_source_base_url: str | None = None,
+    staging_copy_into_options: str = "",
+    staging_openrowset_max_rows_per_file: int = 1_000_000,
 ) -> None:
     """
     Clone a table schema and data from one engine into another.
@@ -444,6 +531,21 @@ def clone_table(
 
     with target_engine.begin() as target_conn:
         target_conn.execute(text(ddl))
+
+    if staging_use_openrowset_parquet:
+        _load_rows_via_parquet(
+            target_engine,
+            target_table_sql,
+            table_name,
+            columns,
+            rows,
+            schema_name=schema_name,
+            staging_parquet_base_dir=staging_parquet_base_dir or "",
+            staging_copy_source_base_url=staging_copy_source_base_url,
+            staging_copy_into_options=staging_copy_into_options,
+            staging_openrowset_max_rows_per_file=staging_openrowset_max_rows_per_file,
+        )
+        return
 
     _insert_rows(
         target_engine,

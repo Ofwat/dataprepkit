@@ -209,3 +209,53 @@ def test_clone_table_recreates_schema_and_copies_rows():
         ).fetchall()
 
     assert rows == [(1, "A", "alpha"), (2, "B", "beta")]
+
+
+def test_clone_table_uses_parquet_branch_when_requested(monkeypatch, tmp_path):
+    source_engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    target_engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with source_engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE source_table (
+                    id INTEGER PRIMARY KEY,
+                    code TEXT NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO source_table (id, code)
+                VALUES (1, 'A'), (2, 'B')
+                """
+            )
+        )
+
+    captured = {}
+
+    def _fake_load_rows_via_parquet(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(
+        "dataprepkit.helpers.staging._load_rows_via_parquet",
+        _fake_load_rows_via_parquet,
+    )
+
+    clone_table(
+        source_engine,
+        target_engine,
+        "main",
+        "source_table",
+        staging_use_openrowset_parquet=True,
+        staging_parquet_base_dir=str(tmp_path),
+        staging_copy_source_base_url="https://example.test",
+    )
+
+    assert captured["kwargs"]["schema_name"] == "main"
+    assert captured["kwargs"]["staging_parquet_base_dir"]
+    assert [row["id"] for row in captured["args"][4]] == [1, 2]
