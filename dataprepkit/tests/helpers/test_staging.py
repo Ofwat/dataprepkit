@@ -1,6 +1,7 @@
 import hashlib
 from pathlib import Path
 
+import pandas as pd
 import pytest
 from sqlalchemy import create_engine, inspect, text
 
@@ -10,6 +11,7 @@ from dataprepkit.helpers.staging import (
     clone_table,
     assert_columns_have_single_distinct_row,
     assert_columns_not_null,
+    sync_mssql_tables,
     verify_stage_file_hashes,
 )
 
@@ -367,3 +369,85 @@ def test_clone_table_uses_parquet_branch_when_requested(monkeypatch, tmp_path):
         for statement in target_engine.statements
     )
     assert not (tmp_path / "source_table__raw").exists()
+
+
+def test_sync_mssql_tables_clones_only_accepted_statuses(monkeypatch):
+    source_engine = object()
+    target_engine = object()
+
+    source_dates = pd.DataFrame(
+        [
+            {
+                "schema_name": "Dimensions",
+                "table_name": "dim_a",
+                "max_insert_date": pd.Timestamp("2024-01-01"),
+                "max_update_date": pd.Timestamp("2024-01-01"),
+            },
+            {
+                "schema_name": "Dimensions",
+                "table_name": "dim_b",
+                "max_insert_date": pd.Timestamp("2024-01-02"),
+                "max_update_date": pd.Timestamp("2024-01-02"),
+            },
+            {
+                "schema_name": "Dimensions",
+                "table_name": "dim_c",
+                "max_insert_date": pd.Timestamp("2024-01-03"),
+                "max_update_date": pd.Timestamp("2024-01-03"),
+            },
+        ]
+    )
+    target_dates = pd.DataFrame(
+        [
+            {
+                "schema_name": "Dimensions",
+                "table_name": "dim_a",
+                "max_insert_date": pd.Timestamp("2024-01-01"),
+                "max_update_date": pd.Timestamp("2024-01-01"),
+            },
+            {
+                "schema_name": "Dimensions",
+                "table_name": "dim_b",
+                "max_insert_date": pd.Timestamp("2024-01-01"),
+                "max_update_date": pd.Timestamp("2024-01-01"),
+            },
+        ]
+    )
+
+    captured = []
+
+    def _fake_get_schema_max_dates(engine, schema):
+        assert schema == "Dimensions"
+        if engine is source_engine:
+            return source_dates
+        if engine is target_engine:
+            return target_dates
+        raise AssertionError("Unexpected engine")
+
+    def _fake_clone_table(*args, **kwargs):
+        captured.append((args, kwargs))
+
+    monkeypatch.setattr(
+        "dataprepkit.helpers.staging._get_schema_max_dates",
+        _fake_get_schema_max_dates,
+    )
+    monkeypatch.setattr("dataprepkit.helpers.staging.clone_table", _fake_clone_table)
+
+    diffs = sync_mssql_tables(
+        source_engine,
+        target_engine,
+        "Dimensions",
+        staging_use_openrowset_parquet=True,
+        staging_parquet_base_dir=r"C:\tmp",
+        staging_copy_source_base_url="https://example.test",
+        accepted_statuses=["missing_in_target", "data_mismatch"],
+    )
+
+    assert list(diffs["table_name"]) == ["dim_b", "dim_c"]
+    assert [call[1]["table_name"] for call in captured] == ["dim_b", "dim_c"]
+    assert all(call[1]["staging_use_openrowset_parquet"] is True for call in captured)
+    assert all(call[1]["staging_parquet_base_dir"] == r"C:\tmp" for call in captured)
+    assert all(
+        call[1]["staging_copy_source_base_url"] == "https://example.test"
+        for call in captured
+    )

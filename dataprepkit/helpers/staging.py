@@ -1,6 +1,6 @@
 import re
 import shutil
-from typing import Literal
+from typing import Literal, Sequence
 from pathlib import Path
 import uuid
 
@@ -127,6 +127,119 @@ def _get_mssql_column_precisions(
             for row in result
             if row._mapping["column_scale"] is not None
         }
+
+
+def _get_schema_max_dates(engine: Engine, schema: str) -> pd.DataFrame:
+    if engine.dialect.name != "mssql":
+        raise ValueError("schema max date sync is only supported for MSSQL engines.")
+
+    meta_sql = text(
+        """
+        SELECT
+            s.name AS schema_name,
+            t.name AS table_name
+        FROM sys.tables t
+        JOIN sys.schemas s ON s.schema_id = t.schema_id
+        WHERE s.name = :schema
+        """
+    )
+    tables = pd.read_sql(meta_sql, engine, params={"schema": schema})
+
+    results = []
+    with engine.connect() as conn:
+        for _, row in tables.iterrows():
+            schema_name = row["schema_name"]
+            table_name = row["table_name"]
+            full_table = f"{schema_name}.{table_name}"
+            col_check = conn.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM sys.columns
+                    WHERE object_id = OBJECT_ID(:tbl)
+                      AND name IN ('insert_date', 'update_date')
+                    """
+                ),
+                {"tbl": full_table},
+            ).scalar()
+            if not col_check or col_check < 1:
+                continue
+
+            query = text(
+                f"""
+                SELECT
+                    '{schema_name}' AS schema_name,
+                    '{table_name}' AS table_name,
+                    MAX(insert_date) AS max_insert_date,
+                    MAX(update_date) AS max_update_date
+                FROM {_render_table_name(engine, schema_name, table_name)}
+                """
+            )
+            df = pd.read_sql(query, conn)
+            results.append(df)
+
+    clean_results = []
+    for df in results:
+        df = df.dropna(axis=1, how="all")
+        if df.shape[1] == 0 or df.empty:
+            continue
+        clean_results.append(df)
+
+    if clean_results:
+        return pd.concat(clean_results, ignore_index=True)
+
+    return pd.DataFrame(
+        columns=[
+            "schema_name",
+            "table_name",
+            "max_insert_date",
+            "max_update_date",
+        ]
+    )
+
+
+def _compare_schema_max_dates(
+    df_source: pd.DataFrame,
+    df_target: pd.DataFrame,
+) -> pd.DataFrame:
+    key_cols = ["schema_name", "table_name"]
+    df_source = df_source.copy()
+    df_target = df_target.copy()
+
+    df_source.columns = df_source.columns.str.lower()
+    df_target.columns = df_target.columns.str.lower()
+
+    merged = df_source.merge(
+        df_target,
+        on=key_cols,
+        how="outer",
+        suffixes=("_source", "_target"),
+        indicator=True,
+    )
+
+    insert_mismatch = ~(
+        (merged["max_insert_date_source"].isna() & merged["max_insert_date_target"].isna())
+        | (merged["max_insert_date_source"] == merged["max_insert_date_target"])
+    )
+    update_mismatch = ~(
+        (merged["max_update_date_source"].isna() & merged["max_update_date_target"].isna())
+        | (merged["max_update_date_source"] == merged["max_update_date_target"])
+    )
+
+    result = merged[
+        (merged["_merge"] != "both") | insert_mismatch | update_mismatch
+    ].copy()
+
+    def classify(row) -> str:
+        if row["_merge"] == "left_only":
+            return "missing_in_target"
+        if row["_merge"] == "right_only":
+            return "missing_in_source"
+        return "data_mismatch"
+
+    result["status"] = result.apply(classify, axis=1)
+
+    return result.sort_values(["schema_name", "table_name"])
 
 
 def _render_table_name(engine: Engine, schema: str | None, table: str) -> str:
@@ -572,6 +685,55 @@ def clone_table(
         rows,
         identity_cols=identity_cols,
     )
+
+
+def sync_mssql_tables(
+    source_engine: Engine,
+    target_engine: Engine,
+    schema_name: str,
+    *,
+    staging_use_openrowset_parquet: bool = False,
+    staging_parquet_base_dir: str | None = None,
+    staging_copy_source_base_url: str | None = None,
+    staging_copy_into_options: str = "",
+    staging_openrowset_max_rows_per_file: int = 1_000_000,
+    accepted_statuses: Sequence[str] | None = None,
+) -> pd.DataFrame:
+    """
+    Compare max insert/update dates across two MSSQL schemas and sync accepted tables.
+    """
+    if not schema_name:
+        raise ValueError("schema_name must be provided")
+
+    accepted = {
+        status.casefold()
+        for status in (
+            accepted_statuses
+            if accepted_statuses is not None
+            else ("missing_in_target", "data_mismatch")
+        )
+    }
+    source_dates = _get_schema_max_dates(source_engine, schema_name)
+    target_dates = _get_schema_max_dates(target_engine, schema_name)
+    diffs = _compare_schema_max_dates(source_dates, target_dates)
+
+    for row in diffs.itertuples(index=False):
+        status = str(row.status).casefold()
+        if status not in accepted or status == "missing_in_source":
+            continue
+        clone_table(
+            source_engine,
+            target_engine,
+            schema_name=row.schema_name,
+            table_name=row.table_name,
+            staging_use_openrowset_parquet=staging_use_openrowset_parquet,
+            staging_parquet_base_dir=staging_parquet_base_dir,
+            staging_copy_source_base_url=staging_copy_source_base_url,
+            staging_copy_into_options=staging_copy_into_options,
+            staging_openrowset_max_rows_per_file=staging_openrowset_max_rows_per_file,
+        )
+
+    return diffs
 
 
 def union_tables_by_name_regex(
