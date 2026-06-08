@@ -516,6 +516,7 @@ def clone_table(
     if staging_use_openrowset_parquet:
         raw_table_name = f"{table_name}__raw"
         raw_table_sql = _render_table_name(target_engine, schema_name, raw_table_name)
+        raw_table_dir = Path(staging_parquet_base_dir) / raw_table_name
         raw_df = pd.DataFrame(rows, columns=[str(column["name"]) for column in columns])
         raw_df = raw_df.astype("string")
         with target_engine.begin() as conn:
@@ -561,6 +562,7 @@ def clone_table(
         finally:
             with target_engine.begin() as conn:
                 conn.execute(text(f"DROP TABLE IF EXISTS {raw_table_sql}"))
+            shutil.rmtree(raw_table_dir, ignore_errors=True)
         return
 
     _insert_rows(

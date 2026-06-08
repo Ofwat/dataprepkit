@@ -330,6 +330,9 @@ def test_clone_table_uses_parquet_branch_when_requested(monkeypatch, tmp_path):
     def _fake_stage_dataframe(*args, **kwargs):
         captured["args"] = args
         captured["kwargs"] = kwargs
+        temp_dir = Path(kwargs["parquet_base_dir"]) / args[1] / "part-00000"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        (temp_dir / "part-00000.parquet").write_text("payload")
 
     monkeypatch.setattr("dataprepkit.helpers.staging.inspect", _fake_inspect)
     monkeypatch.setattr("dataprepkit.helpers.staging.stage_dataframe", _fake_stage_dataframe)
@@ -363,3 +366,4 @@ def test_clone_table_uses_parquet_branch_when_requested(monkeypatch, tmp_path):
         "DROP TABLE IF EXISTS [main].[source_table__raw]" in statement
         for statement in target_engine.statements
     )
+    assert not (tmp_path / "source_table__raw").exists()
