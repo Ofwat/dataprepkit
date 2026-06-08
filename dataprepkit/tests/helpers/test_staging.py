@@ -240,6 +240,12 @@ def test_clone_table_uses_parquet_branch_when_requested(monkeypatch, tmp_path):
             text = str(statement)
             if "sys.indexes" in text:
                 return _FakeResult([])
+            if "sys.columns" in text:
+                return _FakeResult(
+                    [
+                        {"column_name": "Insert_Date", "column_scale": 3},
+                    ]
+                )
             assert "SELECT" in text
             return _FakeResult(self._rows)
 

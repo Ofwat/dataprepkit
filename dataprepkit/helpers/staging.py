@@ -11,7 +11,6 @@ from pandas.api.types import (
     is_object_dtype,
 )
 from sqlalchemy import Engine, inspect, text
-from sqlalchemy.dialects.mssql import DATETIME2
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.sql.elements import quoted_name
 from dataprepkit.fact_loader import (
@@ -80,12 +79,54 @@ def _clean_sql_type(type_name: str) -> str:
 def _render_reflected_sql_type(
     column_type,
     engine: Engine,
+    *,
+    precision: int | None = None,
 ) -> str:
     if isinstance(column_type, str):
         rendered = column_type
     else:
         rendered = column_type.compile(dialect=engine.dialect)
-    return _clean_sql_type(rendered)
+    cleaned = _clean_sql_type(rendered)
+    if engine.dialect.name != "mssql" or precision is None:
+        return cleaned
+    base_type = cleaned.split("(", 1)[0].strip().upper()
+    if base_type in {"DATETIME2", "DATETIMEOFFSET", "TIME"}:
+        return f"{base_type}({precision})"
+    return cleaned
+
+
+def _get_mssql_column_precisions(
+    engine: Engine,
+    table_name: str,
+    schema: str | None,
+) -> dict[str, int]:
+    if engine.dialect.name != "mssql":
+        return {}
+    query = text(
+        """
+        SELECT
+            c.name AS column_name,
+            c.scale AS column_scale
+        FROM sys.columns c
+        JOIN sys.objects o
+            ON o.object_id = c.object_id
+        WHERE o.name = :table_name
+          AND SCHEMA_NAME(o.schema_id) = :schema_name
+        """
+    )
+    with engine.connect() as conn:
+        result = conn.execute(
+            query,
+            {
+                "table_name": table_name,
+                "schema_name": schema or "dbo",
+            },
+        )
+        return {
+            row._mapping["column_name"].lower(): int(row._mapping["column_scale"])
+            for row in result
+            if row._mapping["column_scale"] is not None
+        }
 
 
 def _render_table_name(engine: Engine, schema: str | None, table: str) -> str:
@@ -409,12 +450,17 @@ def clone_table(
     columns = source_inspector.get_columns(table_name, schema=schema_name)
     pk = source_inspector.get_pk_constraint(table_name, schema=schema_name)
     identity_cols = [column["name"] for column in columns if column.get("autoincrement")]
+    source_precisions = _get_mssql_column_precisions(source_engine, table_name, schema_name)
     uniques = _get_unique_constraints(source_engine, table_name, schema_name)
 
     column_defs: list[str] = []
     for column in columns:
         name = str(column["name"])
-        col_type = _render_reflected_sql_type(column["type"], target_engine)
+        col_type = _render_reflected_sql_type(
+            column["type"],
+            target_engine,
+            precision=source_precisions.get(name.lower()),
+        )
         col_def = f"{_quote_identifier(target_engine, name)} {col_type}"
         col_def += " NULL" if column.get("nullable") else " NOT NULL"
         if column.get("autoincrement") and target_engine.dialect.name == "mssql":
@@ -493,7 +539,7 @@ def clone_table(
                 _quote_identifier(target_engine, str(column["name"])) for column in columns
             )
             select_sql = ", ".join(
-                f"TRY_CAST(NULLIF(src.{_quote_identifier(target_engine, str(column['name']))}, '') AS {_render_reflected_sql_type(column['type'], target_engine)})"
+                f"TRY_CAST(NULLIF(src.{_quote_identifier(target_engine, str(column['name']))}, '') AS {_render_reflected_sql_type(column['type'], target_engine, precision=source_precisions.get(str(column['name']).lower()))})"
                 for column in columns
             )
             insert_sql = text(
