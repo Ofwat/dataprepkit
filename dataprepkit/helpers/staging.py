@@ -218,8 +218,7 @@ def _load_rows_via_parquet(
         source_url = (
             f"{resolved_copy_source_base_url.rstrip('/')}/{table_name}/{part_dir.name}/*.parquet"
         )
-        schema_sql = _quote_mssql_identifier(schema_name)
-        destination_table = f"{schema_sql}.{table_sql}"
+        destination_table = table_sql
 
         options_sql = staging_copy_into_options.strip()
         if options_sql and not options_sql.startswith(","):
