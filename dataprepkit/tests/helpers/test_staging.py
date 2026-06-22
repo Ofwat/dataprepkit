@@ -307,7 +307,7 @@ def test_clone_table_uses_parquet_branch_when_requested(monkeypatch, tmp_path):
             },
             {
                 "Measure_Instance_Id": 2,
-                "Measure_Id": 20,
+                "Measure_Id": None,
                 "Measure_Cd": "B",
                 "Insert_Date": "2024-01-02 00:00:00.000",
             },
@@ -317,7 +317,7 @@ def test_clone_table_uses_parquet_branch_when_requested(monkeypatch, tmp_path):
 
     source_columns = [
         {"name": "Measure_Instance_Id", "type": "INT", "nullable": False},
-        {"name": "Measure_Id", "type": "INT", "nullable": False},
+        {"name": "Measure_Id", "type": "INT", "nullable": True},
         {"name": "Measure_Cd", "type": "NVARCHAR(100)", "nullable": True},
         {"name": "Insert_Date", "type": "DATETIME2(3)", "nullable": False},
     ]
@@ -351,6 +351,9 @@ def test_clone_table_uses_parquet_branch_when_requested(monkeypatch, tmp_path):
 
     assert captured["args"][1] == "source_table__raw"
     assert all(str(dtype).startswith("string") for dtype in captured["args"][2].dtypes)
+    measure_id_values = captured["args"][2]["Measure_Id"].tolist()
+    assert measure_id_values[0] == "10"
+    assert measure_id_values[1] is pd.NA
     assert captured["kwargs"]["schema"] == "main"
     assert captured["kwargs"]["use_copy_into_parquet"] is True
     assert captured["kwargs"]["parquet_base_dir"] == str(tmp_path)
