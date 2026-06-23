@@ -565,6 +565,11 @@ def _insert_snapshot_rows(
         if records:
             conn.execute(insert_sql, records)
     except IntegrityError as exc:
+        db_message = _integrity_error_text(exc)
+        if _is_not_null_violation(db_message):
+            raise SCD2ValidationError(
+                _not_null_staging_error_message(db_message)
+            ) from exc
         raise SCD2ValidationError(
             _duplicate_natural_keys_error_message(
                 incoming_df,
@@ -618,6 +623,11 @@ def _insert_snapshot_rows_from_raw(
     try:
         conn.execute(insert_sql)
     except IntegrityError as exc:
+        db_message = _integrity_error_text(exc)
+        if _is_not_null_violation(db_message):
+            raise SCD2ValidationError(
+                _not_null_staging_error_message(db_message)
+            ) from exc
         raise SCD2ValidationError(
             _duplicate_natural_keys_error_message(
                 source_df,
@@ -658,6 +668,34 @@ def _normalize_integer_like_value_for_raw(value) -> str | None:
         if value.is_integer():
             return str(int(value))
     return str(value)
+
+
+def _integrity_error_text(exc: IntegrityError) -> str:
+    orig = getattr(exc, "orig", None)
+    return str(orig) if orig is not None else str(exc)
+
+
+def _is_not_null_violation(db_message: str) -> bool:
+    return "cannot insert the value null into column" in db_message.lower()
+
+
+def _not_null_staging_error_message(db_message: str) -> str:
+    column_match = re.search(
+        r"Cannot insert the value NULL into column '([^']+)'",
+        db_message,
+        flags=re.IGNORECASE,
+    )
+    if column_match:
+        column_name = column_match.group(1)
+        return (
+            "Incoming data violates a NOT NULL constraint while staging. "
+            f"Column '{column_name}' received NULL values. "
+            f"Database error: {db_message}"
+        )
+    return (
+        "Incoming data violates a NOT NULL constraint while staging. "
+        f"Database error: {db_message}"
+    )
 
 
 def _raise_if_duplicate_natural_keys(

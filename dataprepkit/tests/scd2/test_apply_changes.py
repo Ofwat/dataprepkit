@@ -1252,6 +1252,46 @@ def test_insert_snapshot_rows_from_raw_maps_integrity_to_validation_error():
     )
 
 
+def test_insert_snapshot_rows_from_raw_surfaces_not_null_violation():
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    class _FakeConn:
+        engine = _FakeEngine()
+
+        def execute(self, _statement, _params=None):
+            raise IntegrityError(
+                "INSERT",
+                {},
+                Exception(
+                    "Cannot insert the value NULL into column 'Currency_Pair_Desc', "
+                    "table 'dbo.temp_snapshot'; column does not allow nulls."
+                ),
+            )
+
+    source_df = pd.DataFrame([{"Site_Cd": "A", "Currency_Pair_Desc": None}])
+
+    with pytest.raises(SCD2ValidationError) as exc_info:
+        _insert_snapshot_rows_from_raw(
+            _FakeConn(),
+            raw_table="stg_raw",
+            target_table="stg_typed",
+            columns=["Site_Cd", "Currency_Pair_Desc"],
+            column_types={"site_cd": "NVARCHAR(4000)"},
+            source_df=source_df,
+            natural_key_cols=["Site_Cd"],
+        )
+
+    message = str(exc_info.value)
+    assert "NOT NULL constraint" in message
+    assert "Currency_Pair_Desc" in message
+    assert "Database error:" in message
+    assert "duplicate natural keys" not in message.lower()
+
+
 def test_insert_snapshot_rows_from_raw_passes_duplicate_examples_to_error_message(
     monkeypatch,
 ):
