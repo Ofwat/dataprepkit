@@ -7,11 +7,13 @@ from sqlalchemy.dialects.mssql import DATETIME2
 from sqlalchemy.exc import ProgrammingError
 
 from dataprepkit.metadata_loader import (
+    DEFAULT_SYSTEM_COLUMNS,
     DimensionMetadata,
     METADATA_REGISTRY,
     get_metadata,
     register_metadata,
     run_dimension,
+    _ensure_target_table,
 )
 from dataprepkit.helpers.staging import stage_dataframe, union_tables_by_name_regex
 from dataprepkit.helpers.staging import drop_tables_by_name_regex
@@ -117,6 +119,96 @@ def test_run_dimension_supports_metadata_columns_with_spaces():
     ]
 
     METADATA_REGISTRY.pop(metadata_name, None)
+
+
+def test_ensure_target_table_relaxes_nullable_data_columns(monkeypatch):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeConn:
+        def __init__(self, statements):
+            self.statements = statements
+
+        def execute(self, statement, params=None):
+            self.statements.append(str(statement))
+
+    class _FakeTxn:
+        def __init__(self, statements):
+            self._conn = _FakeConn(statements)
+
+        def __enter__(self):
+            return self._conn
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+        def __init__(self):
+            self.statements = []
+
+        def begin(self):
+            return _FakeTxn(self.statements)
+
+    class _FakeInspector:
+        def has_table(self, table, schema=None):
+            return True
+
+        def get_columns(self, table, schema=None):
+            return [
+                {"name": "Measure_Cd", "type": "NVARCHAR(100)", "nullable": False},
+                {"name": "Measure_Name", "type": "NVARCHAR(4000)", "nullable": False},
+                {"name": "surrogate_key", "type": "INTEGER", "nullable": False},
+                {"name": "join_numeric_key", "type": "INTEGER", "nullable": False},
+                {"name": DEFAULT_SYSTEM_COLUMNS["row_hash"], "type": "TEXT", "nullable": False},
+                {"name": DEFAULT_SYSTEM_COLUMNS["insert_date"], "type": "TEXT", "nullable": False},
+                {"name": DEFAULT_SYSTEM_COLUMNS["update_date"], "type": "TEXT", "nullable": True},
+                {
+                    "name": DEFAULT_SYSTEM_COLUMNS["effective_date_start"],
+                    "type": "TEXT",
+                    "nullable": False,
+                },
+                {
+                    "name": DEFAULT_SYSTEM_COLUMNS["effective_date_end"],
+                    "type": "TEXT",
+                    "nullable": False,
+                },
+                {"name": DEFAULT_SYSTEM_COLUMNS["current_ind"], "type": "INTEGER", "nullable": False},
+                {"name": DEFAULT_SYSTEM_COLUMNS["deleted_ind"], "type": "INTEGER", "nullable": False},
+                {"name": DEFAULT_SYSTEM_COLUMNS["batch_id"], "type": "TEXT", "nullable": False},
+                {
+                    "name": DEFAULT_SYSTEM_COLUMNS["archive_filename"],
+                    "type": "TEXT",
+                    "nullable": False,
+                },
+            ]
+
+    metadata = DimensionMetadata(
+        name="nullable_dimension",
+        target_table="Dimensions.dim_nullable",
+        natural_key_cols=["Measure_Cd"],
+        data_columns={
+            "Measure_Name": {"type": "NVARCHAR(4000)", "nullable": True},
+        },
+        surrogate_key="surrogate_key",
+        join_numeric_key="join_numeric_key",
+        filepath="dummy.csv",
+        schema_handling={"mode": "evolve"},
+    )
+    engine = _FakeEngine()
+
+    monkeypatch.setattr("dataprepkit.metadata_loader.inspect", lambda _engine: _FakeInspector())
+    monkeypatch.setattr("dataprepkit.metadata_loader.ensure_schema_exists", lambda *_: None)
+
+    evolved = _ensure_target_table(engine, metadata)
+
+    assert evolved == ["Measure_Name"]
+    assert any(
+        "ALTER TABLE Dimensions.dim_nullable ALTER COLUMN [Measure_Name] NVARCHAR(4000) NULL"
+        in statement
+        for statement in engine.statements
+    )
 
 
 def test_run_dimension_na_row_is_optional():

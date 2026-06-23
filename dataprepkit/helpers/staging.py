@@ -13,6 +13,7 @@ from pandas.api.types import (
 from sqlalchemy import Engine, inspect, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.sql.elements import quoted_name
+from sqlalchemy.dialects.mssql import DATETIME2
 from dataprepkit.fact_loader import (
     HashMismatchError as _HashMismatchError,
     MissingStageFileError as _MissingStageFileError,

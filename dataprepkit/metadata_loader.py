@@ -1225,17 +1225,19 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> list[st
     schema_name, table_name = _split_table_name(metadata.target_table)
     ensure_schema_exists(engine, schema_name)
     if inspector.has_table(table_name, schema=schema_name):
-        current_columns = {
-            col["name"]
-            for col in inspector.get_columns(table_name, schema=schema_name)
-        }
+        current_column_defs = inspector.get_columns(table_name, schema=schema_name)
+        current_columns = {col["name"] for col in current_column_defs}
         current_column_lookup = _case_insensitive_column_lookup(current_columns)
+        current_column_defs_lookup = {
+            col["name"].casefold(): col for col in current_column_defs
+        }
         expected_columns = _expected_column_names(metadata)
         missing = {
             column
             for column in expected_columns
             if column.casefold() not in current_column_lookup
         }
+        evolved: list[str] = []
         if missing:
             if metadata.schema_handling.mode == "evolve":
                 logger.info(
@@ -1244,7 +1246,7 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> list[st
                     missing,
                     metadata.schema_handling.mode,
                 )
-                return _evolve_table_columns(engine, metadata, missing)
+                evolved.extend(_evolve_table_columns(engine, metadata, missing))
             else:
                 logger.warning(
                     "Existing table '%s' is missing metadata columns %s; schema handling=%s",
@@ -1252,7 +1254,15 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> list[st
                     missing,
                     metadata.schema_handling.mode,
                 )
-        return []
+        if metadata.schema_handling.mode == "evolve":
+            evolved.extend(
+                _evolve_table_nullable_columns(
+                    engine,
+                    metadata,
+                    current_column_defs_lookup,
+                )
+            )
+        return evolved
     natural_specs = {
         **{col: spec for col, spec in metadata.natural_key_specs.items()},
         **{
@@ -1599,6 +1609,40 @@ def _evolve_table_columns(
                 metadata.schema_handling.mode,
             )
     return added
+
+
+def _evolve_table_nullable_columns(
+    engine: Engine,
+    metadata: DimensionMetadata,
+    current_column_defs: Mapping[str, Mapping[str, object]],
+) -> list[str]:
+    if engine.dialect.name != "mssql":
+        return []
+
+    relaxed: list[str] = []
+    with engine.begin() as conn:
+        for column, spec in metadata.data_columns.items():
+            if not spec.nullable:
+                continue
+            current_column = current_column_defs.get(column.casefold())
+            if current_column is None or current_column.get("nullable", True):
+                continue
+            quoted_column = _quote_identifier(engine, str(current_column["name"]))
+            column_type = str(current_column["type"])
+            conn.execute(
+                text(
+                    f"ALTER TABLE {metadata.target_table} "
+                    f"ALTER COLUMN {quoted_column} {column_type} NULL"
+                )
+            )
+            relaxed.append(column)
+            logger.info(
+                "Evolved table %s by relaxing column %s to NULL for mode=%s",
+                metadata.target_table,
+                column,
+                metadata.schema_handling.mode,
+            )
+    return relaxed
 
 
 def _evolve_effective_date_column(conn: Connection, engine: Engine, table_name: str, column: str) -> None:
