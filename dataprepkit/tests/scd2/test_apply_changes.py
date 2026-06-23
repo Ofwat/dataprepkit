@@ -1308,6 +1308,35 @@ def test_duplicate_natural_keys_error_message_shows_only_duplicates():
     )
 
 
+def test_duplicate_natural_keys_error_message_does_not_depend_on_first_pass(
+    monkeypatch,
+):
+    incoming = pd.DataFrame(
+        [
+            {"Currency_Pair_Cd": "USDJPY "},
+            {"Currency_Pair_Cd": "usdjpy"},
+        ]
+    )
+
+    monkeypatch.setattr(
+        "dataprepkit.scd2._find_duplicate_natural_keys",
+        lambda *args, **kwargs: [],
+    )
+
+    message = _duplicate_natural_keys_error_message(
+        incoming,
+        ["Currency_Pair_Cd"],
+        database_detected=True,
+    )
+
+    assert "Example duplicate keys" in message
+    assert (
+        "{'original': {'Currency_Pair_Cd': 'USDJPY '}, "
+        "'normalized': {'Currency_Pair_Cd': 'usdjpy'}, 'count': 2}"
+        in message
+    )
+
+
 def test_normalize_existing_join_numeric_for_raw_keeps_integer_text():
     assert _normalize_existing_join_numeric_for_raw(7084) == "7084"
     assert _normalize_existing_join_numeric_for_raw(7084.0) == "7084"

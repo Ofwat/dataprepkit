@@ -678,12 +678,21 @@ def _duplicate_natural_keys_error_message(
     base = "Incoming data contains duplicate natural keys."
     if not natural_key_cols:
         return base
-    examples = examples or _find_duplicate_natural_keys(
-        incoming_df,
-        natural_key_cols,
-        trim_strings=database_detected,
-        casefold_strings=database_detected,
-    )
+    if examples is None:
+        if database_detected:
+            examples = _duplicate_natural_key_examples_with_original_values(
+                incoming_df,
+                natural_key_cols,
+                trim_strings=True,
+                casefold_strings=True,
+            )
+        else:
+            examples = _find_duplicate_natural_keys(
+                incoming_df,
+                natural_key_cols,
+                trim_strings=False,
+                casefold_strings=False,
+            )
     detail = (
         " after staging normalization/collation"
         if database_detected
