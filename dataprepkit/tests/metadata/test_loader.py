@@ -158,7 +158,11 @@ def test_ensure_target_table_relaxes_nullable_data_columns(monkeypatch):
         def get_columns(self, table, schema=None):
             return [
                 {"name": "Measure_Cd", "type": "NVARCHAR(100)", "nullable": False},
-                {"name": "Measure_Name", "type": "NVARCHAR(4000)", "nullable": False},
+                {
+                    "name": "Measure_Name",
+                    "type": 'NVARCHAR(4000) COLLATE "SQL_Latin1_General_CP1_CI_AS"',
+                    "nullable": False,
+                },
                 {"name": "surrogate_key", "type": "INTEGER", "nullable": False},
                 {"name": "join_numeric_key", "type": "INTEGER", "nullable": False},
                 {"name": DEFAULT_SYSTEM_COLUMNS["row_hash"], "type": "TEXT", "nullable": False},
@@ -209,6 +213,7 @@ def test_ensure_target_table_relaxes_nullable_data_columns(monkeypatch):
         in statement
         for statement in engine.statements
     )
+    assert all('COLLATE "SQL_Latin1_General_CP1_CI_AS"' not in statement for statement in engine.statements)
 
 
 def test_run_dimension_na_row_is_optional():

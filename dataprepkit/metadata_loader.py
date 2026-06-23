@@ -1220,6 +1220,11 @@ def _column_spec_clause(name: str, spec: ColumnSpec, engine: Engine) -> str:
     return f"{_quote_identifier(engine, name)} {column_type} {constraint_sql}".strip()
 
 
+def _clean_sql_type(type_name: str) -> str:
+    cleaned = str(type_name).replace('"', "")
+    return re.sub(r"\s+COLLATE\s+\S+", "", cleaned, flags=re.IGNORECASE)
+
+
 def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> list[str]:
     inspector = inspect(engine)
     schema_name, table_name = _split_table_name(metadata.target_table)
@@ -1628,7 +1633,7 @@ def _evolve_table_nullable_columns(
             if current_column is None or current_column.get("nullable", True):
                 continue
             quoted_column = _quote_identifier(engine, str(current_column["name"]))
-            column_type = str(current_column["type"])
+            column_type = _clean_sql_type(str(current_column["type"]))
             conn.execute(
                 text(
                     f"ALTER TABLE {metadata.target_table} "
