@@ -684,20 +684,6 @@ def _duplicate_natural_keys_error_message(
         trim_strings=database_detected,
         casefold_strings=database_detected,
     )
-    snapshot_detail = ""
-    sample_detail = ""
-    if incoming_df is not None:
-        snapshot_detail = f" Snapshot rows inspected: {len(incoming_df)}."
-        if database_detected:
-            sample_rows = _sample_natural_key_rows(
-                incoming_df,
-                natural_key_cols,
-                sample_limit=5,
-                trim_strings=True,
-                casefold_strings=True,
-            )
-            if sample_rows:
-                sample_detail = f" Sample normalized key rows: {sample_rows}."
     detail = (
         " after staging normalization/collation"
         if database_detected
@@ -713,8 +699,6 @@ def _duplicate_natural_keys_error_message(
         return (
             f"Incoming data contains duplicate natural keys{detail}. "
             f"Natural key columns: {list(natural_key_cols)}. "
-            f"{snapshot_detail}"
-            f"{sample_detail}"
             "Unable to isolate duplicate keys from the in-memory snapshot."
         )
     return (
@@ -758,31 +742,6 @@ def _find_duplicate_natural_keys(
         example["count"] = int(row["count"])
         examples.append(example)
     return examples
-
-
-def _sample_natural_key_rows(
-    incoming_df: pd.DataFrame | None,
-    natural_key_cols: Sequence[str],
-    *,
-    sample_limit: int = 5,
-    trim_strings: bool = False,
-    casefold_strings: bool = False,
-) -> list[dict[str, object]]:
-    if incoming_df is None or not natural_key_cols or incoming_df.empty:
-        return []
-    try:
-        key_frame = incoming_df.loc[:, list(natural_key_cols)].copy()
-    except KeyError:
-        return []
-    for column in natural_key_cols:
-        key_frame[column] = key_frame[column].map(
-            lambda value: _normalize_duplicate_key_value(
-                value,
-                trim_strings=trim_strings,
-                casefold_strings=casefold_strings,
-            )
-        )
-    return key_frame.drop_duplicates().head(sample_limit).to_dict(orient="records")
 
 
 def _normalize_duplicate_key_value(

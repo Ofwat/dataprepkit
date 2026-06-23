@@ -1277,10 +1277,11 @@ def test_insert_snapshot_rows_maps_integrity_to_explicit_duplicate_key_error():
     assert "{'join_key': 'a', 'count': 2}" in str(exc_info.value)
 
 
-def test_duplicate_natural_keys_error_message_includes_snapshot_summary():
+def test_duplicate_natural_keys_error_message_shows_only_duplicates():
     incoming = pd.DataFrame(
         [
             {"Currency_Pair_Cd": "USDJPY "},
+            {"Currency_Pair_Cd": "usdjpy"},
             {"Currency_Pair_Cd": "EURUSD"},
         ]
     )
@@ -1291,9 +1292,8 @@ def test_duplicate_natural_keys_error_message_includes_snapshot_summary():
         database_detected=True,
     )
 
-    assert "Snapshot rows inspected: 2." in message
-    assert "Sample normalized key rows" in message
-    assert "Unable to isolate duplicate keys from the in-memory snapshot." in message
+    assert "Example duplicate keys" in message
+    assert "{'Currency_Pair_Cd': 'usdjpy', 'count': 2}" in message
 
 
 def test_normalize_existing_join_numeric_for_raw_keeps_integer_text():
