@@ -690,6 +690,14 @@ def _duplicate_natural_keys_error_message(
         else ""
     )
     if examples:
+        if database_detected and incoming_df is not None:
+            examples = _duplicate_natural_key_examples_with_original_values(
+                incoming_df,
+                natural_key_cols,
+                sample_limit=len(examples),
+                trim_strings=True,
+                casefold_strings=True,
+            )
         return (
             f"Incoming data contains duplicate natural keys{detail}. "
             f"Natural key columns: {list(natural_key_cols)}. "
@@ -741,6 +749,44 @@ def _find_duplicate_natural_keys(
         example = {col: row[col] for col in natural_key_cols}
         example["count"] = int(row["count"])
         examples.append(example)
+    return examples
+
+
+def _duplicate_natural_key_examples_with_original_values(
+    incoming_df: pd.DataFrame | None,
+    natural_key_cols: Sequence[str],
+    *,
+    sample_limit: int = 10,
+    trim_strings: bool = False,
+    casefold_strings: bool = False,
+) -> list[dict[str, object]]:
+    if incoming_df is None or not natural_key_cols or incoming_df.empty:
+        return []
+    key_frame = incoming_df.loc[:, list(natural_key_cols)].copy()
+    normalized = key_frame.copy()
+    for column in natural_key_cols:
+        normalized[column] = normalized[column].map(
+            lambda value: _normalize_duplicate_key_value(
+                value,
+                trim_strings=trim_strings,
+                casefold_strings=casefold_strings,
+            )
+        )
+    duplicate_groups = normalized.groupby(list(natural_key_cols), dropna=False)
+    examples: list[dict[str, object]] = []
+    for _, group in duplicate_groups:
+        if len(group) <= 1:
+            continue
+        first_index = group.index[0]
+        examples.append(
+            {
+                "original": key_frame.loc[first_index, list(natural_key_cols)].to_dict(),
+                "normalized": group.iloc[0].to_dict(),
+                "count": int(len(group)),
+            }
+        )
+        if len(examples) >= sample_limit:
+            break
     return examples
 
 

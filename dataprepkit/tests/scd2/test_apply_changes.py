@@ -1245,7 +1245,11 @@ def test_insert_snapshot_rows_from_raw_maps_integrity_to_validation_error():
             source_df=source_df,
             natural_key_cols=["Site_Cd"],
         )
-    assert "{'Site_Cd': 'a', 'count': 2}" in str(exc_info.value)
+    assert (
+        "{'original': {'Site_Cd': 'A '}, 'normalized': {'Site_Cd': 'a'}, "
+        "'count': 2}"
+        in str(exc_info.value)
+    )
 
 
 def test_insert_snapshot_rows_maps_integrity_to_explicit_duplicate_key_error():
@@ -1274,7 +1278,11 @@ def test_insert_snapshot_rows_maps_integrity_to_explicit_duplicate_key_error():
             data_cols=["data_column"],
             hash_col="row_hash",
         )
-    assert "{'join_key': 'a', 'count': 2}" in str(exc_info.value)
+    assert (
+        "{'original': {'join_key': 'A '}, 'normalized': {'join_key': 'a'}, "
+        "'count': 2}"
+        in str(exc_info.value)
+    )
 
 
 def test_duplicate_natural_keys_error_message_shows_only_duplicates():
@@ -1293,7 +1301,11 @@ def test_duplicate_natural_keys_error_message_shows_only_duplicates():
     )
 
     assert "Example duplicate keys" in message
-    assert "{'Currency_Pair_Cd': 'usdjpy', 'count': 2}" in message
+    assert (
+        "{'original': {'Currency_Pair_Cd': 'USDJPY '}, "
+        "'normalized': {'Currency_Pair_Cd': 'usdjpy'}, 'count': 2}"
+        in message
+    )
 
 
 def test_normalize_existing_join_numeric_for_raw_keeps_integer_text():
