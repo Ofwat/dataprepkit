@@ -12,6 +12,7 @@ from dataprepkit.scd2 import (
     EFFECTIVE_DATE_MAX,
     EFFECTIVE_DATE_MIN,
     _create_staging_table,
+    _duplicate_natural_keys_error_message,
     _insert_snapshot_rows,
     _insert_snapshot_rows_from_raw,
     _normalize_existing_join_numeric_for_raw,
@@ -1274,6 +1275,25 @@ def test_insert_snapshot_rows_maps_integrity_to_explicit_duplicate_key_error():
             hash_col="row_hash",
         )
     assert "{'join_key': 'a', 'count': 2}" in str(exc_info.value)
+
+
+def test_duplicate_natural_keys_error_message_includes_snapshot_summary():
+    incoming = pd.DataFrame(
+        [
+            {"Currency_Pair_Cd": "USDJPY "},
+            {"Currency_Pair_Cd": "EURUSD"},
+        ]
+    )
+
+    message = _duplicate_natural_keys_error_message(
+        incoming,
+        ["Currency_Pair_Cd"],
+        database_detected=True,
+    )
+
+    assert "Snapshot rows inspected: 2." in message
+    assert "Sample normalized key rows" in message
+    assert "Unable to isolate duplicate keys from the in-memory snapshot." in message
 
 
 def test_normalize_existing_join_numeric_for_raw_keeps_integer_text():
