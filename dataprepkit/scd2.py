@@ -524,6 +524,12 @@ def _insert_snapshot_rows(
     columns = list(natural_key_cols) + list(data_cols) + [hash_col]
     if extra_columns:
         columns.extend(extra_columns)
+    duplicate_examples = _duplicate_natural_key_examples_with_original_values(
+        incoming_df,
+        natural_key_cols,
+        trim_strings=True,
+        casefold_strings=True,
+    )
     engine = getattr(conn, "engine", None)
     rendered_columns = ", ".join(
         _quote_identifier(engine, col) if engine is not None else col
@@ -564,6 +570,7 @@ def _insert_snapshot_rows(
                 incoming_df,
                 natural_key_cols,
                 database_detected=True,
+                examples=duplicate_examples,
             )
         ) from exc
 
@@ -579,6 +586,12 @@ def _insert_snapshot_rows_from_raw(
     source_df: pd.DataFrame | None = None,
     natural_key_cols: Sequence[str] | None = None,
 ) -> None:
+    duplicate_examples = _duplicate_natural_key_examples_with_original_values(
+        source_df,
+        natural_key_cols or [],
+        trim_strings=True,
+        casefold_strings=True,
+    )
     rendered_columns = ", ".join(_quote_identifier(conn.engine, col) for col in columns)
     select_parts = []
     for col in columns:
@@ -610,6 +623,7 @@ def _insert_snapshot_rows_from_raw(
                 source_df,
                 natural_key_cols or [],
                 database_detected=True,
+                examples=duplicate_examples,
             )
         ) from exc
 

@@ -1252,6 +1252,65 @@ def test_insert_snapshot_rows_from_raw_maps_integrity_to_validation_error():
     )
 
 
+def test_insert_snapshot_rows_from_raw_passes_duplicate_examples_to_error_message(
+    monkeypatch,
+):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    class _FakeConn:
+        engine = _FakeEngine()
+
+        def execute(self, _statement, _params=None):
+            raise IntegrityError("INSERT", {}, Exception("dup"))
+
+    source_df = pd.DataFrame([{"Site_Cd": "A "}, {"Site_Cd": "a"}])
+    captured = {}
+
+    def _fake_duplicate_message(
+        incoming_df,
+        natural_key_cols,
+        *,
+        database_detected=False,
+        examples=None,
+    ):
+        captured["incoming_df"] = incoming_df
+        captured["natural_key_cols"] = list(natural_key_cols)
+        captured["database_detected"] = database_detected
+        captured["examples"] = examples
+        return "duplicate key details"
+
+    monkeypatch.setattr(
+        "dataprepkit.scd2._duplicate_natural_keys_error_message",
+        _fake_duplicate_message,
+    )
+
+    with pytest.raises(SCD2ValidationError, match="duplicate key details"):
+        _insert_snapshot_rows_from_raw(
+            _FakeConn(),
+            raw_table="stg_raw",
+            target_table="stg_typed",
+            columns=["Site_Cd", "existing_join_numeric"],
+            column_types={"site_cd": "NVARCHAR(4000)"},
+            column_type_overrides={"existing_join_numeric": "BIGINT"},
+            source_df=source_df,
+            natural_key_cols=["Site_Cd"],
+        )
+
+    assert captured["database_detected"] is True
+    assert captured["natural_key_cols"] == ["Site_Cd"]
+    assert captured["examples"] == [
+        {
+            "original": {"Site_Cd": "A "},
+            "normalized": {"Site_Cd": "a"},
+            "count": 2,
+        }
+    ]
+
+
 def test_insert_snapshot_rows_maps_integrity_to_explicit_duplicate_key_error():
     class _FakeConn:
         engine = type("E", (), {"dialect": type("D", (), {"name": "sqlite"})()})()
