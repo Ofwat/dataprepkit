@@ -1748,7 +1748,7 @@ def test_load_fact_from_maps_append_mode_matches_metadata_columns_case_insensiti
     assert [column[1] for column in columns].count("batch_id") == 1
 
 
-def test_load_fact_from_maps_append_mode_skips_duplicate_rows_across_batches():
+def test_load_fact_from_maps_append_mode_inserts_full_batch_across_batches():
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
 
     with engine.begin() as conn:
@@ -1833,7 +1833,8 @@ def test_load_fact_from_maps_append_mode_skips_duplicate_rows_across_batches():
         ).mappings().all()
 
     assert rows == [
-        {"Batch_Id": "BATCH1", "Measure_Instance_Id": 200, "Value": 1.5}
+        {"Batch_Id": "BATCH1", "Measure_Instance_Id": 200, "Value": 1.5},
+        {"Batch_Id": "BATCH2", "Measure_Instance_Id": 200, "Value": 1.5},
     ]
 
 

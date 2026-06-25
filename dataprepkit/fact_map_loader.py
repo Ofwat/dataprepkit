@@ -781,7 +781,6 @@ def load_fact_from_maps(
     base_joins: list[str] = []
     metadata_selects: list[str] = []
     metadata_params: dict[str, object] = {}
-    duplicate_check_columns: list[str] = []
 
     staging_sql = _render_table_name(engine, staging_schema, staging_table)
     fact_sql = _render_table_name(engine, fact_schema, fact_table)
@@ -878,7 +877,6 @@ def load_fact_from_maps(
                 False,
             )
         )
-        duplicate_check_columns.append(target_column)
         if target.get("comment"):
             column_comments[target_column] = str(target["comment"])
 
@@ -961,7 +959,6 @@ def load_fact_from_maps(
             data_column_backfills[column_name.casefold()] = column[
                 "backfill_existing_rows"
             ]
-        duplicate_check_columns.append(column_name)
         if column.get("unique", False):
             unique_data_columns.append(column_name)
         if column.get("comment"):
@@ -1018,7 +1015,6 @@ def load_fact_from_maps(
                 True,
             )
         )
-        duplicate_check_columns.append(target_column)
         if target.get("comment"):
             column_comments[target_column] = str(target["comment"])
 
@@ -1045,23 +1041,10 @@ def load_fact_from_maps(
     final_select_sql = ", ".join(final_selects)
     join_sql = " ".join(base_joins)
     additional_join_sql = " ".join(additional_joins)
-    duplicate_predicate = _null_safe_row_match_predicate(
-        engine,
-        left_alias="e",
-        right_alias="src",
-        columns=duplicate_check_columns,
-    )
     projected_rows_sql = (
         f"SELECT {final_select_sql} FROM base_rows b {additional_join_sql}"
     )
     final_source_sql = projected_rows_sql
-    if mode == "append":
-        final_source_sql = (
-            f"SELECT * FROM ({projected_rows_sql}) src "
-            f"WHERE NOT EXISTS ("
-            f"SELECT 1 FROM {fact_sql} e WHERE {duplicate_predicate}"
-            f")"
-        )
     insert_params = {
         **{
             key: value
