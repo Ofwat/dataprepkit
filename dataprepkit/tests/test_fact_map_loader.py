@@ -1043,6 +1043,94 @@ def test_load_fact_from_maps_raises_structured_error_for_missing_dimension_looku
         )
 
 
+def test_load_fact_from_maps_reports_all_missing_dimensions_in_one_error():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE staging_fact (
+                    Currency_Pair_Cd TEXT,
+                    Measure_Cd TEXT,
+                    Value REAL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_currency_pair (
+                    Currency_Pair_Cd TEXT,
+                    Currency_Pair_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE dim_measure (
+                    Measure_Cd TEXT,
+                    Measure_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO staging_fact (Currency_Pair_Cd, Measure_Cd, Value)
+                VALUES ('CROSSTOT', 'FIN0075', 1.5)
+                """
+            )
+        )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        load_fact_from_maps(
+            engine=engine,
+            lookup_map={
+                "Currency_Pair_Cd": {
+                    "source": {
+                        "schema": None,
+                        "table": "dim_currency_pair",
+                        "lookup_column": "Currency_Pair_Cd",
+                        "value_column": "Currency_Pair_Instance_Id",
+                    },
+                    "target": {
+                        "column": "Currency_Pair_Instance_Id",
+                        "comment": "Currency pair instance",
+                    },
+                },
+                "Measure_Cd": {
+                    "source": {
+                        "schema": None,
+                        "table": "dim_measure",
+                        "lookup_column": "Measure_Cd",
+                        "value_column": "Measure_Instance_Id",
+                    },
+                    "target": {
+                        "column": "Measure_Instance_Id",
+                        "comment": "Measure instance",
+                    },
+                },
+            },
+            expected_lookup_columns=["Currency_Pair_Cd", "Measure_Cd"],
+            data_columns=[{"column": "Value", "comment": "Actual inserted value"}],
+            additional_columns=[],
+            staging_table="staging_fact",
+            staging_schema=None,
+            fact_table="fact_result",
+            fact_schema=None,
+        )
+
+    message = str(exc_info.value)
+    assert message.count("Missing dimension match in") == 2
+    assert "dim_currency_pair" in message
+    assert "dim_measure" in message
+
+
 def test_load_fact_from_maps_raises_for_missing_data_column():
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
 

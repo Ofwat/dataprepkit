@@ -385,6 +385,96 @@ def test_ingest_fact_missing_dimension(fact_engine):
         ingest_fact(fact_engine, config, batch_id="B2")
 
 
+def test_ingest_fact_reports_all_missing_dimensions_in_one_error():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE staging (
+                    batch_id TEXT,
+                    Currency_Pair_Cd TEXT,
+                    Measure_Cd TEXT,
+                    measure_value REAL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE main.dim_currency_pair (
+                    Currency_Pair_Cd TEXT,
+                    Currency_Pair_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE main.dim_measure (
+                    Measure_Cd TEXT,
+                    Measure_Instance_Id INTEGER
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO staging (batch_id, Currency_Pair_Cd, Measure_Cd, measure_value)
+                VALUES ('B_multi', 'CROSSTOT', 'FIN0075', 1.0)
+                """
+            )
+        )
+
+    config = FactConfig(
+        batch=FactBatchMetadata(
+            fact_table="fact",
+            batch_id="B_multi",
+            validations={},
+        ),
+        dimensions=[
+            DimensionJoinSpec(
+                dim_table="main.dim_currency_pair",
+                staging_columns=["Currency_Pair_Cd"],
+                dim_columns=["Currency_Pair_Cd"],
+                add_columns={"Currency_Pair_Instance_Id": "Currency_Pair_Instance_Id"},
+                require_not_null=["Currency_Pair_Instance_Id"],
+            ),
+            DimensionJoinSpec(
+                dim_table="main.dim_measure",
+                staging_columns=["Measure_Cd"],
+                dim_columns=["Measure_Cd"],
+                add_columns={"Measure_Instance_Id": "Measure_Instance_Id"},
+                require_not_null=["Measure_Instance_Id"],
+            ),
+        ],
+        fact_columns=[
+            "Currency_Pair_Instance_Id",
+            "Measure_Instance_Id",
+            "measure_value",
+        ],
+        source_table="staging",
+        temp_table="tmp_fact",
+        temp_columns={
+            "batch_id": None,
+            "Currency_Pair_Cd": None,
+            "Measure_Cd": None,
+            "measure_value": None,
+        },
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        ingest_fact(engine, config, batch_id="B_multi")
+
+    message = str(exc_info.value)
+    assert message.count("Missing dimension match in") == 2
+    assert "main.dim_currency_pair" in message
+    assert "main.dim_measure" in message
+
+
 def test_ingest_fact_creates_fact_table_when_missing(fact_engine):
     with fact_engine.begin() as conn:
         conn.execute(text("DROP TABLE IF EXISTS fact"))

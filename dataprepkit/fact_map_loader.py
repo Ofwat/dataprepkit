@@ -630,6 +630,7 @@ def _validate_lookup_matches(
     staging_table: str,
     active_lookups: Sequence[Mapping[str, object]],
 ) -> None:
+    missing_lookup_messages: list[str] = []
     for active_lookup in active_lookups:
         staging_column = active_lookup["staging_column"]
         config = active_lookup["config"]
@@ -653,7 +654,10 @@ def _validate_lookup_matches(
             lookup_value=active_lookup["lookup_value"],
         )
         if count:
-            raise RuntimeError(message)
+            missing_lookup_messages.append(message)
+
+    if missing_lookup_messages:
+        raise RuntimeError("\n".join(missing_lookup_messages))
 
 
 def _apply_comments(

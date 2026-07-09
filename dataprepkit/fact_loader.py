@@ -786,6 +786,7 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
     source_table_sql = _render_table_name(engine, config.source_table)
     temp_table_sql = _render_table_name(engine, config.temp_table)
     fact_table_sql = _render_table_name(engine, config.batch.fact_table)
+    missing_lookup_messages: list[str] = []
 
     def _register_dimension_columns(spec: DimensionJoinSpec) -> None:
         surrogate_col = spec.surrogate_column or _default_surrogate_column_name(
@@ -806,7 +807,12 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
     if not base_cols:
         raise RuntimeError("No base columns defined for temp table copy")
 
-    def _apply_dimension(base_table: str, spec: DimensionJoinSpec, *, conn=None) -> None:
+    def _apply_dimension(
+        base_table: str,
+        spec: DimensionJoinSpec,
+        *,
+        conn=None,
+    ) -> None:
         base_column_types = _get_column_types(engine, base_table)
         dim_column_types = _get_column_types(engine, spec.dim_table)
         predicate = " AND ".join(
@@ -890,11 +896,15 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
                         dim_columns=spec.dim_columns,
                         required_columns=spec.require_not_null,
                     )
-                raise RuntimeError(
-                    message
-                )
+                missing_lookup_messages.append(message)
+                return
 
-    def _apply_extra_column(base_table: str, spec: ExtraColumnSpec, *, conn=None) -> None:
+    def _apply_extra_column(
+        base_table: str,
+        spec: ExtraColumnSpec,
+        *,
+        conn=None,
+    ) -> None:
         base_column_types = _get_column_types(engine, base_table)
         dim_column_types = _get_column_types(engine, spec.dim_table)
         predicate = " AND ".join(
@@ -955,9 +965,8 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
                         dim_columns=spec.dim_columns,
                         required_columns=[spec.column],
                     )
-                raise RuntimeError(
-                    message
-                )
+                missing_lookup_messages.append(message)
+                return
 
     resolved_fact_columns, fact_columns_types = _resolve_fact_columns(
         config.fact_columns, temp_columns
@@ -1014,15 +1023,33 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
                 )
                 conn.execute(insert_temp)
                 for dimension in config.dimensions:
-                    _apply_dimension(temp_table_sql, dimension, conn=conn)
+                    _apply_dimension(
+                        temp_table_sql,
+                        dimension,
+                        conn=conn,
+                    )
                     for extra in config.extra_columns:
                         if extra.dim_table == dimension.dim_table:
-                            _apply_extra_column(temp_table_sql, extra, conn=conn)
+                            _apply_extra_column(
+                                temp_table_sql,
+                                extra,
+                                conn=conn,
+                            )
                     for chained in dimension.join_chain:
-                        _apply_dimension(temp_table_sql, chained, conn=conn)
+                        _apply_dimension(
+                            temp_table_sql,
+                            chained,
+                            conn=conn,
+                        )
                         for extra in config.extra_columns:
                             if extra.dim_table == chained.dim_table:
-                                _apply_extra_column(temp_table_sql, extra, conn=conn)
+                                _apply_extra_column(
+                                    temp_table_sql,
+                                    extra,
+                                    conn=conn,
+                                )
+                if missing_lookup_messages:
+                    raise RuntimeError("\n".join(missing_lookup_messages))
                 insert_columns = [config.batch_id_column_name]
                 select_values = [":batch_id"]
                 if config.batch.input_archive_base_dir:
@@ -1077,6 +1104,8 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
                 for extra in config.extra_columns:
                     if extra.dim_table == chained.dim_table:
                         _apply_extra_column(temp_table_sql, extra)
+        if missing_lookup_messages:
+            raise RuntimeError("\n".join(missing_lookup_messages))
 
         with engine.begin() as conn:
             insert_columns = [config.batch_id_column_name]
