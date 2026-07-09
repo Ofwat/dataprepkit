@@ -657,7 +657,7 @@ def _validate_lookup_matches(
             missing_lookup_messages.append(message)
 
     if missing_lookup_messages:
-        raise RuntimeError("\n\n".join(missing_lookup_messages))
+        raise RuntimeError("\n".join(missing_lookup_messages))
 
 
 def _apply_comments(
