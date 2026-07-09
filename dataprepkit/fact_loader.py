@@ -1049,7 +1049,7 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
                                     conn=conn,
                                 )
                 if missing_lookup_messages:
-                    raise RuntimeError("\n".join(missing_lookup_messages))
+                    raise RuntimeError("\n\n".join(missing_lookup_messages))
                 insert_columns = [config.batch_id_column_name]
                 select_values = [":batch_id"]
                 if config.batch.input_archive_base_dir:
@@ -1105,7 +1105,7 @@ def ingest_fact(engine: Engine, config: FactConfig, *, batch_id: str, mode: str 
                     if extra.dim_table == chained.dim_table:
                         _apply_extra_column(temp_table_sql, extra)
         if missing_lookup_messages:
-            raise RuntimeError("\n".join(missing_lookup_messages))
+            raise RuntimeError("\n\n".join(missing_lookup_messages))
 
         with engine.begin() as conn:
             insert_columns = [config.batch_id_column_name]
