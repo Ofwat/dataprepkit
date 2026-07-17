@@ -300,8 +300,8 @@ def test_build_dimension_dependency_edge_frame_returns_dependency_edges():
     assert list(graph.columns) == ["source", "target"]
     assert graph.to_dict(orient="records") == [
         {"source": "dim_region", "target": "dim_scheme"},
-        {"source": "dim_region", "target": None},
-        {"source": "dim_isolated", "target": None},
+        {"source": None, "target": "dim_region"},
+        {"source": None, "target": "dim_isolated"},
     ]
 
 
