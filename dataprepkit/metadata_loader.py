@@ -329,6 +329,11 @@ def build_dimension_dependency_edge_frame(
         for name, dependencies in dependency_graph.items()
         for dependency in sorted(dependencies)
     ]
+    rows.extend(
+        {"source": name, "target": None}
+        for name, dependencies in dependency_graph.items()
+        if not dependencies
+    )
     return pd.DataFrame(rows, columns=["source", "target"])
 
 

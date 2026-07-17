@@ -257,6 +257,15 @@ def test_build_dimension_dependency_graph_orders_registered_dimensions():
 
 
 def test_build_dimension_dependency_edge_frame_returns_dependency_edges():
+    isolated = DimensionMetadata(
+        name="dim_isolated",
+        target_table="Dimensions.dim_isolated",
+        natural_key_cols=["Isolated_Cd"],
+        data_columns={"Name": ColumnSpec(type="TEXT", nullable=True)},
+        surrogate_key="Isolated_Instance_Id",
+        join_numeric_key="Isolated_Id",
+        filepath="isolated.xlsx",
+    )
     upstream = DimensionMetadata(
         name="dim_region",
         target_table="Dimensions.dim_region",
@@ -285,12 +294,14 @@ def test_build_dimension_dependency_edge_frame_returns_dependency_edges():
     )
 
     graph = build_dimension_dependency_edge_frame(
-        {"dim_scheme": downstream, "dim_region": upstream}
+        {"dim_scheme": downstream, "dim_region": upstream, "dim_isolated": isolated}
     )
 
     assert list(graph.columns) == ["source", "target"]
     assert graph.to_dict(orient="records") == [
-        {"source": "dim_region", "target": "dim_scheme"}
+        {"source": "dim_region", "target": "dim_scheme"},
+        {"source": "dim_region", "target": None},
+        {"source": "dim_isolated", "target": None},
     ]
 
 
