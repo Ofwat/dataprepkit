@@ -319,6 +319,19 @@ def build_dimension_dependency_graph(
     return graph
 
 
+def build_dimension_dependency_edge_frame(
+    metadata_registry: Mapping[str, DimensionMetadata] | None = None,
+) -> pd.DataFrame:
+    """Return the registered dependency DAG as a two-column edge list."""
+    dependency_graph = build_dimension_dependency_graph(metadata_registry)
+    rows = [
+        {"source": dependency, "target": name}
+        for name, dependencies in dependency_graph.items()
+        for dependency in sorted(dependencies)
+    ]
+    return pd.DataFrame(rows, columns=["source", "target"])
+
+
 def resolve_dimension_execution_order(
     metadata_registry: Mapping[str, DimensionMetadata] | None = None,
 ) -> list[str]:

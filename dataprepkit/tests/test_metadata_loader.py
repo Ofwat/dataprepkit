@@ -14,6 +14,7 @@ from dataprepkit.metadata_loader import (
     _post_scd2_validation,
     _surrogate_column_clause,
     build_dimension_dependency_graph,
+    build_dimension_dependency_edge_frame,
     resolve_dimension_execution_order,
     run_dimensions_in_dependency_order,
 )
@@ -253,6 +254,44 @@ def test_build_dimension_dependency_graph_orders_registered_dimensions():
     assert resolve_dimension_execution_order(
         {"dim_scheme": downstream, "dim_region": upstream}
     ) == ["dim_region", "dim_scheme"]
+
+
+def test_build_dimension_dependency_edge_frame_returns_dependency_edges():
+    upstream = DimensionMetadata(
+        name="dim_region",
+        target_table="Dimensions.dim_region",
+        natural_key_cols=["Region_Cd"],
+        data_columns={"Region_Name": ColumnSpec(type="TEXT", nullable=True)},
+        surrogate_key="Region_Instance_Id",
+        join_numeric_key="Region_Id",
+        filepath="region.xlsx",
+    )
+    downstream = DimensionMetadata(
+        name="dim_scheme",
+        target_table="Dimensions.dim_scheme",
+        natural_key_cols=["Scheme_Cd"],
+        data_columns={"Region_Instance_Id": ColumnSpec(type="BIGINT", nullable=True)},
+        surrogate_key="Scheme_Instance_Id",
+        join_numeric_key="Scheme_Id",
+        filepath="scheme.xlsx",
+        dependencies=[
+            DependencyJoin(
+                table="dim_region",
+                schema="Dimensions",
+                on=[{"source": "Region_Cd", "target": "Region_Cd"}],
+                select={"Region_Instance_Id": "Region_Instance_Id"},
+            )
+        ],
+    )
+
+    graph = build_dimension_dependency_edge_frame(
+        {"dim_scheme": downstream, "dim_region": upstream}
+    )
+
+    assert list(graph.columns) == ["source", "target"]
+    assert graph.to_dict(orient="records") == [
+        {"source": "dim_region", "target": "dim_scheme"}
+    ]
 
 
 def test_resolve_dimension_execution_order_ignores_external_dependencies():
