@@ -785,6 +785,7 @@ def load_fact_from_maps(
     base_joins: list[str] = []
     metadata_selects: list[str] = []
     metadata_params: dict[str, object] = {}
+    retained_lookup_params: dict[str, object] = {}
 
     staging_sql = _render_table_name(engine, staging_schema, staging_table)
     fact_sql = _render_table_name(engine, fact_schema, fact_table)
@@ -792,6 +793,11 @@ def load_fact_from_maps(
     metadata_columns = list(metadata_columns or [])
     batch_metadata_column = _get_batch_metadata_column(metadata_columns)
     fact_exists = _table_exists(engine, schema=fact_schema, table=fact_table)
+    existing_fact_column_lookup: dict[str, str] = {}
+    if mode == "append" and fact_exists:
+        existing_fact_column_lookup = _case_insensitive_column_lookup(
+            _get_table_columns(engine, schema=fact_schema, table=fact_table)
+        )
 
     archive_filename: str | None = None
     if archive_base_dir and any(
@@ -883,6 +889,87 @@ def load_fact_from_maps(
         )
         if target.get("comment"):
             column_comments[target_column] = str(target["comment"])
+
+    active_lookup_columns = set(expected_lookup_columns or lookup_map.keys())
+    active_target_columns = {
+        str(active_lookup["config"]["target"]["column"]).casefold()
+        for active_lookup in active_lookups
+    }
+    retained_lookup_index = 0
+    for lookup_column, config in lookup_map.items():
+        target = config["target"]
+        target_column = str(target["column"])
+        fallback_value = (config.get("fallbacks") or {}).get(
+            "column_missing_in_staging"
+        )
+        if (
+            lookup_column in active_lookup_columns
+            or target_column.casefold() in active_target_columns
+            or target_column.casefold() not in existing_fact_column_lookup
+            or fallback_value is None
+        ):
+            continue
+
+        source = config["source"]
+        source_schema = source.get("schema")
+        source_table = source["table"]
+        source_lookup_column = source["lookup_column"]
+        source_value_column = source["value_column"]
+        alias = f"retained_lookup_{retained_lookup_index}"
+        retained_lookup_index += 1
+        param_name = f"retained_lookup_fallback_{retained_lookup_index}"
+        source_lookup_type = _get_column_type(
+            engine,
+            schema=source_schema,
+            table=source_table,
+            column=source_lookup_column,
+        )
+        lookup_sql = _case_sensitive_match_expression(
+            engine,
+            f":{param_name}",
+            source_lookup_type,
+        )
+        source_lookup_sql = _case_sensitive_match_expression(
+            engine,
+            f"{alias}.{_quote_identifier(engine, source_lookup_column)}",
+            source_lookup_type,
+        )
+        current_clause = ""
+        current_column = _get_current_indicator_column(
+            engine,
+            schema=source_schema,
+            table=source_table,
+        )
+        if current_column:
+            current_clause = (
+                f" AND ({alias}.{_quote_identifier(engine, current_column)} = 1 "
+                f"OR {alias}.{_quote_identifier(engine, current_column)} IS NULL)"
+            )
+
+        base_joins.append(
+            "LEFT JOIN "
+            f"{_render_table_name(engine, source_schema, source_table)} {alias} "
+            f"ON {source_lookup_sql} = {lookup_sql}{current_clause}"
+        )
+        base_selects.append(
+            f"{alias}.{_quote_identifier(engine, source_value_column)} "
+            f"AS {_quote_identifier(engine, target_column)}"
+        )
+        column_definitions.append(
+            (
+                target_column,
+                _get_column_type(
+                    engine,
+                    schema=source_schema,
+                    table=source_table,
+                    column=source_value_column,
+                ),
+                True,
+            )
+        )
+        if target.get("comment"):
+            column_comments[target_column] = str(target["comment"])
+        retained_lookup_params[param_name] = fallback_value
 
     for index, config in enumerate(metadata_columns):
         target = config["target"]
@@ -1056,6 +1143,7 @@ def load_fact_from_maps(
             for key, value in active_lookup["lookup_params"].items()
         },
         **metadata_params,
+        **retained_lookup_params,
     }
 
     with engine.begin() as conn:
@@ -1065,14 +1153,6 @@ def load_fact_from_maps(
         if not fact_exists:
             conn.execute(text(f"CREATE TABLE {fact_sql} ({create_columns_sql})"))
         elif mode == "append":
-            existing_fact_columns = _get_table_columns(
-                engine,
-                schema=fact_schema,
-                table=fact_table,
-            )
-            existing_fact_column_lookup = _case_insensitive_column_lookup(
-                existing_fact_columns
-            )
             added_fact_columns: set[str] = set()
             for column_name, column_type, _ in column_definitions:
                 if column_name.casefold() in existing_fact_column_lookup:

@@ -2610,6 +2610,116 @@ def test_load_fact_from_maps_append_mode_does_not_backfill_existing_lookup_colum
     ]
 
 
+def test_load_fact_from_maps_append_mode_populates_retained_lookup_column():
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+
+    with engine.begin() as conn:
+        conn.execute(text("ATTACH DATABASE ':memory:' AS facts"))
+        conn.execute(
+            text("CREATE TABLE staging_fact (Measure_Cd TEXT, Value REAL)")
+        )
+        conn.execute(
+            text(
+                "CREATE TABLE dim_measure "
+                "(Measure_Cd TEXT, Measure_Instance_Id INTEGER)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE TABLE dim_region "
+                "(Region_Cd TEXT, Region_Instance_Id INTEGER)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO dim_measure (Measure_Cd, Measure_Instance_Id) "
+                "VALUES ('MEASURE1', 200)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO dim_region (Region_Cd, Region_Instance_Id) "
+                "VALUES ('NA', 300)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO staging_fact (Measure_Cd, Value) "
+                "VALUES ('MEASURE1', 1.5)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE TABLE facts.fact_result ("
+                "Measure_Instance_Id INTEGER, "
+                "Region_Instance_Id INTEGER, "
+                "Batch_Id TEXT NOT NULL, "
+                "Value REAL)"
+            )
+        )
+
+    load_fact_from_maps(
+        engine=engine,
+        lookup_map={
+            "Measure_Cd": {
+                "source": {
+                    "schema": "main",
+                    "table": "dim_measure",
+                    "lookup_column": "Measure_Cd",
+                    "value_column": "Measure_Instance_Id",
+                },
+                "target": {
+                    "column": "Measure_Instance_Id",
+                    "comment": "Measure key",
+                },
+            },
+            "Region_Cd": {
+                "source": {
+                    "schema": "main",
+                    "table": "dim_region",
+                    "lookup_column": "Region_Cd",
+                    "value_column": "Region_Instance_Id",
+                },
+                "target": {
+                    "column": "Region_Instance_Id",
+                    "comment": "Region key",
+                },
+                "fallbacks": {"column_missing_in_staging": "NA"},
+            },
+        },
+        data_columns=[{"column": "Value", "comment": "Value"}],
+        additional_columns=[],
+        metadata_columns=[
+            {
+                "target": {"column": "Batch_Id", "comment": "Batch"},
+                "source": {"kind": "parameter", "name": "batch_id"},
+            }
+        ],
+        runtime_values={"batch_id": "BATCH1"},
+        expected_lookup_columns=["Measure_Cd"],
+        staging_table="staging_fact",
+        staging_schema="main",
+        fact_table="fact_result",
+        fact_schema="facts",
+        mode="append",
+    )
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT Measure_Instance_Id, Region_Instance_Id, Batch_Id, Value "
+                "FROM facts.fact_result"
+            )
+        ).mappings().one()
+
+    assert row == {
+        "Measure_Instance_Id": 200,
+        "Region_Instance_Id": 300,
+        "Batch_Id": "BATCH1",
+        "Value": 1.5,
+    }
+
+
 def test_apply_comments_executes_for_mssql():
     class _FakeDialect:
         name = "mssql"
