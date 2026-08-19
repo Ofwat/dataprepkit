@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 
 import openpyxl
@@ -9,6 +10,7 @@ from openpyxl.worksheet.formula import ArrayFormula
 from dataprepkit.validation import (
     ComparisonConfig,
     ConfigurationError,
+    CellComparison,
     CellLocation,
     ColumnDefinition,
     ColumnValidation,
@@ -170,6 +172,89 @@ def test_validate_config_rejects_invalid_runtime_policy():
         validate_config(config_data)
 
     assert "runtime" in str(error.value)
+
+
+def test_expected_cell_numeric_comparison_uses_configured_separators(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active["A1"] = "1,000.50"
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "expected_cells": [
+                ExpectedCellCheck(
+                    name="amount",
+                    locations=[
+                        CellLocation(
+                            sheet_selector=SheetSelector(
+                                mode="exact",
+                                value="Data",
+                            ),
+                            cell_reference="A1",
+                        )
+                    ],
+                    expected_value=1000.5,
+                    comparison=CellComparison(
+                        mode="numeric",
+                        options={
+                            "decimal_separator": ".",
+                            "thousands_separator": ",",
+                            "allow_numeric_strings": True,
+                        },
+                    ),
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is True
+
+
+def test_expected_cell_date_comparison_uses_configured_formats(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active["A1"] = datetime(2025, 1, 2)
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "expected_cells": [
+                ExpectedCellCheck(
+                    name="reporting_date",
+                    locations=[
+                        CellLocation(
+                            sheet_selector=SheetSelector(
+                                mode="exact",
+                                value="Data",
+                            ),
+                            cell_reference="A1",
+                        )
+                    ],
+                    expected_value="2025-01-02",
+                    comparison=CellComparison(
+                        mode="date",
+                        options={
+                            "accepted_formats": ["%Y-%m-%d"],
+                        },
+                    ),
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is True
+
+
+def test_expected_cell_rejects_unknown_comparison_mode():
+    with pytest.raises(ValueError):
+        CellComparison(mode="semantic")
 
 
 def test_validate_excel_reports_expected_cell_excluded_by_enabled_rules(tmp_path):

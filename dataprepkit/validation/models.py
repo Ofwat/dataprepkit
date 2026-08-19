@@ -141,6 +141,33 @@ class CellComparison(_PublicModel):
     mode: str = "exact"
     options: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def validate_mode(self):
+        if self.mode not in {
+            "exact",
+            "normalised",
+            "case_insensitive",
+            "numeric",
+            "date",
+        }:
+            raise ValueError("invalid cell comparison mode")
+        if self.mode == "numeric":
+            required = {
+                "decimal_separator",
+                "thousands_separator",
+                "allow_numeric_strings",
+            }
+            if not required.issubset(self.options):
+                raise ValueError(
+                    "numeric comparison requires decimal_separator, "
+                    "thousands_separator, and allow_numeric_strings"
+                )
+        if self.mode == "date" and not self.options.get("accepted_formats"):
+            raise ValueError(
+                "date comparison requires accepted_formats"
+            )
+        return self
+
 
 class ExpectedCellCheck(_PublicModel):
     name: str

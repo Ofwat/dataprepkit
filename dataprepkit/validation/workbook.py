@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 import re
 from pathlib import Path
 
@@ -215,6 +217,7 @@ def validate_excel(
                     actual_value,
                     expected_cell.expected_value,
                     expected_cell.comparison.mode,
+                    expected_cell.comparison.options,
                 ):
                     continue
                 errors.append(
@@ -1030,7 +1033,8 @@ def _normalise_formula_text(value, whitespace_policy):
     return text
 
 
-def _values_equal(actual, expected, mode):
+def _values_equal(actual, expected, mode, options=None):
+    options = options or {}
     if mode == "exact":
         return actual == expected
     if mode in {"normalised", "case_insensitive"}:
@@ -1040,7 +1044,56 @@ def _values_equal(actual, expected, mode):
             if mode == "case_insensitive":
                 return actual_text.casefold() == expected_text.casefold()
             return actual_text == expected_text
+    if mode == "numeric":
+        actual_number = _numeric_value(actual, options)
+        expected_number = _numeric_value(expected, options)
+        return (
+            actual_number is not None
+            and expected_number is not None
+            and actual_number == expected_number
+        )
+    if mode == "date":
+        actual_date = _date_value(actual, options)
+        expected_date = _date_value(expected, options)
+        return (
+            actual_date is not None
+            and expected_date is not None
+            and actual_date == expected_date
+        )
     return actual == expected
+
+
+def _numeric_value(value, options):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float, Decimal)):
+        return Decimal(str(value))
+    if not options.get("allow_numeric_strings") or not isinstance(value, str):
+        return None
+    text = value.strip().replace(
+        options["thousands_separator"],
+        "",
+    )
+    text = text.replace(options["decimal_separator"], ".")
+    try:
+        return Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _date_value(value, options):
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if not isinstance(value, str):
+        return None
+    for accepted_format in options["accepted_formats"]:
+        try:
+            return datetime.strptime(value.strip(), accepted_format).date()
+        except ValueError:
+            continue
+    return None
 
 
 def _normalise_header(value):
