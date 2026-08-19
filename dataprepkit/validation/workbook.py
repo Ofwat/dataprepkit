@@ -281,7 +281,10 @@ def validate_excel(
                         missing_columns.append(logical_name)
                     else:
                         required_positions.append(position)
-                if (
+                if table.header_policy.match_mode == "exact_order":
+                    if required_positions != list(range(len(required_positions))):
+                        missing_columns.append("required columns are out of order")
+                elif (
                     table.header_policy.match_mode == "contains_in_order"
                     and required_positions != sorted(required_positions)
                 ):
