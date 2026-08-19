@@ -473,6 +473,44 @@ def validate_excel(
                     column_number = logical_columns.get(validation.column)
                     if column_number is None:
                         continue
+                    column_rule_codes = []
+                    if validation.required:
+                        column_rule_codes.append("missing_value")
+                    if validation.unique:
+                        column_rule_codes.append("duplicate_value")
+                    if validation.allowed_values is not None:
+                        column_rule_codes.append("allowed_values")
+                    if validation.forbidden_values is not None:
+                        column_rule_codes.append("forbidden_values")
+                    disabled_column_rules = [
+                        rule_code
+                        for rule_code in column_rule_codes
+                        if (
+                            resolved_config.enabled_rules is not None
+                            and rule_code not in resolved_config.enabled_rules
+                        )
+                    ]
+                    if disabled_column_rules:
+                        for rule_code in disabled_column_rules:
+                            not_run.append(
+                                ValidationEvent(
+                                    rule_code=rule_code,
+                                    status="NOT_RUN",
+                                    reason="RULE_DISABLED",
+                                    severity=validation.severity
+                                    or resolved_config.rule_severity.get(rule_code),
+                                    description=(
+                                        f"Column rule for '{validation.column}' "
+                                        "is disabled by configuration"
+                                    ),
+                                )
+                            )
+                        if len(disabled_column_rules) == len(column_rule_codes):
+                            continue
+                    missing_enabled = "missing_value" not in disabled_column_rules
+                    duplicate_enabled = "duplicate_value" not in disabled_column_rules
+                    allowed_enabled = "allowed_values" not in disabled_column_rules
+                    forbidden_enabled = "forbidden_values" not in disabled_column_rules
                     seen_values = {}
                     for row_number in range(table.header_row + 1, max_row + 1):
                         cell = sheet.cell(row_number, column_number)
@@ -481,7 +519,7 @@ def validate_excel(
                             resolved_config.comparison.empty_string_is_null
                             and actual_value == ""
                         )
-                        if validation.required and is_null:
+                        if validation.required and missing_enabled and is_null:
                             errors.append(
                                 ValidationEvent(
                                     rule_code="missing_value",
@@ -502,7 +540,7 @@ def validate_excel(
                             )
                         if is_null and validation.null_policy == "allow":
                             continue
-                        if validation.unique:
+                        if validation.unique and duplicate_enabled:
                             value_key = repr(actual_value)
                             if value_key in seen_values:
                                 errors.append(
@@ -527,6 +565,7 @@ def validate_excel(
                                 seen_values[value_key] = cell.coordinate
                         if (
                             validation.allowed_values is not None
+                            and allowed_enabled
                             and actual_value not in validation.allowed_values
                         ):
                             errors.append(
@@ -549,6 +588,7 @@ def validate_excel(
                             )
                         if (
                             validation.forbidden_values is not None
+                            and forbidden_enabled
                             and actual_value in validation.forbidden_values
                         ):
                             errors.append(

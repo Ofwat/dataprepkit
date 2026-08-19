@@ -186,6 +186,51 @@ def test_validate_excel_reports_expected_cell_excluded_by_enabled_rules(tmp_path
     assert result.not_run[0].reason == "RULE_DISABLED"
 
 
+def test_validate_excel_reports_column_rules_excluded_by_enabled_rules(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Unit"])
+    workbook.active.append(["Invalid"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "enabled_rules": ["formula_error"],
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    column_definitions=[
+                        ColumnDefinition(name="unit", aliases=["Unit"]),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["unit"],
+                    ),
+                    column_validations=[
+                        ColumnValidation(
+                            column="unit",
+                            required=True,
+                            unique=True,
+                            allowed_values=["£", "%"],
+                            null_policy="allow",
+                        )
+                    ],
+                )
+            ],
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is True
+    assert {
+        event.rule_code for event in result.not_run
+    } == {"missing_value", "duplicate_value", "allowed_values"}
+    assert all(event.reason == "RULE_DISABLED" for event in result.not_run)
+
+
 def test_validate_excel_standalone_reports_missing_required_sheet(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     write_workbook(candidate_path, "Other")
