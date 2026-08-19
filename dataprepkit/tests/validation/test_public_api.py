@@ -179,6 +179,49 @@ def test_validate_excel_ignores_configured_extra_sheets(tmp_path):
     assert result.errors == []
 
 
+def test_validate_excel_reports_disabled_workbook_check(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    write_workbook(candidate_path, "Data")
+    config = make_config(
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="formula_error",
+                enabled=False,
+                scope="all_sheets",
+            )
+        ]
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is True
+    assert result.errors == []
+    assert len(result.not_run) == 1
+    assert result.not_run[0].rule_code == "formula_error"
+    assert result.not_run[0].reason == "RULE_DISABLED"
+
+
+def test_validate_excel_reports_rule_excluded_by_enabled_rules(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    write_workbook(candidate_path, "Data")
+    config = make_config(
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="formula_error",
+                enabled=True,
+                scope="all_sheets",
+            )
+        ]
+    ).model_copy(update={"enabled_rules": []})
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is True
+    assert len(result.not_run) == 1
+    assert result.not_run[0].rule_code == "formula_error"
+    assert result.not_run[0].reason == "RULE_DISABLED"
+
+
 def test_validate_excel_reports_configured_formula_errors(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()

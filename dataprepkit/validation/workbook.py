@@ -95,7 +95,23 @@ def validate_excel(
             elif action == "error":
                 errors.append(event)
         for check in resolved_config.workbook_checks:
-            if not check.enabled:
+            if (
+                not check.enabled
+                or (
+                    resolved_config.enabled_rules is not None
+                    and check.rule_code not in resolved_config.enabled_rules
+                )
+            ):
+                not_run.append(
+                    ValidationEvent(
+                        rule_code=check.rule_code,
+                        status="NOT_RUN",
+                        reason="RULE_DISABLED",
+                        severity=check.severity
+                        or resolved_config.rule_severity.get(check.rule_code),
+                        description="Rule is disabled by configuration",
+                    )
+                )
                 continue
             if check.rule_code == "missing_reference_sheet":
                 if reference_workbook is None:
