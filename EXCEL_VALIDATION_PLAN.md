@@ -1824,11 +1824,11 @@ Current status as of 2026-08-19:
 | Public API and result contract | Complete | Public exports and result model sections |
 | Compatibility profile definition | Complete | Pinned source and manifest schema |
 | Compatibility fixture files and manifest | Pending | Create the version-controlled fixture directory |
-| Public configuration models | Pending | Write failing import and model-validation tests |
-| Workbook loading and cleanup | Pending | Write public loader lifecycle tests |
+| Public configuration models | In progress | First public model-validation slice is green |
+| Workbook loading and cleanup | In progress | First `validate_excel` cleanup slice is green |
 | `validate_config` and config serialization | Pending | Write failing YAML/schema tests |
-| `validate_excel` facade | Pending | Write standalone and reference-backed tests |
-| First validation rules | Pending | Start with required sheets and formula errors |
+| `validate_excel` facade | In progress | Standalone required-sheet slice is green |
+| First validation rules | In progress | Required sheets implemented; formula errors next |
 | Remaining validation rules | Pending | Implement one public rule slice at a time |
 | Compatibility verification | Pending | Run the pinned profile against the fixture manifest |
 
