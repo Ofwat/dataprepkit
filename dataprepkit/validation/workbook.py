@@ -164,27 +164,6 @@ def validate_excel(
             for sheet_name, cell_reference in resolved_locations:
                 actual_cell = value_workbook[sheet_name][cell_reference]
                 actual_value = actual_cell.value
-                if actual_cell.data_type == "e":
-                    not_run.append(
-                        ValidationEvent(
-                            rule_code="expected_cell",
-                            status="NOT_RUN",
-                            reason="FORMULA_ERROR_VALUE",
-                            severity=expected_cell.severity
-                            or resolved_config.rule_severity.get("expected_cell"),
-                            sheet_name=sheet_name,
-                            cell_reference=cell_reference,
-                            actual_value=actual_value,
-                            expected_value=expected_cell.expected_value,
-                            description=(
-                                "Expected cell cannot be compared because it "
-                                "contains an Excel error value"
-                            ),
-                        )
-                    )
-                    if expected_cell.fallback_strategy == "ordered_first":
-                        break
-                    continue
                 if _values_equal(
                     actual_value,
                     expected_cell.expected_value,

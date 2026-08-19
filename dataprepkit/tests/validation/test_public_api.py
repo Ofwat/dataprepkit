@@ -556,7 +556,7 @@ def test_sheet_structure_ignores_blank_cells_outside_content(tmp_path):
     assert result.is_valid is True
 
 
-def test_expected_cell_is_not_run_for_excel_error_value(tmp_path):
+def test_expected_cell_reports_excel_error_value_mismatch(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()
     workbook.active.title = "Data"
@@ -594,10 +594,13 @@ def test_expected_cell_is_not_run_for_excel_error_value(tmp_path):
 
     result = validate_excel(candidate_path=candidate_path, config=config)
 
-    assert [event.rule_code for event in result.errors] == ["formula_error"]
-    assert len(result.not_run) == 1
-    assert result.not_run[0].rule_code == "expected_cell"
-    assert result.not_run[0].reason == "FORMULA_ERROR_VALUE"
+    assert [event.rule_code for event in result.errors] == [
+        "expected_cell",
+        "formula_error",
+    ]
+    assert result.errors[0].actual_value == "#DIV/0!"
+    assert result.errors[0].expected_value == "expected"
+    assert result.not_run == []
 
 
 def test_validate_excel_reports_sheet_structure_differences(tmp_path):
