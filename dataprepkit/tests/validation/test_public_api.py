@@ -1248,6 +1248,106 @@ def test_validate_excel_reports_disallowed_column_values(tmp_path):
     assert result.errors[0].actual_value == "GBP"
 
 
+def test_column_values_use_case_and_whitespace_normalization(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Unit", "Reference"])
+    workbook.active.append([" ml ", "ABC"])
+    workbook.active.append(["Ml", " abc "])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(
+                        mode="exact",
+                        value="Data",
+                    ),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        columns=["reference"],
+                    ),
+                    column_definitions=[
+                        ColumnDefinition(name="unit"),
+                        ColumnDefinition(name="reference"),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["unit", "reference"],
+                    ),
+                    column_validations=[
+                        ColumnValidation(
+                            column="unit",
+                            allowed_values=["Ml"],
+                        ),
+                        ColumnValidation(
+                            column="reference",
+                            unique=True,
+                        ),
+                    ],
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert [event.rule_code for event in result.errors] == ["duplicate_value"]
+    assert result.errors[0].cell_reference == "B3"
+
+
+def test_column_values_use_accent_normalization_when_configured(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Status"])
+    workbook.active.append(["cafe"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "comparison": ComparisonConfig(
+                case_sensitive=False,
+                accent_sensitive=False,
+                trim_whitespace=True,
+                collapse_internal_whitespace=False,
+                empty_string_is_null=True,
+                null_tokens=[],
+                collation_name="mssql_case_insensitive_ai",
+            ),
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(
+                        mode="exact",
+                        value="Data",
+                    ),
+                    header_row=1,
+                    column_definitions=[
+                        ColumnDefinition(name="status"),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["status"],
+                    ),
+                    column_validations=[
+                        ColumnValidation(
+                            column="status",
+                            allowed_values=["café"],
+                        )
+                    ],
+                )
+            ],
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is True
+
+
 def test_column_rules_are_not_run_when_headers_cannot_resolve(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()

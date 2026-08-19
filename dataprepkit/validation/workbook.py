@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 import re
+import unicodedata
 from pathlib import Path
 
 import openpyxl
@@ -639,10 +640,11 @@ def validate_excel(
                     for row_number in range(table.header_row + 1, max_row + 1):
                         cell = sheet.cell(row_number, column_number)
                         actual_value = cell.value
-                        is_null = actual_value is None or (
-                            resolved_config.comparison.empty_string_is_null
-                            and actual_value == ""
+                        normalised_value = _normalise_comparison_value(
+                            actual_value,
+                            resolved_config.comparison,
                         )
+                        is_null = normalised_value is None
                         if validation.required and missing_enabled and is_null:
                             errors.append(
                                 ValidationEvent(
@@ -665,7 +667,7 @@ def validate_excel(
                         if is_null and validation.null_policy == "allow":
                             continue
                         if validation.unique and duplicate_enabled:
-                            value_key = repr(actual_value)
+                            value_key = repr(normalised_value)
                             if value_key in seen_values:
                                 errors.append(
                                     ValidationEvent(
@@ -690,7 +692,14 @@ def validate_excel(
                         if (
                             validation.allowed_values is not None
                             and allowed_enabled
-                            and actual_value not in validation.allowed_values
+                            and normalised_value
+                            not in {
+                                _normalise_comparison_value(
+                                    value,
+                                    resolved_config.comparison,
+                                )
+                                for value in validation.allowed_values
+                            }
                         ):
                             errors.append(
                                 ValidationEvent(
@@ -713,7 +722,14 @@ def validate_excel(
                         if (
                             validation.forbidden_values is not None
                             and forbidden_enabled
-                            and actual_value in validation.forbidden_values
+                            and normalised_value
+                            in {
+                                _normalise_comparison_value(
+                                    value,
+                                    resolved_config.comparison,
+                                )
+                                for value in validation.forbidden_values
+                            }
                         ):
                             errors.append(
                                 ValidationEvent(
@@ -1069,6 +1085,35 @@ def _values_equal(actual, expected, mode, options=None):
             and actual_date == expected_date
         )
     return actual == expected
+
+
+def _normalise_comparison_value(value, comparison):
+    if value is None:
+        return None
+    if (
+        comparison.empty_string_is_null
+        and isinstance(value, str)
+        and value == ""
+    ):
+        return None
+    if value in comparison.null_tokens:
+        return None
+    if not isinstance(value, str):
+        return value
+    text = value
+    if comparison.trim_whitespace:
+        text = text.strip()
+    if comparison.collapse_internal_whitespace:
+        text = re.sub(r"\s+", " ", text)
+    if not comparison.accent_sensitive:
+        text = "".join(
+            character
+            for character in unicodedata.normalize("NFD", text)
+            if not unicodedata.combining(character)
+        )
+    if not comparison.case_sensitive:
+        text = text.casefold()
+    return text
 
 
 def _numeric_value(value, options):
