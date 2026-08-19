@@ -1350,6 +1350,57 @@ def test_column_values_use_accent_normalization_when_configured(tmp_path):
     assert result.is_valid is True
 
 
+def test_null_tokens_use_configured_case_and_whitespace_policy(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Reference"])
+    workbook.active.append(["N/A"])
+    workbook.active.append([" n/a "])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "comparison": ComparisonConfig(
+                case_sensitive=False,
+                accent_sensitive=True,
+                trim_whitespace=True,
+                collapse_internal_whitespace=False,
+                empty_string_is_null=True,
+                null_tokens=["N/A"],
+                collation_name="mssql_case_insensitive",
+            ),
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(
+                        mode="exact",
+                        value="Data",
+                    ),
+                    header_row=1,
+                    column_definitions=[
+                        ColumnDefinition(name="reference"),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["reference"],
+                    ),
+                    column_validations=[
+                        ColumnValidation(
+                            column="reference",
+                            unique=True,
+                            null_policy="allow",
+                        )
+                    ],
+                )
+            ],
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is True
+
+
 def test_column_rules_are_not_run_when_headers_cannot_resolve(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()

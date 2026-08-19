@@ -1152,16 +1152,24 @@ def _values_equal(actual, expected, mode, options=None):
 def _normalise_comparison_value(value, comparison):
     if value is None:
         return None
-    if (
-        comparison.empty_string_is_null
-        and isinstance(value, str)
-        and value == ""
-    ):
-        return None
-    if value in comparison.null_tokens:
-        return None
     if not isinstance(value, str):
+        if value in comparison.null_tokens:
+            return None
         return value
+    text = _normalise_text(value, comparison)
+    if comparison.empty_string_is_null and text == "":
+        return None
+    null_tokens = {
+        _normalise_text(token, comparison)
+        for token in comparison.null_tokens
+        if isinstance(token, str)
+    }
+    if text in null_tokens:
+        return None
+    return text
+
+
+def _normalise_text(value, comparison):
     text = value
     if comparison.trim_whitespace:
         text = text.strip()
