@@ -136,6 +136,24 @@ def test_validate_config_rejects_incomplete_data_boundary():
     assert "tables[0].data_boundary" in str(error.value)
 
 
+def test_validate_config_rejects_invalid_table_policy():
+    config_data = make_config().model_dump()
+    config_data["tables"] = [
+        {
+            "name": "outputs",
+            "header_policy": {
+                "required_columns": ["unit"],
+                "extra_column_action": "reject",
+            },
+        }
+    ]
+
+    with pytest.raises(ConfigurationError) as error:
+        validate_config(config_data)
+
+    assert "tables[0].header_policy" in str(error.value)
+
+
 def test_validate_excel_standalone_reports_missing_required_sheet(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     write_workbook(candidate_path, "Other")

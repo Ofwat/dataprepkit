@@ -108,6 +108,8 @@ class ColumnValidation(_PublicModel):
             raise ValueError(
                 "allowed_values and forbidden_values are mutually exclusive"
             )
+        if self.null_policy not in {None, "ignore", "error", "allow"}:
+            raise ValueError("null_policy must be ignore, error, or allow")
         return self
 
 
@@ -150,11 +152,37 @@ class HeaderPolicy(_PublicModel):
     extra_column_action: str = "allowed"
     missing_column_action: str = "error"
 
+    @model_validator(mode="after")
+    def validate_policy(self):
+        if self.match_mode not in {
+            "exact_order",
+            "contains_in_order",
+            "contains_any_order",
+        }:
+            raise ValueError("invalid header match_mode")
+        if self.extra_column_action not in {"allowed", "warning", "error"}:
+            raise ValueError("invalid extra_column_action")
+        if self.missing_column_action not in {"warning", "error"}:
+            raise ValueError("invalid missing_column_action")
+        return self
+
 
 class EmptyRowRule(_PublicModel):
     rows: list[int] = Field(min_length=1)
     excluded_columns: list[str] = Field(default_factory=list)
     blank_policy: str = "none_only"
+
+    @model_validator(mode="after")
+    def validate_policy(self):
+        if any(row < 1 for row in self.rows):
+            raise ValueError("rows must contain positive Excel row numbers")
+        if self.blank_policy not in {
+            "none_only",
+            "blank_strings",
+            "blank_strings_and_nulls",
+        }:
+            raise ValueError("invalid blank_policy")
+        return self
 
 
 class DataBoundary(_PublicModel):
