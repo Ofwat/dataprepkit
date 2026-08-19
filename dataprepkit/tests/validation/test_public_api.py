@@ -605,6 +605,47 @@ def test_expected_cell_reports_excel_error_value_mismatch(tmp_path):
     assert result.not_run == []
 
 
+def test_validate_excel_reports_required_table_without_data(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Unit", "Reference"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(
+                        mode="exact",
+                        value="Data",
+                    ),
+                    required=True,
+                    header_row=1,
+                    column_definitions=[
+                        ColumnDefinition(name="unit", aliases=["Unit"]),
+                        ColumnDefinition(
+                            name="reference",
+                            aliases=["Reference"],
+                        ),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["unit", "reference"],
+                    ),
+                    data_presence="require_one_usable_row",
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is False
+    assert [event.rule_code for event in result.errors] == ["non_empty_data"]
+    assert result.errors[0].sheet_name == "Data"
+
+
 def test_validate_excel_reports_sheet_structure_differences(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     reference_path = tmp_path / "reference.xlsx"

@@ -248,6 +248,31 @@ def validate_excel(
                             ),
                         )
                     )
+                if table.data_presence == "require_one_usable_row":
+                    formula_sheet = formula_workbook[sheet_name]
+                    has_data_row = False
+                    max_row = max(sheet.max_row, formula_sheet.max_row)
+                    max_column = max(sheet.max_column, formula_sheet.max_column)
+                    for row_number in range(table.header_row + 1, max_row + 1):
+                        if any(
+                            sheet.cell(row_number, column).value is not None
+                            or formula_sheet.cell(row_number, column).value is not None
+                            for column in range(1, max_column + 1)
+                        ):
+                            has_data_row = True
+                            break
+                    if not has_data_row:
+                        errors.append(
+                            ValidationEvent(
+                                rule_code="non_empty_data",
+                                sheet_name=sheet_name,
+                                expected_value="at least one usable data row",
+                                description=(
+                                    f"Required table '{table.name}' has no "
+                                    "usable data rows"
+                                ),
+                            )
+                        )
         for check_index, check in enumerate(resolved_config.workbook_checks):
             if (
                 not check.enabled
