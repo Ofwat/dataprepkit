@@ -12,6 +12,7 @@ from openpyxl.utils.cell import column_index_from_string
 from .config import validate_config
 from .models import (
     ConfigurationError,
+    DiagnosticEvent,
     ValidationEvent,
     ValidationResult,
     WorkbookReadError,
@@ -85,6 +86,34 @@ def validate_excel(
         errors = []
         warnings = []
         not_run = []
+        diagnostics = []
+        for feature_name, sheet_name in _detected_features(
+            formula_workbook,
+            candidate_path,
+        ):
+            action = getattr(
+                resolved_config.runtime.feature_policy,
+                feature_name,
+            )
+            description = f"Detected workbook feature: {feature_name}"
+            event = ValidationEvent(
+                rule_code="feature_policy",
+                sheet_name=sheet_name,
+                severity=action,
+                description=description,
+            )
+            if action == "error":
+                errors.append(event)
+            elif action == "warning":
+                warnings.append(event)
+            else:
+                diagnostics.append(
+                    DiagnosticEvent(
+                        run_id=run_id,
+                        code="FEATURE_DETECTED",
+                        description=description,
+                    )
+                )
         sheet_names = set(formula_workbook.sheetnames)
         selected_sheet_names = set()
         for selector in resolved_config.sheet_policy.required_selectors:
@@ -156,6 +185,7 @@ def validate_excel(
                 errors=errors,
                 warnings=warnings,
                 not_run=not_run,
+                diagnostics=diagnostics,
             )
         for expected_cell in resolved_config.expected_cells:
             if (
@@ -978,6 +1008,7 @@ def validate_excel(
             errors=errors,
             warnings=warnings,
             not_run=not_run,
+            diagnostics=diagnostics,
         )
     finally:
         formula_workbook.close()
@@ -1140,6 +1171,22 @@ def _date_value(value, options):
         except ValueError:
             continue
     return None
+
+
+def _detected_features(workbook, candidate_path):
+    if candidate_path.suffix.lower() == ".xlsm":
+        yield "macros", None
+    if getattr(workbook, "_external_links", []):
+        yield "external_links", None
+    if getattr(workbook, "defined_names", {}):
+        yield "named_ranges", None
+    for sheet in workbook.worksheets:
+        if getattr(sheet, "_charts", []):
+            yield "charts", sheet.title
+        if getattr(sheet, "_pivots", []):
+            yield "pivot_tables", sheet.title
+        if list(sheet.merged_cells.ranges):
+            yield "merged_cells", sheet.title
 
 
 def _normalise_header(value):

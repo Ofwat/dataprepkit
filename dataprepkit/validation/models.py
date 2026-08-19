@@ -80,7 +80,23 @@ class WorkbookFeaturePolicy(_PublicModel):
     pivot_tables: str = "ignore"
     named_ranges: str = "ignore"
     merged_cells: str = "ignore"
-    macros: str = "reject"
+    macros: str = "ignore"
+
+    @model_validator(mode="after")
+    def validate_actions(self):
+        for name in (
+            "external_links",
+            "charts",
+            "pivot_tables",
+            "named_ranges",
+            "merged_cells",
+            "macros",
+        ):
+            if getattr(self, name) not in {"ignore", "warning", "error"}:
+                raise ValueError(
+                    f"{name} action must be ignore, warning, or error"
+                )
+        return self
 
 
 class RuntimePolicy(_PublicModel):

@@ -19,6 +19,7 @@ from dataprepkit.validation import (
     ExpectedCellCheck,
     HeaderPolicy,
     RuntimePolicy,
+    WorkbookFeaturePolicy,
     SheetPolicy,
     SheetSelector,
     TableConfig,
@@ -1856,6 +1857,34 @@ def test_scan_limit_counts_stored_cells_not_inflated_dimensions(tmp_path):
 
     assert result.is_valid is True
     assert result.complete is True
+
+
+def test_feature_policy_reports_merged_cells(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.merge_cells("A1:B1")
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "runtime": RuntimePolicy(
+                max_cells_scanned=1000,
+                read_only=False,
+                macro_policy="reject",
+                missing_formula_cache_action="not_run",
+                feature_policy=WorkbookFeaturePolicy(
+                    merged_cells="error",
+                ),
+            )
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is False
+    assert [event.rule_code for event in result.errors] == ["feature_policy"]
+    assert "merged_cells" in result.errors[0].description
 
 
 def test_validate_excel_supports_regex_sheet_selectors(tmp_path):
