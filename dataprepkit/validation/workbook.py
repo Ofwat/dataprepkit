@@ -877,16 +877,10 @@ def validate_excel(
                     reference_sheet = reference_sheets.get(candidate_sheet.title)
                     if reference_sheet is None:
                         continue
-                    max_row = max(
-                        candidate_sheet.max_row,
-                        reference_sheet.max_row,
-                    )
-                    max_column = max(
-                        candidate_sheet.max_column,
-                        reference_sheet.max_column,
-                    )
-                    for row_number in range(1, max_row + 1):
-                        for column_number in range(1, max_column + 1):
+                    for row_number, column_number in _comparison_coordinates(
+                        candidate_sheet,
+                        reference_sheet,
+                    ):
                             candidate_cell = candidate_sheet.cell(
                                 row=row_number,
                                 column=column_number,
@@ -965,21 +959,20 @@ def validate_excel(
                 if status == "NOT_RUN":
                     continue
             for sheet in value_workbook.worksheets:
-                for row in sheet.iter_rows():
-                    for cell in row:
-                        if cell.data_type == "e" or cell.value in tokens:
-                            errors.append(
-                                ValidationEvent(
-                                    rule_code="formula_error",
-                                    sheet_name=sheet.title,
-                                    cell_reference=cell.coordinate,
-                                    actual_value=cell.value,
-                                    expected_value=tokens,
-                                    description=(
-                                        f"Excel error value found: {cell.value}"
-                                    ),
-                                )
+                for cell in _stored_cells(sheet):
+                    if cell.data_type == "e" or cell.value in tokens:
+                        errors.append(
+                            ValidationEvent(
+                                rule_code="formula_error",
+                                sheet_name=sheet.title,
+                                cell_reference=cell.coordinate,
+                                actual_value=cell.value,
+                                expected_value=tokens,
+                                description=(
+                                    f"Excel error value found: {cell.value}"
+                                ),
                             )
+                        )
         return ValidationResult(
             **result_metadata,
             errors=errors,
@@ -1166,12 +1159,48 @@ def _is_blank_value(value, blank_policy, null_tokens):
 def _cells_until_limit(workbook, limit):
     count = 0
     for sheet in workbook.worksheets:
-        for row in sheet.iter_rows():
-            for _cell in row:
-                count += 1
-                if count > limit:
-                    return count
+        for _cell in _stored_cells(sheet):
+            count += 1
+            if count > limit:
+                return count
     return None
+
+
+def _stored_cells(sheet):
+    cells = getattr(sheet, "_cells", None)
+    if cells is not None:
+        return cells.values()
+    return (
+        cell
+        for row in sheet.iter_rows()
+        for cell in row
+    )
+
+
+def _comparison_coordinates(candidate_sheet, reference_sheet):
+    if (
+        hasattr(candidate_sheet, "_cells")
+        and hasattr(reference_sheet, "_cells")
+    ):
+        coordinates = {
+            (cell.row, cell.column)
+            for cell in _stored_cells(candidate_sheet)
+        }
+        coordinates.update(
+            (cell.row, cell.column)
+            for cell in _stored_cells(reference_sheet)
+        )
+        return coordinates
+    max_row = max(candidate_sheet.max_row, reference_sheet.max_row)
+    max_column = max(
+        candidate_sheet.max_column,
+        reference_sheet.max_column,
+    )
+    return (
+        (row_number, column_number)
+        for row_number in range(1, max_row + 1)
+        for column_number in range(1, max_column + 1)
+    )
 
 
 def _table_data_end_row(
@@ -1193,6 +1222,22 @@ def _table_data_end_row(
             for column in boundary.columns
             if column in logical_columns
         ]
+        if hasattr(value_sheet, "_cells") and hasattr(formula_sheet, "_cells"):
+            rows = [
+                cell.row
+                for cell in _stored_cells(value_sheet)
+                if cell.column in column_numbers
+                and cell.row > header_row
+                and cell.value is not None
+            ]
+            rows.extend(
+                cell.row
+                for cell in _stored_cells(formula_sheet)
+                if cell.column in column_numbers
+                and cell.row > header_row
+                and cell.value is not None
+            )
+            return max(rows, default=header_row)
         for row_number in range(max_row, header_row, -1):
             if any(
                 value_sheet.cell(row_number, column).value is not None
@@ -1207,6 +1252,27 @@ def _table_data_end_row(
 def _content_shape(value_sheet, formula_sheet):
     max_row = 0
     max_column = 0
+    if hasattr(value_sheet, "_cells") and hasattr(formula_sheet, "_cells"):
+        coordinates = {
+            cell.coordinate
+            for cell in _stored_cells(value_sheet)
+        }
+        coordinates.update(
+            cell.coordinate
+            for cell in _stored_cells(formula_sheet)
+        )
+        for coordinate in coordinates:
+            value_cell = value_sheet[coordinate]
+            formula_cell = formula_sheet[coordinate]
+            if value_cell.value is None and formula_cell.value is None:
+                continue
+            max_row = max(max_row, value_cell.row, formula_cell.row)
+            max_column = max(
+                max_column,
+                value_cell.column,
+                formula_cell.column,
+            )
+        return {"max_row": max_row, "max_column": max_column}
     scan_max_row = max(value_sheet.max_row, formula_sheet.max_row)
     scan_max_column = max(value_sheet.max_column, formula_sheet.max_column)
     for row_number in range(1, scan_max_row + 1):
