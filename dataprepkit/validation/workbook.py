@@ -243,6 +243,7 @@ def validate_excel(
                     and required_positions != sorted(required_positions)
                 ):
                     missing_columns.append("required columns are out of order")
+                header_resolution_failed = bool(missing_columns)
                 if missing_columns and table.header_policy.missing_column_action == "error":
                     errors.append(
                         ValidationEvent(
@@ -282,6 +283,30 @@ def validate_excel(
                             )
                         )
                 max_row = max(sheet.max_row, formula_workbook[sheet_name].max_row)
+                if header_resolution_failed:
+                    for validation in table.column_validations:
+                        not_run.append(
+                            ValidationEvent(
+                                rule_code=(
+                                    "allowed_values"
+                                    if validation.allowed_values is not None
+                                    else "forbidden_values"
+                                ),
+                                status="NOT_RUN",
+                                reason="TABLE_HEADER_RESOLUTION_FAILED",
+                                severity=validation.severity
+                                or resolved_config.rule_severity.get(
+                                    "allowed_values"
+                                    if validation.allowed_values is not None
+                                    else "forbidden_values"
+                                ),
+                                description=(
+                                    f"Column rule for '{validation.column}' "
+                                    "requires resolved table headers"
+                                ),
+                            )
+                        )
+                    continue
                 for validation in table.column_validations:
                     column_number = logical_columns.get(validation.column)
                     if column_number is None:

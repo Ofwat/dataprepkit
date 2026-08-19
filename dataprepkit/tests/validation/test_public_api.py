@@ -692,6 +692,50 @@ def test_validate_excel_reports_disallowed_column_values(tmp_path):
     assert result.errors[0].actual_value == "GBP"
 
 
+def test_column_rules_are_not_run_when_headers_cannot_resolve(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Wrong"])
+    workbook.active.append(["GBP"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(
+                        mode="exact",
+                        value="Data",
+                    ),
+                    header_row=1,
+                    column_definitions=[
+                        ColumnDefinition(name="unit", aliases=["Unit"]),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["unit"],
+                    ),
+                    column_validations=[
+                        ColumnValidation(
+                            column="unit",
+                            allowed_values=["£", "%"],
+                            null_policy="allow",
+                        )
+                    ],
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert [event.rule_code for event in result.errors] == ["column_header"]
+    assert len(result.not_run) == 1
+    assert result.not_run[0].rule_code == "allowed_values"
+    assert result.not_run[0].reason == "TABLE_HEADER_RESOLUTION_FAILED"
+
+
 def test_validate_excel_reports_sheet_structure_differences(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     reference_path = tmp_path / "reference.xlsx"
