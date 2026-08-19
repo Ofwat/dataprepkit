@@ -92,6 +92,18 @@ class RuntimePolicy(_PublicModel):
         default_factory=WorkbookFeaturePolicy
     )
 
+    @model_validator(mode="after")
+    def validate_policy(self):
+        if self.macro_policy not in {"preserve", "discard", "reject"}:
+            raise ValueError(
+                "macro_policy must be preserve, discard, or reject"
+            )
+        if self.missing_formula_cache_action not in {"not_run", "error"}:
+            raise ValueError(
+                "missing_formula_cache_action must be not_run or error"
+            )
+        return self
+
 
 class ColumnValidation(_PublicModel):
     column: str

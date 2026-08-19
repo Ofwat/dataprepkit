@@ -898,6 +898,45 @@ def validate_excel(
             if check.rule_code != "formula_error":
                 continue
             tokens = (check.options or {}).get("error_tokens", [])
+            missing_cache_action = (
+                resolved_config.runtime.missing_formula_cache_action
+            )
+            missing_cache_cells = []
+            for formula_sheet in formula_workbook.worksheets:
+                value_sheet = value_workbook[formula_sheet.title]
+                for row in formula_sheet.iter_rows():
+                    for formula_cell in row:
+                        if (
+                            formula_cell.data_type == "f"
+                            and value_sheet[formula_cell.coordinate].value is None
+                        ):
+                            missing_cache_cells.append(
+                                (formula_sheet.title, formula_cell.coordinate)
+                            )
+            if missing_cache_cells:
+                status = (
+                    "NOT_RUN"
+                    if missing_cache_action == "not_run"
+                    else "FAILED"
+                )
+                for sheet_name, cell_reference in missing_cache_cells:
+                    event = ValidationEvent(
+                        rule_code="formula_error",
+                        status=status,
+                        reason="FORMULA_RESULTS_UNAVAILABLE",
+                        sheet_name=sheet_name,
+                        cell_reference=cell_reference,
+                        description=(
+                            "Formula result is unavailable because the "
+                            "workbook has no cached value"
+                        ),
+                    )
+                    if status == "NOT_RUN":
+                        not_run.append(event)
+                    else:
+                        errors.append(event)
+                if status == "NOT_RUN":
+                    continue
             for sheet in value_workbook.worksheets:
                 for row in sheet.iter_rows():
                     for cell in row:

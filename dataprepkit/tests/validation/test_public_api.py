@@ -154,6 +154,24 @@ def test_validate_config_rejects_invalid_table_policy():
     assert "tables[0].header_policy" in str(error.value)
 
 
+def test_validate_config_rejects_invalid_runtime_policy():
+    config_data = make_config().model_dump()
+    config_data["runtime"]["macro_policy"] = "calculate"
+
+    with pytest.raises(ConfigurationError) as error:
+        validate_config(config_data)
+
+    assert "runtime" in str(error.value)
+
+    config_data = make_config().model_dump()
+    config_data["runtime"]["missing_formula_cache_action"] = "ignore"
+
+    with pytest.raises(ConfigurationError) as error:
+        validate_config(config_data)
+
+    assert "runtime" in str(error.value)
+
+
 def test_validate_excel_reports_expected_cell_excluded_by_enabled_rules(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     write_workbook(candidate_path, "Data")
@@ -419,6 +437,69 @@ def test_validate_excel_reports_configured_formula_errors(tmp_path):
     assert len(result.errors) == 1
     assert result.errors[0].rule_code == "formula_error"
     assert result.errors[0].sheet_name == "Data"
+    assert result.errors[0].cell_reference == "A1"
+
+
+def test_formula_error_is_not_run_when_formula_cache_is_missing(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active["A1"] = "=1+1"
+    workbook.save(candidate_path)
+
+    result = validate_excel(
+        candidate_path=candidate_path,
+        config=make_config(
+            workbook_checks=[
+                WorkbookCheck(
+                    rule_code="formula_error",
+                    enabled=True,
+                    scope="all_sheets",
+                    options={"error_tokens": ["#DIV/0!"]},
+                )
+            ]
+        ),
+    )
+
+    assert result.is_valid is True
+    assert len(result.not_run) == 1
+    assert result.not_run[0].rule_code == "formula_error"
+    assert result.not_run[0].reason == "FORMULA_RESULTS_UNAVAILABLE"
+    assert result.not_run[0].cell_reference == "A1"
+
+
+def test_formula_error_fails_when_formula_cache_is_missing_and_policy_is_error(
+    tmp_path,
+):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active["A1"] = "=1+1"
+    workbook.save(candidate_path)
+
+    config = make_config(
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="formula_error",
+                enabled=True,
+                scope="all_sheets",
+                options={"error_tokens": ["#DIV/0!"]},
+            )
+        ]
+    ).model_copy(
+        update={
+            "runtime": make_config().runtime.model_copy(
+                update={"missing_formula_cache_action": "error"}
+            )
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is False
+    assert len(result.errors) == 1
+    assert result.errors[0].rule_code == "formula_error"
+    assert result.errors[0].reason == "FORMULA_RESULTS_UNAVAILABLE"
     assert result.errors[0].cell_reference == "A1"
 
 
