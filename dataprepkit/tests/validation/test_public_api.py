@@ -2,6 +2,7 @@ from pathlib import Path
 
 import openpyxl
 import pytest
+from openpyxl.styles import PatternFill
 from openpyxl.worksheet.formula import ArrayFormula
 
 
@@ -534,7 +535,10 @@ def test_sheet_structure_ignores_blank_cells_outside_content(tmp_path):
     candidate = openpyxl.Workbook()
     candidate.active.title = "Data"
     candidate.active["A1"] = "value"
-    candidate.active["Z11"]
+    candidate.active["Z11"].fill = PatternFill(
+        fill_type="solid",
+        fgColor="FFFF00",
+    )
     candidate.save(candidate_path)
 
     reference = openpyxl.Workbook()
@@ -968,3 +972,45 @@ def test_column_rules_respect_fixed_table_data_boundary(tmp_path):
 
     assert [event.rule_code for event in result.errors] == ["allowed_values"]
     assert result.errors[0].cell_reference == "A2"
+
+
+def test_data_presence_is_not_run_when_boundary_column_cannot_resolve(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Wrong"])
+    workbook.active.append(["value"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(
+                        mode="exact",
+                        value="Data",
+                    ),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        columns=["reference"],
+                    ),
+                    column_definitions=[
+                        ColumnDefinition(name="reference", aliases=["Reference"]),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["reference"],
+                    ),
+                    data_presence="require_one_usable_row",
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert [event.rule_code for event in result.errors] == ["column_header"]
+    assert len(result.not_run) == 1
+    assert result.not_run[0].rule_code == "non_empty_data"
+    assert result.not_run[0].reason == "DATA_BOUNDARY_RESOLUTION_FAILED"

@@ -252,6 +252,14 @@ def validate_excel(
                 ):
                     missing_columns.append("required columns are out of order")
                 header_resolution_failed = bool(missing_columns)
+                boundary_resolution_failed = (
+                    table.data_boundary is not None
+                    and table.data_boundary.mode == "last_non_empty_row"
+                    and any(
+                        column not in logical_columns
+                        for column in (table.data_boundary.columns or [])
+                    )
+                )
                 if missing_columns and table.header_policy.missing_column_action == "error":
                     errors.append(
                         ValidationEvent(
@@ -266,30 +274,43 @@ def validate_excel(
                         )
                     )
                 if table.data_presence == "require_one_usable_row":
-                    formula_sheet = formula_workbook[sheet_name]
-                    has_data_row = False
-                    max_row = data_end_row
-                    max_column = max(sheet.max_column, formula_sheet.max_column)
-                    for row_number in range(table.header_row + 1, max_row + 1):
-                        if any(
-                            sheet.cell(row_number, column).value is not None
-                            or formula_sheet.cell(row_number, column).value is not None
-                            for column in range(1, max_column + 1)
-                        ):
-                            has_data_row = True
-                            break
-                    if not has_data_row:
-                        errors.append(
+                    if boundary_resolution_failed:
+                        not_run.append(
                             ValidationEvent(
                                 rule_code="non_empty_data",
-                                sheet_name=sheet_name,
-                                expected_value="at least one usable data row",
+                                status="NOT_RUN",
+                                reason="DATA_BOUNDARY_RESOLUTION_FAILED",
                                 description=(
-                                    f"Required table '{table.name}' has no "
-                                    "usable data rows"
+                                    f"Table '{table.name}' data boundary "
+                                    "could not be resolved"
                                 ),
                             )
                         )
+                    else:
+                        formula_sheet = formula_workbook[sheet_name]
+                        has_data_row = False
+                        max_row = data_end_row
+                        max_column = max(sheet.max_column, formula_sheet.max_column)
+                        for row_number in range(table.header_row + 1, max_row + 1):
+                            if any(
+                                sheet.cell(row_number, column).value is not None
+                                or formula_sheet.cell(row_number, column).value is not None
+                                for column in range(1, max_column + 1)
+                            ):
+                                has_data_row = True
+                                break
+                        if not has_data_row:
+                            errors.append(
+                                ValidationEvent(
+                                    rule_code="non_empty_data",
+                                    sheet_name=sheet_name,
+                                    expected_value="at least one usable data row",
+                                    description=(
+                                        f"Required table '{table.name}' has no "
+                                        "usable data rows"
+                                    ),
+                                )
+                            )
                 formula_sheet = formula_workbook[sheet_name]
                 max_column = max(sheet.max_column, formula_sheet.max_column)
                 for empty_row_rule in table.empty_row_rules:
