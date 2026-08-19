@@ -77,6 +77,38 @@ def dump_validation_config(
     )
 
 
+def get_config_schema(version: str | None = None):
+    if version not in {None, "1"}:
+        raise ConfigurationError(
+            f"unsupported configuration schema version: {version}",
+            field_path="version",
+        )
+    schema = WorkbookValidationConfig.model_json_schema()
+    schema["$id"] = "https://ofwat.github.io/dataprepkit/validation-config/v1"
+    schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+    schema["title"] = "WorkbookValidationConfig"
+    return schema
+
+
+def list_profiles(directory: str | Path = "profiles"):
+    profile_directory = Path(directory)
+    if not profile_directory.exists():
+        return []
+    profiles = []
+    for path in sorted(profile_directory.iterdir()):
+        if path.suffix.lower() not in {".json", ".yaml", ".yml"}:
+            continue
+        mapping = _read_config_mapping(path)
+        profiles.append(
+            {
+                "name": mapping.get("profile_name") or path.stem,
+                "config_version": mapping.get("config_version"),
+                "path": str(path),
+            }
+        )
+    return profiles
+
+
 def load_validation_config(
     source: WorkbookValidationConfig | dict[str, Any] | str | Path,
     compatibility_profile=None,

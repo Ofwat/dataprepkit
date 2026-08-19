@@ -1,6 +1,8 @@
 from .config import (
     dump_validation_config,
+    get_config_schema,
     load_validation_config,
+    list_profiles,
     validate_config,
 )
 from .models import (
@@ -61,7 +63,9 @@ __all__ = [
     "WorkbookReadError",
     "WorkbookValidationConfig",
     "dump_validation_config",
+    "get_config_schema",
     "load_validation_config",
+    "list_profiles",
     "validate_config",
     "validate_excel",
 ]

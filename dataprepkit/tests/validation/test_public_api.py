@@ -27,6 +27,8 @@ from dataprepkit.validation import (
     WorkbookCheck,
     dump_validation_config,
     dump_validation_result,
+    get_config_schema,
+    list_profiles,
     load_validation_config,
     load_validation_result,
     validate_config,
@@ -111,6 +113,43 @@ def test_validation_config_round_trips_through_mapping_and_json():
 
     encoded = dump_validation_config(config, format="json")
     assert load_validation_config(encoded) == config
+
+
+def test_get_config_schema_returns_versioned_public_schema():
+    schema = get_config_schema()
+
+    assert schema["$id"].endswith("/validation-config/v1")
+    assert schema["title"] == "WorkbookValidationConfig"
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+
+
+def test_get_config_schema_rejects_unsupported_version():
+    with pytest.raises(ConfigurationError):
+        get_config_schema(version="2")
+
+
+def test_list_profiles_returns_deterministic_profile_metadata(tmp_path):
+    profile_path = tmp_path / "baseline.yaml"
+    profile_path.write_text(
+        dump_validation_config(
+            make_config().model_copy(
+                update={
+                    "profile_name": "baseline",
+                }
+            ),
+            format="yaml",
+        ),
+        encoding="utf-8",
+    )
+
+    assert list_profiles(tmp_path) == [
+        {
+            "name": "baseline",
+            "config_version": "1",
+            "path": str(profile_path),
+        }
+    ]
 
 
 def test_validation_result_round_trips_through_mapping_and_json():
@@ -263,6 +302,24 @@ def test_validate_config_rejects_invalid_runtime_policy():
         validate_config(config_data)
 
     assert "runtime" in str(error.value)
+
+
+def test_workbook_check_validates_rule_options():
+    with pytest.raises(ValueError):
+        WorkbookCheck(
+            rule_code="formula_error",
+            enabled=True,
+            scope="all_sheets",
+            options={"error_tokens": "#DIV/0!"},
+        )
+
+    with pytest.raises(ValueError):
+        WorkbookCheck(
+            rule_code="formula_difference",
+            enabled=True,
+            scope="overlapping_sheets",
+            options={"whitespace_policy": "semantic"},
+        )
 
 
 def test_expected_cell_numeric_comparison_uses_configured_separators(tmp_path):
@@ -573,11 +630,12 @@ def test_validate_excel_reports_rule_excluded_by_enabled_rules(tmp_path):
     write_workbook(candidate_path, "Data")
     config = make_config(
         workbook_checks=[
-            WorkbookCheck(
-                rule_code="formula_error",
-                enabled=True,
-                scope="all_sheets",
-            )
+                WorkbookCheck(
+                    rule_code="formula_error",
+                    enabled=True,
+                    scope="all_sheets",
+                    options={"error_tokens": ["#DIV/0!"]},
+                )
         ]
     ).model_copy(update={"enabled_rules": []})
 

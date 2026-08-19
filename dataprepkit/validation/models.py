@@ -276,6 +276,26 @@ class WorkbookCheck(_PublicModel):
     options: dict[str, Any] | None = None
     severity: str | None = None
 
+    @model_validator(mode="after")
+    def validate_rule_options(self):
+        options = self.options or {}
+        if self.rule_code == "formula_error" and self.enabled:
+            if not isinstance(options.get("error_tokens"), list):
+                raise ValueError(
+                    "formula_error requires error_tokens as a list"
+                )
+        if self.rule_code == "formula_difference":
+            whitespace_policy = options.get(
+                "whitespace_policy",
+                "normalised",
+            )
+            if whitespace_policy not in {"exact", "normalised"}:
+                raise ValueError(
+                    "formula_difference whitespace_policy must be "
+                    "exact or normalised"
+                )
+        return self
+
 
 class WorkbookValidationConfig(_PublicModel):
     config_version: str
