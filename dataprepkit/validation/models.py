@@ -75,6 +75,7 @@ class ComparisonConfig(_PublicModel):
 
 
 class WorkbookFeaturePolicy(_PublicModel):
+    unavailable_action: str = "warning"
     external_links: str = "ignore"
     charts: str = "ignore"
     pivot_tables: str = "ignore"
@@ -84,6 +85,10 @@ class WorkbookFeaturePolicy(_PublicModel):
 
     @model_validator(mode="after")
     def validate_actions(self):
+        if self.unavailable_action not in {"ignore", "warning", "error"}:
+            raise ValueError(
+                "unavailable_action must be ignore, warning, or error"
+            )
         for name in (
             "external_links",
             "charts",

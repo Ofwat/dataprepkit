@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from dataclasses import dataclass, field
 import re
 import unicodedata
 from pathlib import Path
@@ -89,10 +90,35 @@ def validate_excel(
         warnings = []
         not_run = []
         diagnostics = []
-        for feature_name, sheet_name in _detected_features(
+        for feature_name, sheet_name, detection_error in _detected_features(
             formula_workbook,
             candidate_path,
         ):
+            if detection_error is not None:
+                action = resolved_config.runtime.feature_policy.unavailable_action
+                description = (
+                    f"Feature detection unavailable for {feature_name}: "
+                    f"{detection_error}"
+                )
+                event = ValidationEvent(
+                    rule_code="feature_detection_unavailable",
+                    sheet_name=sheet_name,
+                    severity=action,
+                    description=description,
+                )
+                if action == "error":
+                    errors.append(event)
+                elif action == "warning":
+                    warnings.append(event)
+                else:
+                    diagnostics.append(
+                        DiagnosticEvent(
+                            run_id=run_id,
+                            code="FEATURE_DETECTION_UNAVAILABLE",
+                            description=description,
+                        )
+                    )
+                continue
             action = getattr(
                 resolved_config.runtime.feature_policy,
                 feature_name,
@@ -166,9 +192,22 @@ def validate_excel(
                 warnings.append(event)
             elif action == "error":
                 errors.append(event)
+        value_resolution = _WorkbookResolution(value_workbook)
+        formula_resolution = _WorkbookResolution(formula_workbook)
+        reference_value_resolution = (
+            _WorkbookResolution(reference_workbook)
+            if reference_workbook is not None
+            else None
+        )
+        reference_formula_resolution = (
+            _WorkbookResolution(reference_formula_workbook)
+            if reference_formula_workbook is not None
+            else None
+        )
         observed_cells = _cells_until_limit(
             value_workbook,
             resolved_config.runtime.max_cells_scanned,
+            value_resolution,
         )
         if observed_cells is not None:
             errors.append(
@@ -355,10 +394,11 @@ def validate_excel(
                         )
                     )
                 sheet = value_workbook[sheet_name]
-                headers = [
-                    sheet.cell(table.header_row, column).value
-                    for column in range(1, sheet.max_column + 1)
-                ]
+                headers = value_resolution.headers(
+                    sheet,
+                    table.header_row,
+                    table,
+                )
                 while headers and headers[-1] is None:
                     headers.pop()
                 physical_header_issues = []
@@ -406,6 +446,8 @@ def validate_excel(
                     sheet,
                     formula_workbook[sheet_name],
                     logical_columns,
+                    value_resolution,
+                    formula_resolution,
                 )
                 if data_end_row is None:
                     errors.append(
@@ -921,11 +963,11 @@ def validate_excel(
                     reference_sheet = reference_sheets.get(candidate_sheet.title)
                     if reference_sheet is None:
                         continue
-                    actual_shape = _content_shape(
+                    actual_shape = value_resolution.shape(
                         candidate_sheet,
                         candidate_formula_sheets[candidate_sheet.title],
                     )
-                    expected_shape = _content_shape(
+                    expected_shape = reference_value_resolution.shape(
                         reference_sheet,
                         reference_formula_sheets[reference_sheet.title],
                     )
@@ -978,6 +1020,8 @@ def validate_excel(
                     for row_number, column_number in _comparison_coordinates(
                         candidate_sheet,
                         reference_sheet,
+                        formula_resolution,
+                        reference_formula_resolution,
                     ):
                             candidate_cell = candidate_sheet.cell(
                                 row=row_number,
@@ -1023,15 +1067,14 @@ def validate_excel(
             missing_cache_cells = []
             for formula_sheet in formula_workbook.worksheets:
                 value_sheet = value_workbook[formula_sheet.title]
-                for row in formula_sheet.iter_rows():
-                    for formula_cell in row:
-                        if (
-                            formula_cell.data_type == "f"
-                            and value_sheet[formula_cell.coordinate].value is None
-                        ):
-                            missing_cache_cells.append(
-                                (formula_sheet.title, formula_cell.coordinate)
-                            )
+                for formula_cell in formula_resolution.cells(formula_sheet):
+                    if (
+                        formula_cell.data_type == "f"
+                        and value_sheet[formula_cell.coordinate].value is None
+                    ):
+                        missing_cache_cells.append(
+                            (formula_sheet.title, formula_cell.coordinate)
+                        )
             if missing_cache_cells:
                 status = (
                     "NOT_RUN"
@@ -1057,7 +1100,7 @@ def validate_excel(
                 if status == "NOT_RUN":
                     continue
             for sheet in value_workbook.worksheets:
-                for cell in _stored_cells(sheet):
+                for cell in value_resolution.cells(sheet):
                     if cell.data_type == "e" or cell.value in tokens:
                         errors.append(
                             ValidationEvent(
@@ -1251,23 +1294,64 @@ def _date_value(value, options):
 
 def _detected_features(workbook, candidate_path):
     if candidate_path.suffix.lower() == ".xlsm":
-        yield "macros", None
-    if getattr(workbook, "_external_links", []):
-        yield "external_links", None
-    if getattr(workbook, "defined_names", {}):
-        yield "named_ranges", None
+        yield "macros", None, None
+    for feature_name, attribute in (
+        ("external_links", "_external_links"),
+        ("named_ranges", "defined_names"),
+    ):
+        try:
+            if getattr(workbook, attribute):
+                yield feature_name, None, None
+        except Exception as error:
+            yield feature_name, None, str(error)
     for sheet in workbook.worksheets:
-        if getattr(sheet, "_charts", []):
-            yield "charts", sheet.title
-        if getattr(sheet, "_pivots", []):
-            yield "pivot_tables", sheet.title
-        merged_cells = getattr(sheet, "merged_cells", None)
-        if merged_cells is not None and list(merged_cells.ranges):
-            yield "merged_cells", sheet.title
+        for feature_name, attribute in (
+            ("charts", "_charts"),
+            ("pivot_tables", "_pivots"),
+            ("merged_cells", "merged_cells"),
+        ):
+            try:
+                feature = getattr(sheet, attribute, None)
+                if feature_name == "merged_cells":
+                    present = feature is not None and bool(list(feature.ranges))
+                else:
+                    present = bool(feature)
+                if present:
+                    yield feature_name, sheet.title, None
+            except Exception as error:
+                yield feature_name, sheet.title, str(error)
 
 
 def _normalise_header(value):
     return str(value).strip().casefold()
+
+
+def _header_values(sheet, header_row, table, resolution):
+    max_column = None
+    boundary = table.data_boundary
+    if boundary is not None and boundary.mode == "excel_table":
+        excel_table = sheet.tables.get(boundary.table_name)
+        if excel_table is not None:
+            _min_column, _min_row, max_column, _max_row = range_boundaries(
+                excel_table.ref
+            )
+    if max_column is None:
+        cells = resolution.cells(sheet)
+        if cells is not None:
+            max_column = max(
+                (
+                    cell.column
+                    for cell in cells
+                    if cell.row == header_row and cell.value is not None
+                ),
+                default=0,
+            )
+        else:
+            max_column = sheet.max_column
+    return [
+        sheet.cell(header_row, column).value
+        for column in range(1, max_column + 1)
+    ]
 
 
 def _is_blank_value(value, blank_policy, null_tokens):
@@ -1280,10 +1364,61 @@ def _is_blank_value(value, blank_policy, null_tokens):
     return value is None
 
 
-def _cells_until_limit(workbook, limit):
+@dataclass
+class _WorkbookResolution:
+    workbook: object
+    _cell_cache: dict = field(default_factory=dict)
+    _shape_cache: dict = field(default_factory=dict)
+    _header_cache: dict = field(default_factory=dict)
+
+    def cells(self, sheet):
+        key = sheet.title
+        if key not in self._cell_cache:
+            stored = getattr(sheet, "_cells", None)
+            self._cell_cache[key] = (
+                tuple(stored.values()) if stored is not None else None
+            )
+        cached = self._cell_cache[key]
+        return cached if cached is not None else _stored_cells(sheet)
+
+    def shape(self, value_sheet, formula_sheet):
+        key = (value_sheet.title, formula_sheet.title)
+        if key not in self._shape_cache:
+            self._shape_cache[key] = _content_shape(
+                value_sheet,
+                formula_sheet,
+                self,
+                self,
+            )
+        return self._shape_cache[key]
+
+    def headers(self, sheet, header_row, table):
+        boundary = table.data_boundary
+        table_name = (
+            boundary.table_name
+            if boundary is not None and boundary.mode == "excel_table"
+            else None
+        )
+        key = (sheet.title, header_row, table_name)
+        if key not in self._header_cache:
+            self._header_cache[key] = _header_values(
+                sheet,
+                header_row,
+                table,
+                self,
+            )
+        return self._header_cache[key]
+
+
+def _cells_until_limit(workbook, limit, resolution=None):
     count = 0
     for sheet in workbook.worksheets:
-        for _cell in _stored_cells(sheet):
+        cells = (
+            resolution.cells(sheet)
+            if resolution is not None
+            else _stored_cells(sheet)
+        )
+        for _cell in cells:
             count += 1
             if count > limit:
                 return count
@@ -1301,18 +1436,23 @@ def _stored_cells(sheet):
     )
 
 
-def _comparison_coordinates(candidate_sheet, reference_sheet):
+def _comparison_coordinates(
+    candidate_sheet,
+    reference_sheet,
+    candidate_resolution=None,
+    reference_resolution=None,
+):
     if (
         hasattr(candidate_sheet, "_cells")
         and hasattr(reference_sheet, "_cells")
     ):
         coordinates = {
             (cell.row, cell.column)
-            for cell in _stored_cells(candidate_sheet)
+            for cell in candidate_resolution.cells(candidate_sheet)
         }
         coordinates.update(
             (cell.row, cell.column)
-            for cell in _stored_cells(reference_sheet)
+            for cell in reference_resolution.cells(reference_sheet)
         )
         return coordinates
     max_row = max(candidate_sheet.max_row, reference_sheet.max_row)
@@ -1333,6 +1473,8 @@ def _table_data_end_row(
     value_sheet,
     formula_sheet,
     logical_columns,
+    value_resolution=None,
+    formula_resolution=None,
 ):
     max_row = max(value_sheet.max_row, formula_sheet.max_row)
     boundary = table.data_boundary
@@ -1357,14 +1499,22 @@ def _table_data_end_row(
         if hasattr(value_sheet, "_cells") and hasattr(formula_sheet, "_cells"):
             rows = [
                 cell.row
-                for cell in _stored_cells(value_sheet)
+                for cell in (
+                    value_resolution.cells(value_sheet)
+                    if value_resolution is not None
+                    else _stored_cells(value_sheet)
+                )
                 if cell.column in column_numbers
                 and cell.row > header_row
                 and cell.value is not None
             ]
             rows.extend(
                 cell.row
-                for cell in _stored_cells(formula_sheet)
+                for cell in (
+                    formula_resolution.cells(formula_sheet)
+                    if formula_resolution is not None
+                    else _stored_cells(formula_sheet)
+                )
                 if cell.column in column_numbers
                 and cell.row > header_row
                 and cell.value is not None
@@ -1381,17 +1531,30 @@ def _table_data_end_row(
     return max_row
 
 
-def _content_shape(value_sheet, formula_sheet):
+def _content_shape(
+    value_sheet,
+    formula_sheet,
+    value_resolution=None,
+    formula_resolution=None,
+):
     max_row = 0
     max_column = 0
     if hasattr(value_sheet, "_cells") and hasattr(formula_sheet, "_cells"):
         coordinates = {
             cell.coordinate
-            for cell in _stored_cells(value_sheet)
+            for cell in (
+                value_resolution.cells(value_sheet)
+                if value_resolution is not None
+                else _stored_cells(value_sheet)
+            )
         }
         coordinates.update(
             cell.coordinate
-            for cell in _stored_cells(formula_sheet)
+            for cell in (
+                formula_resolution.cells(formula_sheet)
+                if formula_resolution is not None
+                else _stored_cells(formula_sheet)
+            )
         )
         for coordinate in coordinates:
             value_cell = value_sheet[coordinate]

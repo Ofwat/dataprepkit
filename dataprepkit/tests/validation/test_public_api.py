@@ -6,6 +6,8 @@ import pytest
 from openpyxl.styles import PatternFill
 from openpyxl.worksheet.table import Table
 from openpyxl.worksheet.formula import ArrayFormula
+from openpyxl.chart import BarChart, Reference
+from openpyxl.workbook.defined_name import DefinedName
 
 
 from dataprepkit.validation import (
@@ -2238,6 +2240,129 @@ def test_feature_policy_ignore_records_a_diagnostic(tmp_path):
     assert result.warnings == []
     assert [event.code for event in result.diagnostics] == [
         "FEATURE_DETECTED",
+    ]
+
+
+@pytest.mark.parametrize("action, bucket", [("error", "errors"), ("warning", "warnings")])
+def test_feature_policy_reports_broader_detected_features(
+    tmp_path,
+    action,
+    bucket,
+):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Data"
+    sheet["A1"] = 1
+    chart = BarChart()
+    chart.add_data(Reference(sheet, min_col=1, min_row=1, max_row=1))
+    sheet.add_chart(chart, "C1")
+    workbook.defined_names.add(
+        DefinedName("data_value", attr_text="Data!$A$1")
+    )
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "runtime": RuntimePolicy(
+                max_cells_scanned=1000,
+                read_only=False,
+                macro_policy="reject",
+                missing_formula_cache_action="not_run",
+                feature_policy=WorkbookFeaturePolicy(
+                    charts=action,
+                    named_ranges=action,
+                ),
+            )
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert [event.rule_code for event in getattr(result, bucket)] == [
+        "feature_policy",
+        "feature_policy",
+    ]
+    assert {event.description.split(": ")[-1] for event in getattr(result, bucket)} == {
+        "charts",
+        "named_ranges",
+    }
+
+
+@pytest.mark.parametrize("action, bucket", [("error", "errors"), ("warning", "warnings")])
+def test_feature_policy_reports_unavailable_detection(
+    tmp_path,
+    monkeypatch,
+    action,
+    bucket,
+):
+    from dataprepkit.validation import workbook as workbook_module
+
+    candidate_path = tmp_path / "candidate.xlsx"
+    write_workbook(candidate_path, "Data")
+    monkeypatch.setattr(
+        workbook_module,
+        "_detected_features",
+        lambda workbook, path: iter(
+            [("charts", "Data", "feature reader unavailable")]
+        ),
+    )
+    config = make_config().model_copy(
+        update={
+            "runtime": RuntimePolicy(
+                max_cells_scanned=1000,
+                read_only=False,
+                macro_policy="reject",
+                missing_formula_cache_action="not_run",
+                feature_policy=WorkbookFeaturePolicy(
+                    unavailable_action=action,
+                ),
+            )
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert [event.rule_code for event in getattr(result, bucket)] == [
+        "feature_detection_unavailable",
+    ]
+    assert "feature reader unavailable" in getattr(result, bucket)[0].description
+
+
+def test_feature_policy_ignores_unavailable_detection_with_diagnostic(
+    tmp_path,
+    monkeypatch,
+):
+    from dataprepkit.validation import workbook as workbook_module
+
+    candidate_path = tmp_path / "candidate.xlsx"
+    write_workbook(candidate_path, "Data")
+    monkeypatch.setattr(
+        workbook_module,
+        "_detected_features",
+        lambda workbook, path: iter(
+            [("charts", "Data", "feature reader unavailable")]
+        ),
+    )
+    config = make_config().model_copy(
+        update={
+            "runtime": RuntimePolicy(
+                max_cells_scanned=1000,
+                read_only=False,
+                macro_policy="reject",
+                missing_formula_cache_action="not_run",
+                feature_policy=WorkbookFeaturePolicy(
+                    unavailable_action="ignore",
+                ),
+            )
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is True
+    assert [event.code for event in result.diagnostics] == [
+        "FEATURE_DETECTION_UNAVAILABLE",
     ]
 
 

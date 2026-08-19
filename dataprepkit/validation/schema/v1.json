@@ -592,6 +592,11 @@
     "WorkbookFeaturePolicy": {
       "additionalProperties": false,
       "properties": {
+        "unavailable_action": {
+          "default": "warning",
+          "title": "Unavailable Action",
+          "type": "string"
+        },
         "charts": {
           "default": "ignore",
           "title": "Charts",
