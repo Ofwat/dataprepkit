@@ -369,6 +369,39 @@ def test_validate_excel_accepts_identical_array_formulas(tmp_path):
     assert result.errors == []
 
 
+def test_validate_excel_ignores_formula_whitespace_differences(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    reference_path = tmp_path / "reference.xlsx"
+
+    for path, formula in (
+        (candidate_path, "= 1+1"),
+        (reference_path, "=1+1"),
+    ):
+        workbook = openpyxl.Workbook()
+        workbook.active.title = "Data"
+        workbook.active["A1"] = formula
+        workbook.save(path)
+
+    config = make_config(
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="formula_difference",
+                enabled=True,
+                scope="overlapping_sheets",
+            )
+        ]
+    )
+
+    result = validate_excel(
+        candidate_path=candidate_path,
+        reference_path=reference_path,
+        config=config,
+    )
+
+    assert result.is_valid is True
+    assert result.errors == []
+
+
 def test_validate_excel_reports_sheet_structure_differences(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     reference_path = tmp_path / "reference.xlsx"

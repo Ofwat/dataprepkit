@@ -301,8 +301,17 @@ def _match_sheets(sheet_names, selector):
 def _normalise_formula(value):
     text = getattr(value, "text", None)
     if text is None:
-        return value
+        return _normalise_formula_text(value)
     return {
-        "text": text,
+        "text": _normalise_formula_text(text),
         "ref": getattr(value, "ref", None),
     }
+
+
+def _normalise_formula_text(value):
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if text.startswith("="):
+        return "=" + text[1:].lstrip()
+    return text
