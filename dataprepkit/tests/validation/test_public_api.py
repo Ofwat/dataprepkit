@@ -11,6 +11,7 @@ from dataprepkit.validation import (
     CellLocation,
     ColumnDefinition,
     ColumnValidation,
+    DataBoundary,
     EmptyRowRule,
     ExpectedCellCheck,
     HeaderPolicy,
@@ -918,3 +919,52 @@ def test_validate_excel_reports_non_blank_configured_empty_row(tmp_path):
         "empty_row_pattern"
     ]
     assert result.errors[0].cell_reference == "B3"
+
+
+def test_column_rules_respect_fixed_table_data_boundary(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Unit"])
+    workbook.active.append(["Invalid"])
+    workbook.active.append(["£"])
+    workbook.active.append(["£"])
+    workbook.active.append(["Invalid_After_Boundary"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(
+                        mode="exact",
+                        value="Data",
+                    ),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="fixed_end_row",
+                        end_row=4,
+                    ),
+                    column_definitions=[
+                        ColumnDefinition(name="unit", aliases=["Unit"]),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["unit"],
+                    ),
+                    column_validations=[
+                        ColumnValidation(
+                            column="unit",
+                            allowed_values=["£", "%"],
+                            null_policy="allow",
+                        )
+                    ],
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert [event.rule_code for event in result.errors] == ["allowed_values"]
+    assert result.errors[0].cell_reference == "A2"

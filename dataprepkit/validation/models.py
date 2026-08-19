@@ -157,12 +157,19 @@ class EmptyRowRule(_PublicModel):
     blank_policy: str = "none_only"
 
 
+class DataBoundary(_PublicModel):
+    mode: str
+    columns: list[str] | None = None
+    end_row: int | None = None
+    table_name: str | None = None
+
+
 class TableConfig(_PublicModel):
     name: str
     sheet_selector: SheetSelector | None = None
     required: bool = False
     header_row: int | None = None
-    data_boundary: dict[str, Any] | None = None
+    data_boundary: DataBoundary | None = None
     column_definitions: list[ColumnDefinition] = Field(default_factory=list)
     column_validations: list[ColumnValidation] = Field(default_factory=list)
     header_policy: HeaderPolicy | None = None

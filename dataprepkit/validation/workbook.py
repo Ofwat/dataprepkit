@@ -220,6 +220,13 @@ def validate_excel(
                         if position is not None:
                             logical_columns[definition.name] = position + 1
                             break
+                data_end_row = _table_data_end_row(
+                    table,
+                    table.header_row,
+                    sheet,
+                    formula_workbook[sheet_name],
+                    logical_columns,
+                )
                 required_positions = []
                 missing_columns = []
                 for logical_name in table.header_policy.required_columns:
@@ -261,7 +268,7 @@ def validate_excel(
                 if table.data_presence == "require_one_usable_row":
                     formula_sheet = formula_workbook[sheet_name]
                     has_data_row = False
-                    max_row = max(sheet.max_row, formula_sheet.max_row)
+                    max_row = data_end_row
                     max_column = max(sheet.max_column, formula_sheet.max_column)
                     for row_number in range(table.header_row + 1, max_row + 1):
                         if any(
@@ -315,7 +322,7 @@ def validate_excel(
                                     ),
                                 )
                             )
-                max_row = max(sheet.max_row, formula_workbook[sheet_name].max_row)
+                max_row = data_end_row
                 if header_resolution_failed:
                     for validation in table.column_validations:
                         not_run.append(
@@ -702,6 +709,36 @@ def _is_blank_value(value, blank_policy, null_tokens):
     if blank_policy == "blank_strings_and_nulls":
         return value is None or value == "" or value in null_tokens
     return value is None
+
+
+def _table_data_end_row(
+    table,
+    header_row,
+    value_sheet,
+    formula_sheet,
+    logical_columns,
+):
+    max_row = max(value_sheet.max_row, formula_sheet.max_row)
+    boundary = table.data_boundary
+    if boundary is None:
+        return max_row
+    if boundary.mode == "fixed_end_row" and boundary.end_row is not None:
+        return min(max_row, boundary.end_row)
+    if boundary.mode == "last_non_empty_row" and boundary.columns:
+        column_numbers = [
+            logical_columns[column]
+            for column in boundary.columns
+            if column in logical_columns
+        ]
+        for row_number in range(max_row, header_row, -1):
+            if any(
+                value_sheet.cell(row_number, column).value is not None
+                or formula_sheet.cell(row_number, column).value is not None
+                for column in column_numbers
+            ):
+                return row_number
+        return header_row
+    return max_row
 
 
 def _content_shape(value_sheet, formula_sheet):
