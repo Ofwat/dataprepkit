@@ -1828,7 +1828,7 @@ Current status as of 2026-08-19:
 | Workbook loading and cleanup | In progress | First `validate_excel` cleanup slice is green |
 | `validate_config` and config serialization | Pending | Write failing YAML/schema tests |
 | `validate_excel` facade | In progress | Standalone required-sheet slice is green |
-| First validation rules | In progress | Required sheets, formula errors, and missing reference sheets implemented; next: structure/formula comparison |
+| First validation rules | In progress | Required sheets, required-table resolution, formula errors, and missing reference sheets implemented; structure/formula comparison is covered and remaining rule coverage continues incrementally |
 | Remaining validation rules | Pending | Implement one public rule slice at a time |
 | Compatibility verification | Pending | Run the pinned profile against the fixture manifest |
 

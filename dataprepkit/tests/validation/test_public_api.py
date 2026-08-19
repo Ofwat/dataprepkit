@@ -691,6 +691,77 @@ def test_validate_excel_reports_missing_table_header(tmp_path):
     assert result.errors[0].actual_value == ["Unit", "Other"]
 
 
+def test_validate_excel_reports_missing_required_table(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    write_workbook(candidate_path, "Data")
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(
+                        mode="exact",
+                        value="Outputs",
+                    ),
+                    required=True,
+                    header_row=1,
+                    column_definitions=[
+                        ColumnDefinition(name="reference"),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["reference"],
+                    ),
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is False
+    assert [event.rule_code for event in result.errors] == ["table_resolution"]
+    assert result.errors[0].description == (
+        "Required table 'outputs' did not resolve"
+    )
+
+
+def test_validate_excel_does_not_validate_tables_on_ignored_sheets(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    write_workbook_with_sheets(candidate_path, ["Data", "Metadata"])
+
+    config = make_config(
+        ignored_selectors=[
+            SheetSelector(mode="exact", value="Metadata"),
+        ],
+    ).model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(
+                        mode="exact",
+                        value="Metadata",
+                    ),
+                    required=True,
+                    header_row=1,
+                    column_definitions=[
+                        ColumnDefinition(name="reference"),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["reference"],
+                    ),
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is False
+    assert [event.rule_code for event in result.errors] == ["table_resolution"]
+
+
 def test_sheet_structure_ignores_blank_cells_outside_content(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     reference_path = tmp_path / "reference.xlsx"

@@ -104,6 +104,11 @@ def validate_excel(
                     errors,
                 )
             )
+        ignored_sheet_names = set()
+        for selector in resolved_config.sheet_policy.ignored_selectors:
+            ignored_sheet_names.update(
+                _match_sheets(sheet_names, selector)
+            )
         extra_sheets = sheet_names - selected_sheet_names
         action = resolved_config.sheet_policy.extra_sheet_action
         for sheet_name in formula_workbook.sheetnames:
@@ -235,7 +240,45 @@ def validate_excel(
                 value_workbook.sheetnames,
                 table.sheet_selector,
             )
+            sheet_matches = [
+                sheet_name
+                for sheet_name in sheet_matches
+                if sheet_name not in ignored_sheet_names
+            ]
             if not sheet_matches:
+                if table.required:
+                    event = ValidationEvent(
+                        rule_code="table_resolution",
+                        status=(
+                            "FAILED"
+                            if (
+                                resolved_config.enabled_rules is None
+                                or "table_resolution"
+                                in resolved_config.enabled_rules
+                            )
+                            else "NOT_RUN"
+                        ),
+                        reason=(
+                            None
+                            if (
+                                resolved_config.enabled_rules is None
+                                or "table_resolution"
+                                in resolved_config.enabled_rules
+                            )
+                            else "RULE_DISABLED"
+                        ),
+                        sheet_name=table.sheet_selector.value,
+                        severity=resolved_config.rule_severity.get(
+                            "table_resolution"
+                        ),
+                        description=(
+                            f"Required table '{table.name}' did not resolve"
+                        ),
+                    )
+                    if event.status == "NOT_RUN":
+                        not_run.append(event)
+                    else:
+                        errors.append(event)
                 continue
             if table.header_row is None:
                 continue
