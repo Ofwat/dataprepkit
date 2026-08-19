@@ -138,15 +138,28 @@ class ExpectedCellCheck(_PublicModel):
     severity: str | None = None
 
 
+class ColumnDefinition(_PublicModel):
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+    comparison: ComparisonConfig | None = None
+
+
+class HeaderPolicy(_PublicModel):
+    required_columns: list[str] = Field(default_factory=list)
+    match_mode: str = "exact_order"
+    extra_column_action: str = "allowed"
+    missing_column_action: str = "error"
+
+
 class TableConfig(_PublicModel):
     name: str
     sheet_selector: SheetSelector | None = None
     required: bool = False
     header_row: int | None = None
     data_boundary: dict[str, Any] | None = None
-    column_definitions: list[dict[str, Any]] = Field(default_factory=list)
+    column_definitions: list[ColumnDefinition] = Field(default_factory=list)
     column_validations: list[ColumnValidation] = Field(default_factory=list)
-    header_policy: dict[str, Any] | None = None
+    header_policy: HeaderPolicy | None = None
     empty_row_rules: list[dict[str, Any]] = Field(default_factory=list)
     data_presence: str = "allow_empty"
 

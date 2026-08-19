@@ -162,7 +162,29 @@ def validate_excel(
                 )
                 continue
             for sheet_name, cell_reference in resolved_locations:
-                actual_value = value_workbook[sheet_name][cell_reference].value
+                actual_cell = value_workbook[sheet_name][cell_reference]
+                actual_value = actual_cell.value
+                if actual_cell.data_type == "e":
+                    not_run.append(
+                        ValidationEvent(
+                            rule_code="expected_cell",
+                            status="NOT_RUN",
+                            reason="FORMULA_ERROR_VALUE",
+                            severity=expected_cell.severity
+                            or resolved_config.rule_severity.get("expected_cell"),
+                            sheet_name=sheet_name,
+                            cell_reference=cell_reference,
+                            actual_value=actual_value,
+                            expected_value=expected_cell.expected_value,
+                            description=(
+                                "Expected cell cannot be compared because it "
+                                "contains an Excel error value"
+                            ),
+                        )
+                    )
+                    if expected_cell.fallback_strategy == "ordered_first":
+                        break
+                    continue
                 if _values_equal(
                     actual_value,
                     expected_cell.expected_value,
@@ -185,6 +207,66 @@ def validate_excel(
                 )
                 if expected_cell.fallback_strategy == "ordered_first":
                     break
+        for table in resolved_config.tables:
+            if table.header_policy is None or table.sheet_selector is None:
+                continue
+            sheet_matches = _match_sheets(
+                value_workbook.sheetnames,
+                table.sheet_selector,
+            )
+            if not sheet_matches:
+                continue
+            if table.header_row is None:
+                continue
+            definitions = {definition.name: definition for definition in table.column_definitions}
+            for sheet_name in sheet_matches:
+                sheet = value_workbook[sheet_name]
+                headers = [
+                    sheet.cell(table.header_row, column).value
+                    for column in range(1, sheet.max_column + 1)
+                ]
+                normalised_headers = {
+                    _normalise_header(header): index
+                    for index, header in enumerate(headers)
+                    if header is not None
+                }
+                required_positions = []
+                missing_columns = []
+                for logical_name in table.header_policy.required_columns:
+                    definition = definitions.get(logical_name)
+                    names = [logical_name]
+                    if definition is not None:
+                        names.extend(definition.aliases)
+                    position = next(
+                        (
+                            normalised_headers[_normalise_header(name)]
+                            for name in names
+                            if _normalise_header(name) in normalised_headers
+                        ),
+                        None,
+                    )
+                    if position is None:
+                        missing_columns.append(logical_name)
+                    else:
+                        required_positions.append(position)
+                if (
+                    table.header_policy.match_mode == "contains_in_order"
+                    and required_positions != sorted(required_positions)
+                ):
+                    missing_columns.append("required columns are out of order")
+                if missing_columns and table.header_policy.missing_column_action == "error":
+                    errors.append(
+                        ValidationEvent(
+                            rule_code="column_header",
+                            sheet_name=sheet_name,
+                            actual_value=headers,
+                            expected_value=table.header_policy.required_columns,
+                            description=(
+                                f"Table '{table.name}' header validation failed: "
+                                f"{', '.join(missing_columns)}"
+                            ),
+                        )
+                    )
         for check_index, check in enumerate(resolved_config.workbook_checks):
             if (
                 not check.enabled
@@ -247,18 +329,26 @@ def validate_excel(
                 reference_sheets = {
                     sheet.title: sheet for sheet in reference_workbook.worksheets
                 }
+                reference_formula_sheets = {
+                    sheet.title: sheet
+                    for sheet in reference_formula_workbook.worksheets
+                }
+                candidate_formula_sheets = {
+                    sheet.title: sheet
+                    for sheet in formula_workbook.worksheets
+                }
                 for candidate_sheet in value_workbook.worksheets:
                     reference_sheet = reference_sheets.get(candidate_sheet.title)
                     if reference_sheet is None:
                         continue
-                    actual_shape = {
-                        "max_row": candidate_sheet.max_row,
-                        "max_column": candidate_sheet.max_column,
-                    }
-                    expected_shape = {
-                        "max_row": reference_sheet.max_row,
-                        "max_column": reference_sheet.max_column,
-                    }
+                    actual_shape = _content_shape(
+                        candidate_sheet,
+                        candidate_formula_sheets[candidate_sheet.title],
+                    )
+                    expected_shape = _content_shape(
+                        reference_sheet,
+                        reference_formula_sheets[reference_sheet.title],
+                    )
                     if actual_shape == expected_shape:
                         continue
                     errors.append(
@@ -425,3 +515,23 @@ def _values_equal(actual, expected, mode):
                 return actual_text.casefold() == expected_text.casefold()
             return actual_text == expected_text
     return actual == expected
+
+
+def _normalise_header(value):
+    return str(value).strip().casefold()
+
+
+def _content_shape(value_sheet, formula_sheet):
+    max_row = 0
+    max_column = 0
+    scan_max_row = max(value_sheet.max_row, formula_sheet.max_row)
+    scan_max_column = max(value_sheet.max_column, formula_sheet.max_column)
+    for row_number in range(1, scan_max_row + 1):
+        for column_number in range(1, scan_max_column + 1):
+            value_cell = value_sheet.cell(row_number, column_number)
+            formula_cell = formula_sheet.cell(row_number, column_number)
+            if value_cell.value is None and formula_cell.value is None:
+                continue
+            max_row = max(max_row, row_number)
+            max_column = max(max_column, column_number)
+    return {"max_row": max_row, "max_column": max_column}

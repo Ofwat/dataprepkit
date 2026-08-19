@@ -9,10 +9,13 @@ from dataprepkit.validation import (
     ComparisonConfig,
     ConfigurationError,
     CellLocation,
+    ColumnDefinition,
     ExpectedCellCheck,
+    HeaderPolicy,
     RuntimePolicy,
     SheetPolicy,
     SheetSelector,
+    TableConfig,
     WorkbookValidationConfig,
     WorkbookCheck,
     validate_config,
@@ -474,6 +477,127 @@ def test_validate_excel_reports_expected_cell_difference(tmp_path):
     assert result.errors[0].cell_reference == "A1"
     assert result.errors[0].actual_value == "actual"
     assert result.errors[0].expected_value == "expected"
+
+
+def test_validate_excel_reports_missing_table_header(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Unit", "Other"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(
+                        mode="exact",
+                        value="Data",
+                    ),
+                    required=True,
+                    header_row=1,
+                    column_definitions=[
+                        ColumnDefinition(name="unit", aliases=["Unit"]),
+                        ColumnDefinition(
+                            name="reference",
+                            aliases=["Reference"],
+                        ),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["unit", "reference"],
+                        match_mode="contains_in_order",
+                        extra_column_action="allowed",
+                        missing_column_action="error",
+                    ),
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is False
+    assert [event.rule_code for event in result.errors] == ["column_header"]
+    assert result.errors[0].sheet_name == "Data"
+
+
+def test_sheet_structure_ignores_blank_cells_outside_content(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    reference_path = tmp_path / "reference.xlsx"
+
+    candidate = openpyxl.Workbook()
+    candidate.active.title = "Data"
+    candidate.active["A1"] = "value"
+    candidate.active["Z11"]
+    candidate.save(candidate_path)
+
+    reference = openpyxl.Workbook()
+    reference.active.title = "Data"
+    reference.active["A1"] = "value"
+    reference.save(reference_path)
+
+    config = make_config(
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="sheet_structure",
+                enabled=True,
+                scope="overlapping_sheets",
+            )
+        ]
+    )
+
+    result = validate_excel(
+        candidate_path=candidate_path,
+        reference_path=reference_path,
+        config=config,
+    )
+
+    assert result.is_valid is True
+
+
+def test_expected_cell_is_not_run_for_excel_error_value(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active["A1"] = "#DIV/0!"
+    workbook.save(candidate_path)
+
+    config = make_config(
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="formula_error",
+                enabled=True,
+                scope="all_sheets",
+                options={"error_tokens": ["#DIV/0!"]},
+            )
+        ],
+    ).model_copy(
+        update={
+            "expected_cells": [
+                ExpectedCellCheck(
+                    name="value",
+                    locations=[
+                        CellLocation(
+                            sheet_selector=SheetSelector(
+                                mode="exact",
+                                value="Data",
+                            ),
+                            cell_reference="A1",
+                        )
+                    ],
+                    expected_value="expected",
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert [event.rule_code for event in result.errors] == ["formula_error"]
+    assert len(result.not_run) == 1
+    assert result.not_run[0].rule_code == "expected_cell"
+    assert result.not_run[0].reason == "FORMULA_ERROR_VALUE"
 
 
 def test_validate_excel_reports_sheet_structure_differences(tmp_path):
