@@ -6,6 +6,7 @@ import openpyxl
 
 from .config import validate_config
 from .models import (
+    ConfigurationError,
     ValidationEvent,
     ValidationResult,
     WorkbookReadError,
@@ -104,7 +105,7 @@ def validate_excel(
                 warnings.append(event)
             elif action == "error":
                 errors.append(event)
-        for check in resolved_config.workbook_checks:
+        for check_index, check in enumerate(resolved_config.workbook_checks):
             if (
                 not check.enabled
                 or (
@@ -193,6 +194,18 @@ def validate_excel(
                     )
                 continue
             if check.rule_code == "formula_difference":
+                whitespace_policy = (check.options or {}).get(
+                    "whitespace_policy",
+                    "normalised",
+                )
+                if whitespace_policy not in {"exact", "normalised"}:
+                    raise ConfigurationError(
+                        "must be 'exact' or 'normalised'",
+                        field_path=(
+                            f"workbook_checks[{check_index}]"
+                            ".options.whitespace_policy"
+                        ),
+                    )
                 if reference_formula_workbook is None:
                     not_run.append(
                         ValidationEvent(
@@ -235,10 +248,12 @@ def validate_excel(
                             if not (candidate_is_formula or reference_is_formula):
                                 continue
                             candidate_formula = _normalise_formula(
-                                candidate_cell.value
+                                candidate_cell.value,
+                                whitespace_policy,
                             )
                             reference_formula = _normalise_formula(
-                                reference_cell.value
+                                reference_cell.value,
+                                whitespace_policy,
                             )
                             if candidate_formula == reference_formula:
                                 continue
@@ -298,18 +313,20 @@ def _match_sheets(sheet_names, selector):
     return [name for name in sheet_names if name.casefold() == expected]
 
 
-def _normalise_formula(value):
+def _normalise_formula(value, whitespace_policy="normalised"):
     text = getattr(value, "text", None)
     if text is None:
-        return _normalise_formula_text(value)
+        return _normalise_formula_text(value, whitespace_policy)
     return {
-        "text": _normalise_formula_text(text),
+        "text": _normalise_formula_text(text, whitespace_policy),
         "ref": getattr(value, "ref", None),
     }
 
 
-def _normalise_formula_text(value):
+def _normalise_formula_text(value, whitespace_policy):
     if not isinstance(value, str):
+        return value
+    if whitespace_policy == "exact":
         return value
     text = value.strip()
     if text.startswith("="):
