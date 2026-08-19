@@ -106,6 +106,28 @@ def validate_excel(
                 warnings.append(event)
             elif action == "error":
                 errors.append(event)
+        observed_cells = _cells_until_limit(
+            value_workbook,
+            resolved_config.runtime.max_cells_scanned,
+        )
+        if observed_cells is not None:
+            errors.append(
+                ValidationEvent(
+                    rule_code="WORKBOOK_LIMIT_ERROR",
+                    actual_value=observed_cells,
+                    expected_value=resolved_config.runtime.max_cells_scanned,
+                    description=(
+                        "Workbook cell scan limit exceeded; validation stopped"
+                    ),
+                )
+            )
+            return ValidationResult(
+                run_id=run_id,
+                complete=False,
+                errors=errors,
+                warnings=warnings,
+                not_run=not_run,
+            )
         for expected_cell in resolved_config.expected_cells:
             if not expected_cell.enabled:
                 not_run.append(
@@ -730,6 +752,17 @@ def _is_blank_value(value, blank_policy, null_tokens):
     if blank_policy == "blank_strings_and_nulls":
         return value is None or value == "" or value in null_tokens
     return value is None
+
+
+def _cells_until_limit(workbook, limit):
+    count = 0
+    for sheet in workbook.worksheets:
+        for row in sheet.iter_rows():
+            for _cell in row:
+                count += 1
+                if count > limit:
+                    return count
+    return None
 
 
 def _table_data_end_row(

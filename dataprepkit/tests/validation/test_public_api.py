@@ -1031,3 +1031,33 @@ def test_data_presence_is_not_run_when_boundary_column_cannot_resolve(tmp_path):
     assert len(result.not_run) == 1
     assert result.not_run[0].rule_code == "non_empty_data"
     assert result.not_run[0].reason == "DATA_BOUNDARY_RESOLUTION_FAILED"
+
+
+def test_validate_excel_stops_when_cell_scan_limit_is_exceeded(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active["A1"] = "first"
+    workbook.active["A2"] = "second"
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "runtime": RuntimePolicy(
+                max_cells_scanned=1,
+                read_only=False,
+                macro_policy="reject",
+                missing_formula_cache_action="not_run",
+            )
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is False
+    assert result.complete is False
+    assert [event.rule_code for event in result.errors] == [
+        "WORKBOOK_LIMIT_ERROR"
+    ]
+    assert result.errors[0].actual_value == 2
+    assert result.errors[0].expected_value == 1
