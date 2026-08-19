@@ -142,7 +142,13 @@ def validate_excel(
                 not_run=not_run,
             )
         for expected_cell in resolved_config.expected_cells:
-            if not expected_cell.enabled:
+            if (
+                not expected_cell.enabled
+                or (
+                    resolved_config.enabled_rules is not None
+                    and "expected_cell" not in resolved_config.enabled_rules
+                )
+            ):
                 not_run.append(
                     ValidationEvent(
                         rule_code="expected_cell",
