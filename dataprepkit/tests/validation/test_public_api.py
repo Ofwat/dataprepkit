@@ -1976,6 +1976,64 @@ def test_feature_policy_reports_merged_cells(tmp_path):
     assert "merged_cells" in result.errors[0].description
 
 
+def test_feature_policy_warning_does_not_invalidate_result(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.merge_cells("A1:B1")
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "runtime": RuntimePolicy(
+                max_cells_scanned=1000,
+                read_only=False,
+                macro_policy="reject",
+                missing_formula_cache_action="not_run",
+                feature_policy=WorkbookFeaturePolicy(
+                    merged_cells="warning",
+                ),
+            )
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is True
+    assert [event.rule_code for event in result.warnings] == ["feature_policy"]
+    assert result.diagnostics == []
+
+
+def test_feature_policy_ignore_records_a_diagnostic(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.merge_cells("A1:B1")
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "runtime": RuntimePolicy(
+                max_cells_scanned=1000,
+                read_only=False,
+                macro_policy="reject",
+                missing_formula_cache_action="not_run",
+                feature_policy=WorkbookFeaturePolicy(
+                    merged_cells="ignore",
+                ),
+            )
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is True
+    assert result.warnings == []
+    assert [event.code for event in result.diagnostics] == [
+        "FEATURE_DETECTED",
+    ]
+
+
 def test_validate_excel_supports_regex_sheet_selectors(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     write_workbook(candidate_path, "Data_2025")
