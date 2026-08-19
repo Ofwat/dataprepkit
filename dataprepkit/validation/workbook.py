@@ -22,11 +22,12 @@ def validate_excel(
     run_id=None,
     profile=None,
 ):
-    del reference_path, candidate_version, reference_version, profile
+    del candidate_version, reference_version, profile
     resolved_config = validate_config(config)
     candidate_path = Path(candidate_path)
     formula_workbook = None
     value_workbook = None
+    reference_workbook = None
     try:
         formula_workbook = openpyxl.load_workbook(
             candidate_path,
@@ -40,15 +41,25 @@ def validate_excel(
             data_only=True,
             keep_vba=candidate_path.suffix.lower() == ".xlsm",
         )
+        if reference_path is not None:
+            reference_workbook = openpyxl.load_workbook(
+                reference_path,
+                read_only=resolved_config.runtime.read_only,
+                data_only=True,
+                keep_vba=Path(reference_path).suffix.lower() == ".xlsm",
+            )
     except Exception as error:
         if formula_workbook is not None:
             formula_workbook.close()
         if value_workbook is not None:
             value_workbook.close()
+        if reference_workbook is not None:
+            reference_workbook.close()
         raise WorkbookReadError(str(error)) from error
 
     try:
         errors = []
+        not_run = []
         sheet_names = set(formula_workbook.sheetnames)
         for selector in resolved_config.sheet_policy.required_selectors:
             matches = _match_sheets(sheet_names, selector)
@@ -64,7 +75,36 @@ def validate_excel(
                     )
                 )
         for check in resolved_config.workbook_checks:
-            if not check.enabled or check.rule_code != "formula_error":
+            if not check.enabled:
+                continue
+            if check.rule_code == "missing_reference_sheet":
+                if reference_workbook is None:
+                    not_run.append(
+                        ValidationEvent(
+                            rule_code="missing_reference_sheet",
+                            status="NOT_RUN",
+                            reason="REFERENCE_WORKBOOK_REQUIRED",
+                            description=(
+                                "Reference workbook is required for this check"
+                            ),
+                        )
+                    )
+                    continue
+                candidate_names = set(formula_workbook.sheetnames)
+                for sheet_name in reference_workbook.sheetnames:
+                    if sheet_name not in candidate_names:
+                        errors.append(
+                            ValidationEvent(
+                                rule_code="missing_reference_sheet",
+                                sheet_name=sheet_name,
+                                description=(
+                                    f"Reference sheet missing from candidate: "
+                                    f"{sheet_name}"
+                                ),
+                            )
+                        )
+                continue
+            if check.rule_code != "formula_error":
                 continue
             tokens = (check.options or {}).get("error_tokens", [])
             for sheet in value_workbook.worksheets:
@@ -83,10 +123,16 @@ def validate_excel(
                                     ),
                                 )
                             )
-        return ValidationResult(run_id=run_id, errors=errors)
+        return ValidationResult(
+            run_id=run_id,
+            errors=errors,
+            not_run=not_run,
+        )
     finally:
         formula_workbook.close()
         value_workbook.close()
+        if reference_workbook is not None:
+            reference_workbook.close()
 
 
 def _match_sheets(sheet_names, selector):

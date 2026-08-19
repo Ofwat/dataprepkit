@@ -58,6 +58,14 @@ def write_workbook(path: Path, sheet_name: str):
     workbook.save(path)
 
 
+def write_workbook_with_sheets(path: Path, sheet_names):
+    workbook = openpyxl.Workbook()
+    workbook.active.title = sheet_names[0]
+    for sheet_name in sheet_names[1:]:
+        workbook.create_sheet(sheet_name)
+    workbook.save(path)
+
+
 def test_public_validation_exports_are_available():
     assert WorkbookValidationConfig
     assert validate_config
@@ -148,3 +156,52 @@ def test_validate_excel_reports_configured_formula_errors(tmp_path):
     assert result.errors[0].rule_code == "formula_error"
     assert result.errors[0].sheet_name == "Data"
     assert result.errors[0].cell_reference == "A1"
+
+
+def test_validate_excel_reports_missing_reference_sheet(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    reference_path = tmp_path / "reference.xlsx"
+    write_workbook_with_sheets(candidate_path, ["Data"])
+    write_workbook_with_sheets(reference_path, ["Data", "Required_From_Template"])
+
+    config = make_config(
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="missing_reference_sheet",
+                enabled=True,
+                scope="all_sheets",
+            )
+        ]
+    )
+
+    result = validate_excel(
+        candidate_path=candidate_path,
+        reference_path=reference_path,
+        config=config,
+    )
+
+    assert result.is_valid is False
+    assert [event.rule_code for event in result.errors] == [
+        "missing_reference_sheet"
+    ]
+    assert result.errors[0].sheet_name == "Required_From_Template"
+
+
+def test_reference_rule_is_not_run_without_reference_workbook(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    write_workbook(candidate_path, "Data")
+    config = make_config(
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="missing_reference_sheet",
+                enabled=True,
+                scope="all_sheets",
+            )
+        ]
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is True
+    assert len(result.not_run) == 1
+    assert result.not_run[0].reason == "REFERENCE_WORKBOOK_REQUIRED"

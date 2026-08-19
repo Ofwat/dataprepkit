@@ -148,6 +148,7 @@ class WorkbookValidationConfig(_PublicModel):
 class ValidationEvent(_PublicModel):
     rule_code: str
     status: str = "FAILED"
+    reason: str | None = None
     severity: str | None = None
     sheet_name: str | None = None
     description: str = ""
