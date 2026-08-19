@@ -105,6 +105,86 @@ def validate_excel(
                 warnings.append(event)
             elif action == "error":
                 errors.append(event)
+        for expected_cell in resolved_config.expected_cells:
+            if not expected_cell.enabled:
+                not_run.append(
+                    ValidationEvent(
+                        rule_code="expected_cell",
+                        status="NOT_RUN",
+                        reason="RULE_DISABLED",
+                        severity=expected_cell.severity
+                        or resolved_config.rule_severity.get("expected_cell"),
+                        description="Rule is disabled by configuration",
+                    )
+                )
+                continue
+            resolved_locations = []
+            for location in expected_cell.locations:
+                matches = _match_sheets(
+                    value_workbook.sheetnames,
+                    location.sheet_selector,
+                )
+                resolved_locations.extend(
+                    (sheet_name, location.cell_reference) for sheet_name in matches
+                )
+                if (
+                    expected_cell.fallback_strategy == "ordered_first"
+                    and resolved_locations
+                ):
+                    break
+            if not resolved_locations:
+                errors.append(
+                    ValidationEvent(
+                        rule_code="expected_cell",
+                        severity=expected_cell.severity
+                        or resolved_config.rule_severity.get("expected_cell"),
+                        description=(
+                            f"Expected cell location did not resolve: "
+                            f"{expected_cell.name}"
+                        ),
+                    )
+                )
+                continue
+            if (
+                expected_cell.fallback_strategy == "exactly_one"
+                and len(resolved_locations) != 1
+            ):
+                errors.append(
+                    ValidationEvent(
+                        rule_code="expected_cell",
+                        severity=expected_cell.severity
+                        or resolved_config.rule_severity.get("expected_cell"),
+                        description=(
+                            f"Expected cell requires exactly one location: "
+                            f"{expected_cell.name}"
+                        ),
+                    )
+                )
+                continue
+            for sheet_name, cell_reference in resolved_locations:
+                actual_value = value_workbook[sheet_name][cell_reference].value
+                if _values_equal(
+                    actual_value,
+                    expected_cell.expected_value,
+                    expected_cell.comparison.mode,
+                ):
+                    continue
+                errors.append(
+                    ValidationEvent(
+                        rule_code="expected_cell",
+                        severity=expected_cell.severity
+                        or resolved_config.rule_severity.get("expected_cell"),
+                        sheet_name=sheet_name,
+                        cell_reference=cell_reference,
+                        actual_value=actual_value,
+                        expected_value=expected_cell.expected_value,
+                        description=(
+                            f"Expected cell value differs: {expected_cell.name}"
+                        ),
+                    )
+                )
+                if expected_cell.fallback_strategy == "ordered_first":
+                    break
         for check_index, check in enumerate(resolved_config.workbook_checks):
             if (
                 not check.enabled
@@ -332,3 +412,16 @@ def _normalise_formula_text(value, whitespace_policy):
     if text.startswith("="):
         return "=" + text[1:].lstrip()
     return text
+
+
+def _values_equal(actual, expected, mode):
+    if mode == "exact":
+        return actual == expected
+    if mode in {"normalised", "case_insensitive"}:
+        if isinstance(actual, str) and isinstance(expected, str):
+            actual_text = actual.strip()
+            expected_text = expected.strip()
+            if mode == "case_insensitive":
+                return actual_text.casefold() == expected_text.casefold()
+            return actual_text == expected_text
+    return actual == expected

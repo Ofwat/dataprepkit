@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ValidationPackageError(Exception):
@@ -110,6 +111,33 @@ class ColumnValidation(_PublicModel):
         return self
 
 
+class CellLocation(_PublicModel):
+    sheet_selector: SheetSelector
+    cell_reference: str
+
+    @field_validator("cell_reference")
+    @classmethod
+    def validate_cell_reference(cls, value):
+        if not re.fullmatch(r"\$?[A-Za-z]{1,3}\$?[1-9][0-9]*", value):
+            raise ValueError("must be an unqualified Excel A1 cell reference")
+        return value
+
+
+class CellComparison(_PublicModel):
+    mode: str = "exact"
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExpectedCellCheck(_PublicModel):
+    name: str
+    locations: list[CellLocation] = Field(min_length=1)
+    fallback_strategy: str = "ordered_first"
+    expected_value: Any
+    comparison: CellComparison = Field(default_factory=CellComparison)
+    enabled: bool = True
+    severity: str | None = None
+
+
 class TableConfig(_PublicModel):
     name: str
     sheet_selector: SheetSelector | None = None
@@ -137,7 +165,7 @@ class WorkbookValidationConfig(_PublicModel):
     comparison: ComparisonConfig
     sheet_policy: SheetPolicy
     tables: list[TableConfig] = Field(default_factory=list)
-    expected_cells: list[dict[str, Any]] = Field(default_factory=list)
+    expected_cells: list[ExpectedCellCheck] = Field(default_factory=list)
     workbook_checks: list[WorkbookCheck] = Field(default_factory=list)
     enabled_rules: list[str] | None = None
     rule_severity: dict[str, str] = Field(default_factory=dict)

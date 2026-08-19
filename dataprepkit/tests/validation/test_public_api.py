@@ -8,6 +8,8 @@ from openpyxl.worksheet.formula import ArrayFormula
 from dataprepkit.validation import (
     ComparisonConfig,
     ConfigurationError,
+    CellLocation,
+    ExpectedCellCheck,
     RuntimePolicy,
     SheetPolicy,
     SheetSelector,
@@ -436,6 +438,42 @@ def test_validate_excel_supports_exact_formula_comparison(tmp_path):
     assert [event.rule_code for event in result.errors] == [
         "formula_difference"
     ]
+
+
+def test_validate_excel_reports_expected_cell_difference(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    write_workbook(candidate_path, "Data")
+    workbook = openpyxl.load_workbook(candidate_path)
+    workbook["Data"]["A1"] = "actual"
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "expected_cells": [
+                ExpectedCellCheck(
+                    name="status",
+                    locations=[
+                        CellLocation(
+                            sheet_selector=SheetSelector(
+                                mode="exact",
+                                value="Data",
+                            ),
+                            cell_reference="A1",
+                        )
+                    ],
+                    expected_value="expected",
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is False
+    assert [event.rule_code for event in result.errors] == ["expected_cell"]
+    assert result.errors[0].cell_reference == "A1"
+    assert result.errors[0].actual_value == "actual"
+    assert result.errors[0].expected_value == "expected"
 
 
 def test_validate_excel_reports_sheet_structure_differences(tmp_path):

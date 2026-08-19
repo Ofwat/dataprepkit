@@ -1,10 +1,13 @@
 from .config import validate_config
 from .models import (
+    CellLocation,
+    CellComparison,
     ColumnValidation,
     ComparisonConfig,
     ConfigurationError,
     DependencyError,
     DiagnosticEvent,
+    ExpectedCellCheck,
     RuntimePolicy,
     SheetPolicy,
     SheetSelector,
@@ -21,11 +24,14 @@ from .models import (
 from .workbook import validate_excel
 
 __all__ = [
+    "CellLocation",
+    "CellComparison",
     "ColumnValidation",
     "ComparisonConfig",
     "ConfigurationError",
     "DependencyError",
     "DiagnosticEvent",
+    "ExpectedCellCheck",
     "RuntimePolicy",
     "SheetPolicy",
     "SheetSelector",
