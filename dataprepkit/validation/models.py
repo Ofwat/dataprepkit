@@ -123,6 +123,14 @@ class TableConfig(_PublicModel):
     data_presence: str = "allow_empty"
 
 
+class WorkbookCheck(_PublicModel):
+    rule_code: str
+    enabled: bool
+    scope: str
+    options: dict[str, Any] | None = None
+    severity: str | None = None
+
+
 class WorkbookValidationConfig(_PublicModel):
     config_version: str
     profile_name: str | None = None
@@ -130,7 +138,7 @@ class WorkbookValidationConfig(_PublicModel):
     sheet_policy: SheetPolicy
     tables: list[TableConfig] = Field(default_factory=list)
     expected_cells: list[dict[str, Any]] = Field(default_factory=list)
-    workbook_checks: list[dict[str, Any]] = Field(default_factory=list)
+    workbook_checks: list[WorkbookCheck] = Field(default_factory=list)
     enabled_rules: list[str] | None = None
     rule_severity: dict[str, str] = Field(default_factory=dict)
     runtime: RuntimePolicy
@@ -143,6 +151,8 @@ class ValidationEvent(_PublicModel):
     severity: str | None = None
     sheet_name: str | None = None
     description: str = ""
+    actual_value: Any = None
+    expected_value: Any = None
     cell_reference: str | None = None
     row_number: int | None = None
 

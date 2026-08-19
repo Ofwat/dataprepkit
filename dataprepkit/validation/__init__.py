@@ -14,6 +14,7 @@ from .models import (
     ValidationPackageError,
     ValidationResult,
     WorkbookFeaturePolicy,
+    WorkbookCheck,
     WorkbookReadError,
     WorkbookValidationConfig,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "ValidationPackageError",
     "ValidationResult",
     "WorkbookFeaturePolicy",
+    "WorkbookCheck",
     "WorkbookReadError",
     "WorkbookValidationConfig",
     "validate_config",

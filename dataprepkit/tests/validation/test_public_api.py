@@ -11,12 +11,13 @@ from dataprepkit.validation import (
     SheetPolicy,
     SheetSelector,
     WorkbookValidationConfig,
+    WorkbookCheck,
     validate_config,
     validate_excel,
 )
 
 
-def make_config(required_sheet="Data"):
+def make_config(required_sheet="Data", workbook_checks=None):
     return WorkbookValidationConfig(
         config_version="1",
         comparison=ComparisonConfig(
@@ -38,7 +39,7 @@ def make_config(required_sheet="Data"):
         ),
         tables=[],
         expected_cells=[],
-        workbook_checks=[],
+        workbook_checks=workbook_checks or [],
         enabled_rules=None,
         rule_severity={},
         runtime=RuntimePolicy(
@@ -120,3 +121,30 @@ def test_validate_excel_standalone_accepts_required_sheet(tmp_path):
 
     assert result.is_valid is True
     assert result.errors == []
+
+
+def test_validate_excel_reports_configured_formula_errors(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active["A1"] = "#DIV/0!"
+    workbook.save(candidate_path)
+
+    config = make_config(
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="formula_error",
+                enabled=True,
+                scope="all_sheets",
+                options={"error_tokens": ["#DIV/0!"]},
+            )
+        ]
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is False
+    assert len(result.errors) == 1
+    assert result.errors[0].rule_code == "formula_error"
+    assert result.errors[0].sheet_name == "Data"
+    assert result.errors[0].cell_reference == "A1"
