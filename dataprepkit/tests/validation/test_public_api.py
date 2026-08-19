@@ -736,6 +736,56 @@ def test_column_rules_are_not_run_when_headers_cannot_resolve(tmp_path):
     assert result.not_run[0].reason == "TABLE_HEADER_RESOLUTION_FAILED"
 
 
+def test_validate_excel_reports_required_and_duplicate_column_values(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Unit"])
+    workbook.active.append([None])
+    workbook.active.append(["£"])
+    workbook.active.append(["£"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(
+                        mode="exact",
+                        value="Data",
+                    ),
+                    header_row=1,
+                    column_definitions=[
+                        ColumnDefinition(name="unit", aliases=["Unit"]),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["unit"],
+                    ),
+                    column_validations=[
+                        ColumnValidation(
+                            column="unit",
+                            required=True,
+                            unique=True,
+                            null_policy="allow",
+                        )
+                    ],
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is False
+    assert [event.rule_code for event in result.errors] == [
+        "missing_value",
+        "duplicate_value",
+    ]
+    assert result.errors[0].cell_reference == "A2"
+    assert result.errors[1].cell_reference == "A4"
+
+
 def test_validate_excel_reports_sheet_structure_differences(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     reference_path = tmp_path / "reference.xlsx"

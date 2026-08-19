@@ -311,11 +311,58 @@ def validate_excel(
                     column_number = logical_columns.get(validation.column)
                     if column_number is None:
                         continue
+                    seen_values = {}
                     for row_number in range(table.header_row + 1, max_row + 1):
                         cell = sheet.cell(row_number, column_number)
                         actual_value = cell.value
-                        if actual_value is None and validation.null_policy == "allow":
+                        is_null = actual_value is None or (
+                            resolved_config.comparison.empty_string_is_null
+                            and actual_value == ""
+                        )
+                        if validation.required and is_null:
+                            errors.append(
+                                ValidationEvent(
+                                    rule_code="missing_value",
+                                    severity=validation.severity
+                                    or resolved_config.rule_severity.get(
+                                        "missing_value"
+                                    ),
+                                    sheet_name=sheet_name,
+                                    cell_reference=cell.coordinate,
+                                    row_number=row_number,
+                                    actual_value=actual_value,
+                                    expected_value="non-null value",
+                                    description=(
+                                        f"Required value is missing for column "
+                                        f"'{validation.column}'"
+                                    ),
+                                )
+                            )
+                        if is_null and validation.null_policy == "allow":
                             continue
+                        if validation.unique:
+                            value_key = repr(actual_value)
+                            if value_key in seen_values:
+                                errors.append(
+                                    ValidationEvent(
+                                        rule_code="duplicate_value",
+                                        severity=validation.severity
+                                        or resolved_config.rule_severity.get(
+                                            "duplicate_value"
+                                        ),
+                                        sheet_name=sheet_name,
+                                        cell_reference=cell.coordinate,
+                                        row_number=row_number,
+                                        actual_value=actual_value,
+                                        expected_value="unique value",
+                                        description=(
+                                            f"Duplicate value found for column "
+                                            f"'{validation.column}'"
+                                        ),
+                                    )
+                                )
+                            else:
+                                seen_values[value_key] = cell.coordinate
                         if (
                             validation.allowed_values is not None
                             and actual_value not in validation.allowed_values
