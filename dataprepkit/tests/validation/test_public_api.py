@@ -1061,3 +1061,56 @@ def test_validate_excel_stops_when_cell_scan_limit_is_exceeded(tmp_path):
     ]
     assert result.errors[0].actual_value == 2
     assert result.errors[0].expected_value == 1
+
+
+def test_validate_excel_supports_regex_sheet_selectors(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    write_workbook(candidate_path, "Data_2025")
+
+    config = make_config(required_sheet="^Data_[0-9]{4}$").model_copy(
+        update={
+            "sheet_policy": SheetPolicy(
+                required_selectors=[
+                    SheetSelector(
+                        mode="regex",
+                        value="^Data_[0-9]{4}$",
+                    )
+                ],
+                ignored_selectors=[],
+                extra_sheet_action="ignore",
+                selector_match_action="all",
+            )
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is True
+    assert result.errors == []
+
+
+def test_validate_excel_reports_multiple_selector_matches(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    write_workbook_with_sheets(candidate_path, ["Data_2024", "Data_2025"])
+
+    config = make_config().model_copy(
+        update={
+            "sheet_policy": SheetPolicy(
+                required_selectors=[
+                    SheetSelector(
+                        mode="regex",
+                        value="^Data_[0-9]{4}$",
+                    )
+                ],
+                ignored_selectors=[],
+                extra_sheet_action="ignore",
+                selector_match_action="error_on_multiple",
+            )
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is False
+    assert [event.rule_code for event in result.errors] == ["sheet_selector"]
+    assert result.errors[0].actual_value == 2

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import openpyxl
@@ -76,7 +77,12 @@ def validate_excel(
         sheet_names = set(formula_workbook.sheetnames)
         selected_sheet_names = set()
         for selector in resolved_config.sheet_policy.required_selectors:
-            matches = _match_sheets(sheet_names, selector)
+            matches = _select_sheet_matches(
+                _match_sheets(sheet_names, selector),
+                resolved_config.sheet_policy.selector_match_action,
+                selector,
+                errors,
+            )
             selected_sheet_names.update(matches)
             if not matches:
                 errors.append(
@@ -90,7 +96,14 @@ def validate_excel(
                     )
                 )
         for selector in resolved_config.sheet_policy.ignored_selectors:
-            selected_sheet_names.update(_match_sheets(sheet_names, selector))
+            selected_sheet_names.update(
+                _select_sheet_matches(
+                    _match_sheets(sheet_names, selector),
+                    resolved_config.sheet_policy.selector_match_action,
+                    selector,
+                    errors,
+                )
+            )
         extra_sheets = sheet_names - selected_sheet_names
         action = resolved_config.sheet_policy.extra_sheet_action
         for sheet_name in formula_workbook.sheetnames:
@@ -698,12 +711,44 @@ def validate_excel(
 
 
 def _match_sheets(sheet_names, selector):
-    if selector.mode != "exact":
-        return []
-    if selector.case_sensitive:
-        return [name for name in sheet_names if name == selector.value]
-    expected = selector.value.casefold()
-    return [name for name in sheet_names if name.casefold() == expected]
+    if selector.mode == "exact":
+        if selector.case_sensitive:
+            return [name for name in sheet_names if name == selector.value]
+        expected = selector.value.casefold()
+        return [name for name in sheet_names if name.casefold() == expected]
+    if selector.mode == "regex":
+        try:
+            pattern = re.compile(
+                selector.value,
+                0 if selector.case_sensitive else re.IGNORECASE,
+            )
+        except re.error as error:
+            raise ConfigurationError(
+                f"invalid sheet selector regex: {error}"
+            ) from error
+        return [
+            name
+            for name in sheet_names
+            if pattern.fullmatch(name) is not None
+        ]
+    return []
+
+
+def _select_sheet_matches(matches, action, selector, errors):
+    if action == "first":
+        return matches[:1]
+    if action == "error_on_multiple" and len(matches) > 1:
+        errors.append(
+            ValidationEvent(
+                rule_code="sheet_selector",
+                actual_value=len(matches),
+                expected_value=1,
+                description=(
+                    f"Sheet selector matched multiple sheets: {selector.value}"
+                ),
+            )
+        )
+    return matches
 
 
 def _normalise_formula(value, whitespace_policy="normalised"):
