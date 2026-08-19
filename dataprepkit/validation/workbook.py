@@ -27,6 +27,7 @@ def validate_excel(
     candidate_path = Path(candidate_path)
     formula_workbook = None
     value_workbook = None
+    reference_formula_workbook = None
     reference_workbook = None
     try:
         formula_workbook = openpyxl.load_workbook(
@@ -42,6 +43,13 @@ def validate_excel(
             keep_vba=candidate_path.suffix.lower() == ".xlsm",
         )
         if reference_path is not None:
+            reference_path = Path(reference_path)
+            reference_formula_workbook = openpyxl.load_workbook(
+                reference_path,
+                read_only=resolved_config.runtime.read_only,
+                data_only=False,
+                keep_vba=reference_path.suffix.lower() == ".xlsm",
+            )
             reference_workbook = openpyxl.load_workbook(
                 reference_path,
                 read_only=resolved_config.runtime.read_only,
@@ -55,6 +63,8 @@ def validate_excel(
             value_workbook.close()
         if reference_workbook is not None:
             reference_workbook.close()
+        if reference_formula_workbook is not None:
+            reference_formula_workbook.close()
         raise WorkbookReadError(str(error)) from error
 
     try:
@@ -138,7 +148,64 @@ def validate_excel(
                                     f"{sheet_name}"
                                 ),
                             )
+                )
+                continue
+            if check.rule_code == "formula_difference":
+                if reference_formula_workbook is None:
+                    not_run.append(
+                        ValidationEvent(
+                            rule_code="formula_difference",
+                            status="NOT_RUN",
+                            reason="REFERENCE_WORKBOOK_REQUIRED",
+                            description=(
+                                "Reference workbook is required for this check"
+                            ),
                         )
+                    )
+                    continue
+                reference_sheets = {
+                    sheet.title: sheet for sheet in reference_formula_workbook.worksheets
+                }
+                for candidate_sheet in formula_workbook.worksheets:
+                    reference_sheet = reference_sheets.get(candidate_sheet.title)
+                    if reference_sheet is None:
+                        continue
+                    max_row = max(
+                        candidate_sheet.max_row,
+                        reference_sheet.max_row,
+                    )
+                    max_column = max(
+                        candidate_sheet.max_column,
+                        reference_sheet.max_column,
+                    )
+                    for row_number in range(1, max_row + 1):
+                        for column_number in range(1, max_column + 1):
+                            candidate_cell = candidate_sheet.cell(
+                                row=row_number,
+                                column=column_number,
+                            )
+                            reference_cell = reference_sheet.cell(
+                                row=row_number,
+                                column=column_number,
+                            )
+                            candidate_is_formula = candidate_cell.data_type == "f"
+                            reference_is_formula = reference_cell.data_type == "f"
+                            if not (candidate_is_formula or reference_is_formula):
+                                continue
+                            if candidate_cell.value == reference_cell.value:
+                                continue
+                            errors.append(
+                                ValidationEvent(
+                                    rule_code="formula_difference",
+                                    sheet_name=candidate_sheet.title,
+                                    cell_reference=candidate_cell.coordinate,
+                                    actual_value=candidate_cell.value,
+                                    expected_value=reference_cell.value,
+                                    description=(
+                                        "Candidate formula differs from reference"
+                                    ),
+                                )
+                            )
                 continue
             if check.rule_code != "formula_error":
                 continue
@@ -170,6 +237,8 @@ def validate_excel(
         value_workbook.close()
         if reference_workbook is not None:
             reference_workbook.close()
+        if reference_formula_workbook is not None:
+            reference_formula_workbook.close()
 
 
 def _match_sheets(sheet_names, selector):
