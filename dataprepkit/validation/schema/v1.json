@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ofwat.github.io/dataprepkit/validation-config/v1",
+  "title": "WorkbookValidationConfig",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "config_version",
+    "comparison",
+    "sheet_policy",
+    "runtime"
+  ],
+  "properties": {
+    "config_version": {"type": "string", "const": "1"},
+    "profile_name": {"type": ["string", "null"]},
+    "comparison": {"type": "object"},
+    "sheet_policy": {"type": "object"},
+    "tables": {"type": "array"},
+    "expected_cells": {"type": "array"},
+    "workbook_checks": {"type": "array"},
+    "enabled_rules": {
+      "type": ["array", "null"],
+      "items": {"type": "string"}
+    },
+    "rule_severity": {"type": "object"},
+    "runtime": {"type": "object"},
+    "compatibility": {
+      "type": ["object", "null"]
+    }
+  }
+}

@@ -20,6 +20,7 @@ from .models import (
     EmptyRowRule,
     HeaderPolicy,
     RuntimePolicy,
+    RuleContext,
     SheetPolicy,
     SheetSelector,
     TableConfig,
@@ -32,6 +33,11 @@ from .models import (
     WorkbookCheck,
     WorkbookReadError,
     WorkbookValidationConfig,
+)
+from .registry import (
+    list_registered_rules,
+    register_rule,
+    unregister_rule,
 )
 from .workbook import validate_excel
 
@@ -50,6 +56,7 @@ __all__ = [
     "EmptyRowRule",
     "HeaderPolicy",
     "RuntimePolicy",
+    "RuleContext",
     "SheetPolicy",
     "SheetSelector",
     "TableConfig",
@@ -68,4 +75,7 @@ __all__ = [
     "list_profiles",
     "validate_config",
     "validate_excel",
+    "list_registered_rules",
+    "register_rule",
+    "unregister_rule",
 ]

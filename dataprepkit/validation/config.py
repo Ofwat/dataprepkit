@@ -83,7 +83,11 @@ def get_config_schema(version: str | None = None):
             f"unsupported configuration schema version: {version}",
             field_path="version",
         )
-    schema = WorkbookValidationConfig.model_json_schema()
+    schema_path = Path(__file__).with_name("schema") / "v1.json"
+    if schema_path.exists():
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    else:
+        schema = WorkbookValidationConfig.model_json_schema()
     schema["$id"] = "https://ofwat.github.io/dataprepkit/validation-config/v1"
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
     schema["title"] = "WorkbookValidationConfig"

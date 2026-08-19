@@ -327,6 +327,13 @@ class WorkbookValidationConfig(_PublicModel):
     compatibility: dict[str, Any] | None = None
 
 
+class RuleContext(_PublicModel):
+    rule_code: str
+    candidate_path: str
+    reference_path: str | None = None
+    config: WorkbookValidationConfig
+
+
 class ValidationEvent(_PublicModel):
     rule_code: str
     status: str = "FAILED"

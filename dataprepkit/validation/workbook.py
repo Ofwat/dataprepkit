@@ -13,11 +13,13 @@ from .config import validate_config
 from .models import (
     ConfigurationError,
     DiagnosticEvent,
+    RuleContext,
     ValidationEvent,
     ValidationResult,
     WorkbookReadError,
     WorkbookValidationConfig,
 )
+from .registry import get_registered_rule, validate_custom_result
 
 
 def validate_excel(
@@ -666,6 +668,13 @@ def validate_excel(
                     column_number = logical_columns.get(validation.column)
                     if column_number is None:
                         continue
+                    column_definition = definitions.get(validation.column)
+                    comparison = (
+                        column_definition.comparison
+                        if column_definition is not None
+                        and column_definition.comparison is not None
+                        else resolved_config.comparison
+                    )
                     column_rule_codes = []
                     if validation.required:
                         column_rule_codes.append("missing_value")
@@ -710,7 +719,7 @@ def validate_excel(
                         actual_value = cell.value
                         normalised_value = _normalise_comparison_value(
                             actual_value,
-                            resolved_config.comparison,
+                            comparison,
                         )
                         is_null = normalised_value is None
                         if validation.required and missing_enabled and is_null:
@@ -762,10 +771,10 @@ def validate_excel(
                             and allowed_enabled
                             and normalised_value
                             not in {
-                                _normalise_comparison_value(
-                                    value,
-                                    resolved_config.comparison,
-                                )
+                                    _normalise_comparison_value(
+                                        value,
+                                        comparison,
+                                    )
                                 for value in validation.allowed_values
                             }
                         ):
@@ -792,10 +801,10 @@ def validate_excel(
                             and forbidden_enabled
                             and normalised_value
                             in {
-                                _normalise_comparison_value(
-                                    value,
-                                    resolved_config.comparison,
-                                )
+                                    _normalise_comparison_value(
+                                        value,
+                                        comparison,
+                                    )
                                 for value in validation.forbidden_values
                             }
                         ):
@@ -835,6 +844,27 @@ def validate_excel(
                         description="Rule is disabled by configuration",
                     )
                 )
+                continue
+            custom_rule = get_registered_rule(check.rule_code)
+            if custom_rule is not None:
+                context = RuleContext(
+                    rule_code=check.rule_code,
+                    candidate_path=str(candidate_path),
+                    reference_path=(
+                        str(reference_path)
+                        if reference_path is not None
+                        else None
+                    ),
+                    config=resolved_config,
+                )
+                events = validate_custom_result(custom_rule(context))
+                for event in events:
+                    if event.status == "NOT_RUN":
+                        not_run.append(event)
+                    elif event.severity == "warning":
+                        warnings.append(event)
+                    else:
+                        errors.append(event)
                 continue
             if check.rule_code == "missing_reference_sheet":
                 if reference_workbook is None:

@@ -15,6 +15,7 @@ setup(
     long_description_content_type="text/markdown",
     keywords="fabric etl scd2",
     packages=find_packages(include=["dataprepkit", "dataprepkit.*"]),
+    package_data={"dataprepkit.validation": ["schema/*.json"]},
     url="https://github.com/Ofwat/dataprepkit",
     project_urls={
         "Source": "https://github.com/Ofwat/dataprepkit",

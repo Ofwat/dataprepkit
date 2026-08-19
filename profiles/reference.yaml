@@ -1,0 +1,53 @@
+config_version: "1"
+profile_name: "reference"
+
+comparison:
+  case_sensitive: false
+  accent_sensitive: true
+  trim_whitespace: true
+  collapse_internal_whitespace: false
+  empty_string_is_null: true
+  null_tokens: []
+  collation_name: "mssql_case_insensitive"
+
+sheet_policy:
+  required_selectors: []
+  ignored_selectors: []
+  extra_sheet_action: error
+  selector_match_action: all
+
+tables: []
+expected_cells: []
+workbook_checks:
+  - rule_code: missing_reference_sheet
+    enabled: true
+    scope: all_sheets
+  - rule_code: sheet_structure
+    enabled: true
+    scope: overlapping_sheets
+  - rule_code: formula_difference
+    enabled: true
+    scope: overlapping_sheets
+    options:
+      whitespace_policy: normalised
+  - rule_code: formula_error
+    enabled: true
+    scope: all_sheets
+    options:
+      error_tokens:
+        - "#DIV/0!"
+        - "#N/A"
+        - "#NAME?"
+        - "#REF!"
+        - "#VALUE!"
+
+enabled_rules: null
+rule_severity: {}
+
+runtime:
+  max_cells_scanned: 10000000
+  read_only: false
+  macro_policy: reject
+  missing_formula_cache_action: not_run
+
+compatibility: null

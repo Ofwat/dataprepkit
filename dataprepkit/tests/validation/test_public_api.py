@@ -24,6 +24,7 @@ from dataprepkit.validation import (
     SheetPolicy,
     SheetSelector,
     TableConfig,
+    ValidationEvent,
     ValidationResult,
     WorkbookValidationConfig,
     WorkbookCheck,
@@ -31,6 +32,9 @@ from dataprepkit.validation import (
     dump_validation_result,
     get_config_schema,
     list_profiles,
+    list_registered_rules,
+    register_rule,
+    unregister_rule,
     load_validation_config,
     load_validation_result,
     validate_config,
@@ -96,6 +100,41 @@ def test_public_validation_exports_are_available():
     assert WorkbookValidationConfig
     assert validate_config
     assert validate_excel
+
+
+def test_custom_rule_registration_runs_through_public_validator(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    write_workbook(candidate_path, "Data")
+
+    rule_code = "custom_test_rule"
+
+    def validator(context):
+        return ValidationEvent(
+            rule_code=context.rule_code,
+            sheet_name="Data",
+            description="Custom rule failed",
+        )
+
+    register_rule(rule_code, validator)
+    try:
+        assert rule_code in list_registered_rules()
+        config = make_config(
+            workbook_checks=[
+                WorkbookCheck(
+                    rule_code=rule_code,
+                    enabled=True,
+                    scope="all_sheets",
+                )
+            ]
+        )
+        result = validate_excel(
+            candidate_path=candidate_path,
+            config=config,
+        )
+    finally:
+        unregister_rule(rule_code)
+
+    assert [event.rule_code for event in result.errors] == [rule_code]
 
 
 def test_validate_config_returns_a_validated_public_model():
@@ -1389,6 +1428,66 @@ def test_null_tokens_use_configured_case_and_whitespace_policy(tmp_path):
                             column="reference",
                             unique=True,
                             null_policy="allow",
+                        )
+                    ],
+                )
+            ],
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is True
+
+
+def test_column_definition_can_override_comparison_policy(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Status"])
+    workbook.active.append(["active"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "comparison": ComparisonConfig(
+                case_sensitive=True,
+                accent_sensitive=True,
+                trim_whitespace=True,
+                collapse_internal_whitespace=False,
+                empty_string_is_null=True,
+                null_tokens=[],
+                collation_name="case_sensitive",
+            ),
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(
+                        mode="exact",
+                        value="Data",
+                    ),
+                    header_row=1,
+                    column_definitions=[
+                        ColumnDefinition(
+                            name="status",
+                            comparison=ComparisonConfig(
+                                case_sensitive=False,
+                                accent_sensitive=True,
+                                trim_whitespace=True,
+                                collapse_internal_whitespace=False,
+                                empty_string_is_null=True,
+                                null_tokens=[],
+                                collation_name="case_insensitive",
+                            ),
+                        ),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["status"],
+                    ),
+                    column_validations=[
+                        ColumnValidation(
+                            column="status",
+                            allowed_values=["Active"],
                         )
                     ],
                 )
