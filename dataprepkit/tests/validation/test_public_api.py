@@ -4,6 +4,7 @@ from pathlib import Path
 import openpyxl
 import pytest
 from openpyxl.styles import PatternFill
+from openpyxl.worksheet.table import Table
 from openpyxl.worksheet.formula import ArrayFormula
 
 
@@ -1712,6 +1713,94 @@ def test_validate_excel_reports_duplicate_table_headers(tmp_path):
     assert result.is_valid is False
     assert [event.rule_code for event in result.errors] == ["column_header"]
     assert "duplicate" in result.errors[0].description
+
+
+def test_column_rules_respect_excel_table_data_boundary(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    sheet = workbook.active
+    sheet.append(["Reference", "Status"])
+    sheet.append(["A", "Valid"])
+    sheet.append(["B", "Invalid"])
+    sheet.add_table(Table(displayName="Outputs", ref="A1:B2"))
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(
+                        mode="exact",
+                        value="Data",
+                    ),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="excel_table",
+                        table_name="Outputs",
+                    ),
+                    column_definitions=[
+                        ColumnDefinition(name="status"),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["reference", "status"],
+                    ),
+                    column_validations=[
+                        ColumnValidation(
+                            column="status",
+                            forbidden_values=["Invalid"],
+                        )
+                    ],
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is True
+
+
+def test_missing_excel_table_boundary_is_reported(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Reference"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(
+                        mode="exact",
+                        value="Data",
+                    ),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="excel_table",
+                        table_name="MissingTable",
+                    ),
+                    column_definitions=[
+                        ColumnDefinition(name="reference"),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["reference"],
+                    ),
+                    data_presence="require_one_usable_row",
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert [event.rule_code for event in result.errors] == [
+        "table_resolution",
+    ]
+    assert result.not_run[0].rule_code == "non_empty_data"
 
 
 def test_column_rules_respect_fixed_table_data_boundary(tmp_path):

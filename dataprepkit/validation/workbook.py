@@ -7,7 +7,7 @@ import unicodedata
 from pathlib import Path
 
 import openpyxl
-from openpyxl.utils.cell import column_index_from_string
+from openpyxl.utils.cell import column_index_from_string, range_boundaries
 
 from .config import validate_config
 from .models import (
@@ -405,6 +405,17 @@ def validate_excel(
                     formula_workbook[sheet_name],
                     logical_columns,
                 )
+                if data_end_row is None:
+                    errors.append(
+                        ValidationEvent(
+                            rule_code="table_resolution",
+                            sheet_name=sheet_name,
+                            description=(
+                                f"Table '{table.name}' data boundary "
+                                "could not be resolved"
+                            ),
+                        )
+                    )
                 required_positions = []
                 missing_columns = []
                 for logical_name in table.header_policy.required_columns:
@@ -436,11 +447,14 @@ def validate_excel(
                     missing_columns or physical_header_issues
                 )
                 boundary_resolution_failed = (
-                    table.data_boundary is not None
-                    and table.data_boundary.mode == "last_non_empty_row"
-                    and any(
-                        column not in logical_columns
-                        for column in (table.data_boundary.columns or [])
+                    data_end_row is None
+                    or (
+                        table.data_boundary is not None
+                        and table.data_boundary.mode == "last_non_empty_row"
+                        and any(
+                            column not in logical_columns
+                            for column in (table.data_boundary.columns or [])
+                        )
                     )
                 )
                 if missing_columns and header_rule_enabled:
@@ -586,6 +600,30 @@ def validate_excel(
                                 )
                             )
                 max_row = data_end_row
+                if boundary_resolution_failed:
+                    for validation in table.column_validations:
+                        column_rule_codes = []
+                        if validation.required:
+                            column_rule_codes.append("missing_value")
+                        if validation.unique:
+                            column_rule_codes.append("duplicate_value")
+                        if validation.allowed_values is not None:
+                            column_rule_codes.append("allowed_values")
+                        if validation.forbidden_values is not None:
+                            column_rule_codes.append("forbidden_values")
+                        for rule_code in column_rule_codes:
+                            not_run.append(
+                                ValidationEvent(
+                                    rule_code=rule_code,
+                                    status="NOT_RUN",
+                                    reason="DATA_BOUNDARY_RESOLUTION_FAILED",
+                                    description=(
+                                        f"Column rule for '{validation.column}' "
+                                        "requires a resolved data boundary"
+                                    ),
+                                )
+                            )
+                    continue
                 if header_resolution_failed:
                     for validation in table.column_validations:
                         column_rule_codes = []
@@ -1263,6 +1301,14 @@ def _table_data_end_row(
         return max_row
     if boundary.mode == "fixed_end_row" and boundary.end_row is not None:
         return min(max_row, boundary.end_row)
+    if boundary.mode == "excel_table" and boundary.table_name:
+        excel_table = value_sheet.tables.get(boundary.table_name)
+        if excel_table is None:
+            return None
+        _min_column, _min_row, _max_column, max_table_row = (
+            range_boundaries(excel_table.ref)
+        )
+        return max_table_row
     if boundary.mode == "last_non_empty_row" and boundary.columns:
         column_numbers = [
             logical_columns[column]
