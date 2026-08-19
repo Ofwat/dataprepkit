@@ -17,7 +17,12 @@ from dataprepkit.validation import (
 )
 
 
-def make_config(required_sheet="Data", workbook_checks=None):
+def make_config(
+    required_sheet="Data",
+    workbook_checks=None,
+    extra_sheet_action="ignore",
+    ignored_selectors=None,
+):
     return WorkbookValidationConfig(
         config_version="1",
         comparison=ComparisonConfig(
@@ -33,8 +38,8 @@ def make_config(required_sheet="Data", workbook_checks=None):
             required_selectors=[
                 SheetSelector(mode="exact", value=required_sheet)
             ],
-            ignored_selectors=[],
-            extra_sheet_action="ignore",
+            ignored_selectors=ignored_selectors or [],
+            extra_sheet_action=extra_sheet_action,
             selector_match_action="all",
         ),
         tables=[],
@@ -125,6 +130,49 @@ def test_validate_excel_standalone_accepts_required_sheet(tmp_path):
     result = validate_excel(
         candidate_path=candidate_path,
         config=make_config(required_sheet="Data"),
+    )
+
+    assert result.is_valid is True
+    assert result.errors == []
+
+
+def test_validate_excel_reports_extra_sheets_as_errors(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    write_workbook_with_sheets(candidate_path, ["Data", "Unexpected"])
+
+    result = validate_excel(
+        candidate_path=candidate_path,
+        config=make_config(extra_sheet_action="error"),
+    )
+
+    assert result.is_valid is False
+    assert [event.rule_code for event in result.errors] == ["extra_sheet"]
+    assert result.errors[0].sheet_name == "Unexpected"
+
+
+def test_validate_excel_reports_extra_sheets_as_warnings(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    write_workbook_with_sheets(candidate_path, ["Data", "Unexpected"])
+
+    result = validate_excel(
+        candidate_path=candidate_path,
+        config=make_config(extra_sheet_action="warning"),
+    )
+
+    assert result.is_valid is True
+    assert [event.rule_code for event in result.warnings] == ["extra_sheet"]
+
+
+def test_validate_excel_ignores_configured_extra_sheets(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    write_workbook_with_sheets(candidate_path, ["Data", "Metadata"])
+
+    result = validate_excel(
+        candidate_path=candidate_path,
+        config=make_config(
+            extra_sheet_action="error",
+            ignored_selectors=[SheetSelector(mode="exact", value="Metadata")],
+        ),
     )
 
     assert result.is_valid is True

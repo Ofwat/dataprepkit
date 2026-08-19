@@ -59,10 +59,13 @@ def validate_excel(
 
     try:
         errors = []
+        warnings = []
         not_run = []
         sheet_names = set(formula_workbook.sheetnames)
+        selected_sheet_names = set()
         for selector in resolved_config.sheet_policy.required_selectors:
             matches = _match_sheets(sheet_names, selector)
+            selected_sheet_names.update(matches)
             if not matches:
                 errors.append(
                     ValidationEvent(
@@ -74,6 +77,23 @@ def validate_excel(
                         ),
                     )
                 )
+        for selector in resolved_config.sheet_policy.ignored_selectors:
+            selected_sheet_names.update(_match_sheets(sheet_names, selector))
+        extra_sheets = sheet_names - selected_sheet_names
+        action = resolved_config.sheet_policy.extra_sheet_action
+        for sheet_name in formula_workbook.sheetnames:
+            if sheet_name not in extra_sheets or action == "ignore":
+                continue
+            event = ValidationEvent(
+                rule_code="extra_sheet",
+                severity=action,
+                sheet_name=sheet_name,
+                description=f"Extra sheet found: {sheet_name}",
+            )
+            if action == "warning":
+                warnings.append(event)
+            elif action == "error":
+                errors.append(event)
         for check in resolved_config.workbook_checks:
             if not check.enabled:
                 continue
@@ -126,6 +146,7 @@ def validate_excel(
         return ValidationResult(
             run_id=run_id,
             errors=errors,
+            warnings=warnings,
             not_run=not_run,
         )
     finally:
