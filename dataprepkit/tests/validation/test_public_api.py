@@ -2,6 +2,7 @@ from pathlib import Path
 
 import openpyxl
 import pytest
+from openpyxl.worksheet.formula import ArrayFormula
 
 
 from dataprepkit.validation import (
@@ -336,6 +337,36 @@ def test_reference_formula_check_is_not_run_without_reference_workbook(tmp_path)
     assert result.is_valid is True
     assert len(result.not_run) == 1
     assert result.not_run[0].reason == "REFERENCE_WORKBOOK_REQUIRED"
+
+
+def test_validate_excel_accepts_identical_array_formulas(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    reference_path = tmp_path / "reference.xlsx"
+
+    for path in (candidate_path, reference_path):
+        workbook = openpyxl.Workbook()
+        workbook.active.title = "Data"
+        workbook.active["A3"] = ArrayFormula(ref="A3", text="=SUM(A1:A2)")
+        workbook.save(path)
+
+    config = make_config(
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="formula_difference",
+                enabled=True,
+                scope="overlapping_sheets",
+            )
+        ]
+    )
+
+    result = validate_excel(
+        candidate_path=candidate_path,
+        reference_path=reference_path,
+        config=config,
+    )
+
+    assert result.is_valid is True
+    assert result.errors == []
 
 
 def test_reference_rule_is_not_run_without_reference_workbook(tmp_path):

@@ -192,15 +192,21 @@ def validate_excel(
                             reference_is_formula = reference_cell.data_type == "f"
                             if not (candidate_is_formula or reference_is_formula):
                                 continue
-                            if candidate_cell.value == reference_cell.value:
+                            candidate_formula = _normalise_formula(
+                                candidate_cell.value
+                            )
+                            reference_formula = _normalise_formula(
+                                reference_cell.value
+                            )
+                            if candidate_formula == reference_formula:
                                 continue
                             errors.append(
                                 ValidationEvent(
                                     rule_code="formula_difference",
                                     sheet_name=candidate_sheet.title,
                                     cell_reference=candidate_cell.coordinate,
-                                    actual_value=candidate_cell.value,
-                                    expected_value=reference_cell.value,
+                                    actual_value=candidate_formula,
+                                    expected_value=reference_formula,
                                     description=(
                                         "Candidate formula differs from reference"
                                     ),
@@ -248,3 +254,13 @@ def _match_sheets(sheet_names, selector):
         return [name for name in sheet_names if name == selector.value]
     expected = selector.value.casefold()
     return [name for name in sheet_names if name.casefold() == expected]
+
+
+def _normalise_formula(value):
+    text = getattr(value, "text", None)
+    if text is None:
+        return value
+    return {
+        "text": text,
+        "ref": getattr(value, "ref", None),
+    }
