@@ -27,9 +27,17 @@ def validate_excel(
     run_id=None,
     profile=None,
 ):
-    del candidate_version, reference_version, profile
     resolved_config = validate_config(config)
     candidate_path = Path(candidate_path)
+    result_metadata = {
+        "run_id": run_id,
+        "config_version": resolved_config.config_version,
+        "profile_name": resolved_config.profile_name,
+        "candidate_filename": candidate_path.name,
+        "candidate_version": candidate_version,
+        "reference_version": reference_version,
+        "comparison": resolved_config.comparison,
+    }
     formula_workbook = None
     value_workbook = None
     reference_formula_workbook = None
@@ -142,7 +150,7 @@ def validate_excel(
                 )
             )
             return ValidationResult(
-                run_id=run_id,
+                **result_metadata,
                 complete=False,
                 errors=errors,
                 warnings=warnings,
@@ -957,7 +965,7 @@ def validate_excel(
                                 )
                             )
         return ValidationResult(
-            run_id=run_id,
+            **result_metadata,
             errors=errors,
             warnings=warnings,
             not_run=not_run,

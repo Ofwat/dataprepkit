@@ -22,10 +22,13 @@ from dataprepkit.validation import (
     SheetPolicy,
     SheetSelector,
     TableConfig,
+    ValidationResult,
     WorkbookValidationConfig,
     WorkbookCheck,
     dump_validation_config,
+    dump_validation_result,
     load_validation_config,
+    load_validation_result,
     validate_config,
     validate_excel,
 )
@@ -108,6 +111,43 @@ def test_validation_config_round_trips_through_mapping_and_json():
 
     encoded = dump_validation_config(config, format="json")
     assert load_validation_config(encoded) == config
+
+
+def test_validation_result_round_trips_through_mapping_and_json():
+    result = ValidationResult(
+        run_id="run-1",
+        config_version="1",
+        profile_name="profile",
+        candidate_filename="candidate.xlsx",
+    )
+
+    mapping = dump_validation_result(result, format="mapping")
+    assert load_validation_result(mapping) == result
+
+    encoded = dump_validation_result(result, format="json")
+    assert load_validation_result(encoded) == result
+
+
+def test_validate_excel_populates_audit_metadata(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    write_workbook(candidate_path, "Data")
+    config = make_config().model_copy(
+        update={"profile_name": "profile"},
+    )
+
+    result = validate_excel(
+        candidate_path=candidate_path,
+        config=config,
+        candidate_version="candidate-v1",
+        run_id="run-1",
+    )
+
+    assert result.run_id == "run-1"
+    assert result.config_version == "1"
+    assert result.profile_name == "profile"
+    assert result.candidate_filename == "candidate.xlsx"
+    assert result.candidate_version == "candidate-v1"
+    assert result.comparison == config.comparison
 
 
 def test_validation_config_round_trips_through_yaml():

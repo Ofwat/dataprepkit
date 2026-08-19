@@ -312,6 +312,12 @@ class DiagnosticEvent(_PublicModel):
 
 class ValidationResult(_PublicModel):
     run_id: str | None = None
+    config_version: str | None = None
+    profile_name: str | None = None
+    candidate_filename: str | None = None
+    candidate_version: str | None = None
+    reference_version: str | None = None
+    comparison: ComparisonConfig | None = None
     complete: bool = True
     diagnostics: list[DiagnosticEvent] = Field(default_factory=list)
     errors: list[ValidationEvent] = Field(default_factory=list)
@@ -324,6 +330,10 @@ class ValidationResult(_PublicModel):
 
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json")
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ValidationResult":
+        return cls.model_validate(value)
 
     def format_report(self) -> str:
         lines = [
@@ -340,3 +350,41 @@ class ValidationResult(_PublicModel):
     def raise_if_invalid(self) -> None:
         if not self.is_valid:
             raise ValidationFailedError(self)
+
+
+def dump_validation_result(
+    result: ValidationResult,
+    format: str = "mapping",
+):
+    if format == "mapping":
+        return result.to_dict()
+    if format == "json":
+        import json
+
+        return json.dumps(
+            result.to_dict(),
+            indent=2,
+            sort_keys=True,
+        )
+    raise ConfigurationError(
+        "format must be mapping or json",
+        field_path="format",
+    )
+
+
+def load_validation_result(
+    source: ValidationResult | dict[str, Any] | str,
+) -> ValidationResult:
+    if isinstance(source, ValidationResult):
+        return source
+    if isinstance(source, dict):
+        return ValidationResult.from_dict(source)
+    try:
+        import json
+
+        return ValidationResult.from_dict(json.loads(source))
+    except (TypeError, ValueError) as error:
+        raise ConfigurationError(
+            "result must be a mapping or valid JSON",
+            field_path="source",
+        ) from error
