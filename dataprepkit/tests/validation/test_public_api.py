@@ -369,6 +369,69 @@ def test_validate_excel_accepts_identical_array_formulas(tmp_path):
     assert result.errors == []
 
 
+def test_validate_excel_reports_sheet_structure_differences(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    reference_path = tmp_path / "reference.xlsx"
+
+    candidate = openpyxl.Workbook()
+    candidate.active.title = "Data"
+    candidate.active["A1"] = "value"
+    candidate.save(candidate_path)
+
+    reference = openpyxl.Workbook()
+    reference.active.title = "Data"
+    reference.active["B1"] = "value"
+    reference.save(reference_path)
+
+    config = make_config(
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="sheet_structure",
+                enabled=True,
+                scope="overlapping_sheets",
+            )
+        ]
+    )
+
+    result = validate_excel(
+        candidate_path=candidate_path,
+        reference_path=reference_path,
+        config=config,
+    )
+
+    assert result.is_valid is False
+    assert [event.rule_code for event in result.errors] == ["sheet_structure"]
+    assert result.errors[0].sheet_name == "Data"
+    assert result.errors[0].actual_value == {
+        "max_row": 1,
+        "max_column": 1,
+    }
+    assert result.errors[0].expected_value == {
+        "max_row": 1,
+        "max_column": 2,
+    }
+
+
+def test_reference_structure_check_is_not_run_without_reference_workbook(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    write_workbook(candidate_path, "Data")
+    config = make_config(
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="sheet_structure",
+                enabled=True,
+                scope="overlapping_sheets",
+            )
+        ]
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is True
+    assert len(result.not_run) == 1
+    assert result.not_run[0].reason == "REFERENCE_WORKBOOK_REQUIRED"
+
+
 def test_reference_rule_is_not_run_without_reference_workbook(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     write_workbook(candidate_path, "Data")

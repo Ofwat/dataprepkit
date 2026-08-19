@@ -150,6 +150,48 @@ def validate_excel(
                             )
                 )
                 continue
+            if check.rule_code == "sheet_structure":
+                if reference_workbook is None:
+                    not_run.append(
+                        ValidationEvent(
+                            rule_code="sheet_structure",
+                            status="NOT_RUN",
+                            reason="REFERENCE_WORKBOOK_REQUIRED",
+                            description=(
+                                "Reference workbook is required for this check"
+                            ),
+                        )
+                    )
+                    continue
+                reference_sheets = {
+                    sheet.title: sheet for sheet in reference_workbook.worksheets
+                }
+                for candidate_sheet in value_workbook.worksheets:
+                    reference_sheet = reference_sheets.get(candidate_sheet.title)
+                    if reference_sheet is None:
+                        continue
+                    actual_shape = {
+                        "max_row": candidate_sheet.max_row,
+                        "max_column": candidate_sheet.max_column,
+                    }
+                    expected_shape = {
+                        "max_row": reference_sheet.max_row,
+                        "max_column": reference_sheet.max_column,
+                    }
+                    if actual_shape == expected_shape:
+                        continue
+                    errors.append(
+                        ValidationEvent(
+                            rule_code="sheet_structure",
+                            sheet_name=candidate_sheet.title,
+                            actual_value=actual_shape,
+                            expected_value=expected_shape,
+                            description=(
+                                "Candidate used area differs from reference"
+                            ),
+                        )
+                    )
+                continue
             if check.rule_code == "formula_difference":
                 if reference_formula_workbook is None:
                     not_run.append(
