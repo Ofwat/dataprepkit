@@ -242,6 +242,32 @@ def validate_excel(
                 ]
                 while headers and headers[-1] is None:
                     headers.pop()
+                physical_header_issues = []
+                seen_headers = set()
+                for header in headers:
+                    if header is None or (
+                        isinstance(header, str) and not header.strip()
+                    ):
+                        physical_header_issues.append("blank header")
+                        continue
+                    normalised_header = _normalise_header(header)
+                    if normalised_header in seen_headers:
+                        physical_header_issues.append(
+                            f"duplicate header: {header}"
+                        )
+                    seen_headers.add(normalised_header)
+                if physical_header_issues:
+                    errors.append(
+                        ValidationEvent(
+                            rule_code="column_header",
+                            sheet_name=sheet_name,
+                            actual_value=headers,
+                            description=(
+                                f"Table '{table.name}' has invalid physical "
+                                f"headers: {', '.join(physical_header_issues)}"
+                            ),
+                        )
+                    )
                 normalised_headers = {
                     _normalise_header(header): index
                     for index, header in enumerate(headers)
@@ -289,7 +315,9 @@ def validate_excel(
                     and required_positions != sorted(required_positions)
                 ):
                     missing_columns.append("required columns are out of order")
-                header_resolution_failed = bool(missing_columns)
+                header_resolution_failed = bool(
+                    missing_columns or physical_header_issues
+                )
                 boundary_resolution_failed = (
                     table.data_boundary is not None
                     and table.data_boundary.mode == "last_non_empty_row"

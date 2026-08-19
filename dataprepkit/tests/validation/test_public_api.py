@@ -694,6 +694,7 @@ def test_validate_excel_reports_disallowed_column_values(tmp_path):
                     ],
                     header_policy=HeaderPolicy(
                         required_columns=["unit"],
+                        match_mode="contains_any_order",
                     ),
                     column_validations=[
                         ColumnValidation(
@@ -738,6 +739,7 @@ def test_column_rules_are_not_run_when_headers_cannot_resolve(tmp_path):
                     ],
                     header_policy=HeaderPolicy(
                         required_columns=["unit"],
+                        match_mode="contains_any_order",
                     ),
                     column_validations=[
                         ColumnValidation(
@@ -1044,6 +1046,39 @@ def test_validate_excel_reports_extra_table_headers(tmp_path):
     assert result.is_valid is False
     assert [event.rule_code for event in result.errors] == ["column_header"]
     assert result.errors[0].actual_value == "Extra"
+
+
+def test_validate_excel_reports_duplicate_table_headers(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Unit", "Unit"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    column_definitions=[
+                        ColumnDefinition(name="unit", aliases=["Unit"]),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["unit"],
+                        match_mode="contains_any_order",
+                    ),
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is False
+    assert [event.rule_code for event in result.errors] == ["column_header"]
+    assert "duplicate" in result.errors[0].description
 
 
 def test_column_rules_respect_fixed_table_data_boundary(tmp_path):
