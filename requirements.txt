@@ -8,3 +8,4 @@ coverage-badge
 pylint
 sphinx
 sphinx-rtd-theme
+PyYAML

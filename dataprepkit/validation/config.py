@@ -43,8 +43,21 @@ def dump_validation_config(
             indent=2,
             sort_keys=True,
         )
+    if format == "yaml":
+        try:
+            import yaml
+        except ImportError as error:
+            from .models import DependencyError
+
+            raise DependencyError(
+                "PyYAML is required for YAML configuration"
+            ) from error
+        return yaml.safe_dump(
+            resolved.model_dump(mode="json"),
+            sort_keys=False,
+        )
     raise ConfigurationError(
-        "format must be mapping or json",
+        "format must be mapping, json, or yaml",
         field_path="format",
     )
 
@@ -57,16 +70,39 @@ def load_validation_config(
     if isinstance(source, dict):
         return validate_config(source)
     try:
-        if isinstance(source, Path) or (
+        is_path = isinstance(source, Path) or (
             isinstance(source, str)
+            and "\n" not in source
             and not source.lstrip().startswith(("{", "["))
-        ):
+            and Path(source).exists()
+        )
+        if is_path:
+            source_path = Path(source)
             payload = Path(source).read_text(encoding="utf-8")
         else:
+            source_path = None
             payload = source
+        yaml_source = (
+            source_path is not None
+            and source_path.suffix.lower() in {".yaml", ".yml"}
+        ) or (
+            source_path is None
+            and isinstance(source, str)
+            and not source.lstrip().startswith(("{", "["))
+        )
+        if yaml_source:
+            try:
+                import yaml
+            except ImportError as error:
+                from .models import DependencyError
+
+                raise DependencyError(
+                    "PyYAML is required for YAML configuration"
+                ) from error
+            return validate_config(yaml.safe_load(payload))
         return validate_config(json.loads(payload))
     except (OSError, json.JSONDecodeError, TypeError) as error:
         raise ConfigurationError(
-            "configuration must be a mapping or valid JSON",
+            "configuration must be a mapping or valid JSON/YAML",
             field_path="source",
         ) from error

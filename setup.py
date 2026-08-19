@@ -29,6 +29,7 @@ setup(
         "pydantic>=1.10.0",
         "pyarrow",
         "openpyxl",
+        "PyYAML",
     ],
     extras_require={
         "dev": [

@@ -110,6 +110,14 @@ def test_validation_config_round_trips_through_mapping_and_json():
     assert load_validation_config(encoded) == config
 
 
+def test_validation_config_round_trips_through_yaml():
+    config = make_config()
+
+    encoded = dump_validation_config(config, format="yaml")
+
+    assert load_validation_config(encoded) == config
+
+
 def test_validate_config_reports_a_public_field_path():
     with pytest.raises(ConfigurationError) as error:
         validate_config(
