@@ -298,19 +298,48 @@ def validate_excel(
                         for column in (table.data_boundary.columns or [])
                     )
                 )
-                if missing_columns and table.header_policy.missing_column_action == "error":
-                    errors.append(
-                        ValidationEvent(
+                if missing_columns:
+                    event = ValidationEvent(
+                        rule_code="column_header",
+                        sheet_name=sheet_name,
+                        actual_value=headers,
+                        expected_value=table.header_policy.required_columns,
+                        description=(
+                            f"Table '{table.name}' header validation failed: "
+                            f"{', '.join(missing_columns)}"
+                        ),
+                    )
+                    if table.header_policy.missing_column_action == "warning":
+                        warnings.append(event)
+                    else:
+                        errors.append(event)
+                known_headers = {
+                    _normalise_header(name)
+                    for definition in table.column_definitions
+                    for name in [definition.name, *definition.aliases]
+                }
+                extra_headers = [
+                    header
+                    for header in headers
+                    if header is not None
+                    and _normalise_header(header) not in known_headers
+                ]
+                if extra_headers and table.header_policy.extra_column_action != "allowed":
+                    for header in extra_headers:
+                        event = ValidationEvent(
                             rule_code="column_header",
                             sheet_name=sheet_name,
-                            actual_value=headers,
-                            expected_value=table.header_policy.required_columns,
+                            actual_value=header,
+                            expected_value="known table header",
                             description=(
-                                f"Table '{table.name}' header validation failed: "
-                                f"{', '.join(missing_columns)}"
+                                f"Extra table header found in '{table.name}': "
+                                f"{header}"
                             ),
                         )
-                    )
+                        if table.header_policy.extra_column_action == "warning":
+                            warnings.append(event)
+                        else:
+                            errors.append(event)
                 if table.data_presence == "require_one_usable_row":
                     if boundary_resolution_failed:
                         not_run.append(
