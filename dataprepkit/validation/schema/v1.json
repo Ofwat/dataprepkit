@@ -1,31 +1,724 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ofwat.github.io/dataprepkit/validation-config/v1",
-  "title": "WorkbookValidationConfig",
-  "type": "object",
+  "": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "CellComparison": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "default": "exact",
+          "title": "Mode",
+          "type": "string"
+        },
+        "options": {
+          "additionalProperties": true,
+          "title": "Options",
+          "type": "object"
+        }
+      },
+      "title": "CellComparison",
+      "type": "object"
+    },
+    "CellLocation": {
+      "additionalProperties": false,
+      "properties": {
+        "cell_reference": {
+          "title": "Cell Reference",
+          "type": "string"
+        },
+        "sheet_selector": {
+          "$ref": "#/$defs/SheetSelector"
+        }
+      },
+      "required": [
+        "sheet_selector",
+        "cell_reference"
+      ],
+      "title": "CellLocation",
+      "type": "object"
+    },
+    "ColumnDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "aliases": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Aliases",
+          "type": "array"
+        },
+        "comparison": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ComparisonConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "ColumnDefinition",
+      "type": "object"
+    },
+    "ColumnValidation": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_values": {
+          "anyOf": [
+            {
+              "items": {},
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Allowed Values"
+        },
+        "column": {
+          "title": "Column",
+          "type": "string"
+        },
+        "forbidden_values": {
+          "anyOf": [
+            {
+              "items": {},
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Forbidden Values"
+        },
+        "null_policy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Null Policy"
+        },
+        "required": {
+          "default": false,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "severity": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Severity"
+        },
+        "unique": {
+          "default": false,
+          "title": "Unique",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "column"
+      ],
+      "title": "ColumnValidation",
+      "type": "object"
+    },
+    "ComparisonConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "accent_sensitive": {
+          "title": "Accent Sensitive",
+          "type": "boolean"
+        },
+        "case_sensitive": {
+          "title": "Case Sensitive",
+          "type": "boolean"
+        },
+        "collapse_internal_whitespace": {
+          "title": "Collapse Internal Whitespace",
+          "type": "boolean"
+        },
+        "collation_name": {
+          "title": "Collation Name",
+          "type": "string"
+        },
+        "empty_string_is_null": {
+          "title": "Empty String Is Null",
+          "type": "boolean"
+        },
+        "null_tokens": {
+          "items": {},
+          "title": "Null Tokens",
+          "type": "array"
+        },
+        "trim_whitespace": {
+          "title": "Trim Whitespace",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "case_sensitive",
+        "accent_sensitive",
+        "trim_whitespace",
+        "collapse_internal_whitespace",
+        "empty_string_is_null",
+        "null_tokens",
+        "collation_name"
+      ],
+      "title": "ComparisonConfig",
+      "type": "object"
+    },
+    "DataBoundary": {
+      "additionalProperties": false,
+      "properties": {
+        "columns": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Columns"
+        },
+        "end_row": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "End Row"
+        },
+        "mode": {
+          "title": "Mode",
+          "type": "string"
+        },
+        "table_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Table Name"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "DataBoundary",
+      "type": "object"
+    },
+    "EmptyRowRule": {
+      "additionalProperties": false,
+      "properties": {
+        "blank_policy": {
+          "default": "none_only",
+          "title": "Blank Policy",
+          "type": "string"
+        },
+        "excluded_columns": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Excluded Columns",
+          "type": "array"
+        },
+        "rows": {
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 1,
+          "title": "Rows",
+          "type": "array"
+        }
+      },
+      "required": [
+        "rows"
+      ],
+      "title": "EmptyRowRule",
+      "type": "object"
+    },
+    "ExpectedCellCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "comparison": {
+          "$ref": "#/$defs/CellComparison"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "expected_value": {
+          "title": "Expected Value"
+        },
+        "fallback_strategy": {
+          "default": "ordered_first",
+          "title": "Fallback Strategy",
+          "type": "string"
+        },
+        "locations": {
+          "items": {
+            "$ref": "#/$defs/CellLocation"
+          },
+          "minItems": 1,
+          "title": "Locations",
+          "type": "array"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "severity": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Severity"
+        }
+      },
+      "required": [
+        "name",
+        "locations",
+        "expected_value"
+      ],
+      "title": "ExpectedCellCheck",
+      "type": "object"
+    },
+    "HeaderPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "extra_column_action": {
+          "default": "allowed",
+          "title": "Extra Column Action",
+          "type": "string"
+        },
+        "match_mode": {
+          "default": "exact_order",
+          "title": "Match Mode",
+          "type": "string"
+        },
+        "missing_column_action": {
+          "default": "error",
+          "title": "Missing Column Action",
+          "type": "string"
+        },
+        "required_columns": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Columns",
+          "type": "array"
+        }
+      },
+      "title": "HeaderPolicy",
+      "type": "object"
+    },
+    "RuntimePolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "feature_policy": {
+          "$ref": "#/$defs/WorkbookFeaturePolicy"
+        },
+        "macro_policy": {
+          "title": "Macro Policy",
+          "type": "string"
+        },
+        "max_cells_scanned": {
+          "title": "Max Cells Scanned",
+          "type": "integer"
+        },
+        "missing_formula_cache_action": {
+          "title": "Missing Formula Cache Action",
+          "type": "string"
+        },
+        "read_only": {
+          "title": "Read Only",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "max_cells_scanned",
+        "read_only",
+        "macro_policy",
+        "missing_formula_cache_action"
+      ],
+      "title": "RuntimePolicy",
+      "type": "object"
+    },
+    "SheetPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "extra_sheet_action": {
+          "default": "ignore",
+          "title": "Extra Sheet Action",
+          "type": "string"
+        },
+        "ignored_selectors": {
+          "items": {
+            "$ref": "#/$defs/SheetSelector"
+          },
+          "title": "Ignored Selectors",
+          "type": "array"
+        },
+        "required_selectors": {
+          "items": {
+            "$ref": "#/$defs/SheetSelector"
+          },
+          "title": "Required Selectors",
+          "type": "array"
+        },
+        "selector_match_action": {
+          "default": "all",
+          "title": "Selector Match Action",
+          "type": "string"
+        }
+      },
+      "title": "SheetPolicy",
+      "type": "object"
+    },
+    "SheetSelector": {
+      "additionalProperties": false,
+      "properties": {
+        "case_sensitive": {
+          "default": false,
+          "title": "Case Sensitive",
+          "type": "boolean"
+        },
+        "expected_match_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Match Count"
+        },
+        "mode": {
+          "title": "Mode",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "value"
+      ],
+      "title": "SheetSelector",
+      "type": "object"
+    },
+    "TableConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "column_definitions": {
+          "items": {
+            "$ref": "#/$defs/ColumnDefinition"
+          },
+          "title": "Column Definitions",
+          "type": "array"
+        },
+        "column_validations": {
+          "items": {
+            "$ref": "#/$defs/ColumnValidation"
+          },
+          "title": "Column Validations",
+          "type": "array"
+        },
+        "data_boundary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DataBoundary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "data_presence": {
+          "default": "allow_empty",
+          "title": "Data Presence",
+          "type": "string"
+        },
+        "empty_row_rules": {
+          "items": {
+            "$ref": "#/$defs/EmptyRowRule"
+          },
+          "title": "Empty Row Rules",
+          "type": "array"
+        },
+        "header_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HeaderPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "header_row": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Header Row"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "sheet_selector": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SheetSelector"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "TableConfig",
+      "type": "object"
+    },
+    "WorkbookCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "options": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Options"
+        },
+        "rule_code": {
+          "title": "Rule Code",
+          "type": "string"
+        },
+        "scope": {
+          "title": "Scope",
+          "type": "string"
+        },
+        "severity": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Severity"
+        }
+      },
+      "required": [
+        "rule_code",
+        "enabled",
+        "scope"
+      ],
+      "title": "WorkbookCheck",
+      "type": "object"
+    },
+    "WorkbookFeaturePolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "charts": {
+          "default": "ignore",
+          "title": "Charts",
+          "type": "string"
+        },
+        "external_links": {
+          "default": "ignore",
+          "title": "External Links",
+          "type": "string"
+        },
+        "macros": {
+          "default": "ignore",
+          "title": "Macros",
+          "type": "string"
+        },
+        "merged_cells": {
+          "default": "ignore",
+          "title": "Merged Cells",
+          "type": "string"
+        },
+        "named_ranges": {
+          "default": "ignore",
+          "title": "Named Ranges",
+          "type": "string"
+        },
+        "pivot_tables": {
+          "default": "ignore",
+          "title": "Pivot Tables",
+          "type": "string"
+        }
+      },
+      "title": "WorkbookFeaturePolicy",
+      "type": "object"
+    }
+  },
   "additionalProperties": false,
+  "properties": {
+    "comparison": {
+      "$ref": "#/$defs/ComparisonConfig"
+    },
+    "compatibility": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Compatibility"
+    },
+    "config_version": {
+      "title": "Config Version",
+      "type": "string"
+    },
+    "enabled_rules": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Enabled Rules"
+    },
+    "expected_cells": {
+      "items": {
+        "$ref": "#/$defs/ExpectedCellCheck"
+      },
+      "title": "Expected Cells",
+      "type": "array"
+    },
+    "profile_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Profile Name"
+    },
+    "rule_severity": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Rule Severity",
+      "type": "object"
+    },
+    "runtime": {
+      "$ref": "#/$defs/RuntimePolicy"
+    },
+    "sheet_policy": {
+      "$ref": "#/$defs/SheetPolicy"
+    },
+    "tables": {
+      "items": {
+        "$ref": "#/$defs/TableConfig"
+      },
+      "title": "Tables",
+      "type": "array"
+    },
+    "workbook_checks": {
+      "items": {
+        "$ref": "#/$defs/WorkbookCheck"
+      },
+      "title": "Workbook Checks",
+      "type": "array"
+    }
+  },
   "required": [
     "config_version",
     "comparison",
     "sheet_policy",
     "runtime"
   ],
-  "properties": {
-    "config_version": {"type": "string", "const": "1"},
-    "profile_name": {"type": ["string", "null"]},
-    "comparison": {"type": "object"},
-    "sheet_policy": {"type": "object"},
-    "tables": {"type": "array"},
-    "expected_cells": {"type": "array"},
-    "workbook_checks": {"type": "array"},
-    "enabled_rules": {
-      "type": ["array", "null"],
-      "items": {"type": "string"}
-    },
-    "rule_severity": {"type": "object"},
-    "runtime": {"type": "object"},
-    "compatibility": {
-      "type": ["object", "null"]
-    }
-  }
+  "title": "WorkbookValidationConfig",
+  "type": "object",
+  "$id": "https://ofwat.github.io/dataprepkit/validation-config/v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
 }

@@ -362,6 +362,30 @@ def test_workbook_check_validates_rule_options():
             options={"whitespace_policy": "semantic"},
         )
 
+    with pytest.raises(ValueError):
+        WorkbookCheck(
+            rule_code="formula_difference",
+            enabled=True,
+            scope="overlapping_sheets",
+            options={"unsupported": True},
+        )
+
+    with pytest.raises(ValueError):
+        ExpectedCellCheck(
+            name="status",
+            locations=[
+                CellLocation(
+                    sheet_selector=SheetSelector(
+                        mode="exact",
+                        value="Data",
+                    ),
+                    cell_reference="A1",
+                )
+            ],
+            expected_value="active",
+            fallback_strategy="first_match",
+        )
+
 
 def test_expected_cell_numeric_comparison_uses_configured_separators(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
@@ -2096,6 +2120,39 @@ def test_scan_limit_counts_stored_cells_not_inflated_dimensions(tmp_path):
 
     assert result.is_valid is True
     assert result.complete is True
+
+
+def test_read_only_workbook_validation_uses_public_api(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active["A1"] = "#DIV/0!"
+    workbook.save(candidate_path)
+
+    config = make_config(
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="formula_error",
+                enabled=True,
+                scope="all_sheets",
+                options={"error_tokens": ["#DIV/0!"]},
+            )
+        ]
+    ).model_copy(
+        update={
+            "runtime": RuntimePolicy(
+                max_cells_scanned=1000,
+                read_only=True,
+                macro_policy="reject",
+                missing_formula_cache_action="not_run",
+            )
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is False
+    assert result.errors[0].cell_reference == "A1"
 
 
 def test_feature_policy_reports_merged_cells(tmp_path):

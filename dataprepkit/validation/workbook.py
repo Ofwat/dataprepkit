@@ -1261,7 +1261,8 @@ def _detected_features(workbook, candidate_path):
             yield "charts", sheet.title
         if getattr(sheet, "_pivots", []):
             yield "pivot_tables", sheet.title
-        if list(sheet.merged_cells.ranges):
+        merged_cells = getattr(sheet, "merged_cells", None)
+        if merged_cells is not None and list(merged_cells.ranges):
             yield "merged_cells", sheet.title
 
 

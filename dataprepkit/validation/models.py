@@ -182,6 +182,23 @@ class CellComparison(_PublicModel):
             raise ValueError(
                 "date comparison requires accepted_formats"
             )
+        allowed_options = {
+            "numeric": {
+                "decimal_separator",
+                "thousands_separator",
+                "allow_numeric_strings",
+            },
+            "date": {"accepted_formats", "timezone"},
+            "exact": set(),
+            "normalised": set(),
+            "case_insensitive": set(),
+        }[self.mode]
+        unknown_options = set(self.options) - allowed_options
+        if unknown_options:
+            raise ValueError(
+                f"unsupported options for {self.mode} comparison: "
+                f"{sorted(unknown_options)}"
+            )
         return self
 
 
@@ -193,6 +210,15 @@ class ExpectedCellCheck(_PublicModel):
     comparison: CellComparison = Field(default_factory=CellComparison)
     enabled: bool = True
     severity: str | None = None
+
+    @field_validator("fallback_strategy")
+    @classmethod
+    def validate_fallback_strategy(cls, value):
+        if value not in {"ordered_first", "exactly_one"}:
+            raise ValueError(
+                "fallback_strategy must be ordered_first or exactly_one"
+            )
+        return value
 
 
 class ColumnDefinition(_PublicModel):
@@ -284,6 +310,16 @@ class TableConfig(_PublicModel):
     empty_row_rules: list[EmptyRowRule] = Field(default_factory=list)
     data_presence: str = "allow_empty"
 
+    @field_validator("data_presence")
+    @classmethod
+    def validate_data_presence(cls, value):
+        if value not in {"allow_empty", "require_one_usable_row"}:
+            raise ValueError(
+                "data_presence must be allow_empty or "
+                "require_one_usable_row"
+            )
+        return value
+
 
 class WorkbookCheck(_PublicModel):
     rule_code: str
@@ -295,6 +331,19 @@ class WorkbookCheck(_PublicModel):
     @model_validator(mode="after")
     def validate_rule_options(self):
         options = self.options or {}
+        built_in_options = {
+            "formula_error": {"error_tokens"},
+            "formula_difference": {"whitespace_policy"},
+            "sheet_structure": {"compare_headers", "table_names"},
+            "missing_reference_sheet": set(),
+        }
+        if self.rule_code in built_in_options:
+            unknown_options = set(options) - built_in_options[self.rule_code]
+            if unknown_options:
+                raise ValueError(
+                    f"unsupported options for {self.rule_code}: "
+                    f"{sorted(unknown_options)}"
+                )
         if self.rule_code == "formula_error" and self.enabled:
             if not isinstance(options.get("error_tokens"), list):
                 raise ValueError(
@@ -309,6 +358,21 @@ class WorkbookCheck(_PublicModel):
                 raise ValueError(
                     "formula_difference whitespace_policy must be "
                     "exact or normalised"
+                )
+        if self.rule_code == "sheet_structure":
+            if "compare_headers" in options and not isinstance(
+                options["compare_headers"],
+                bool,
+            ):
+                raise ValueError(
+                    "sheet_structure compare_headers must be a boolean"
+                )
+            if "table_names" in options and not isinstance(
+                options["table_names"],
+                list,
+            ):
+                raise ValueError(
+                    "sheet_structure table_names must be a list"
                 )
         return self
 
