@@ -6,12 +6,27 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from .models import ConfigurationError, WorkbookValidationConfig
+from .models import (
+    ConfigurationError,
+    DependencyError,
+    WorkbookValidationConfig,
+)
 
 
 def validate_config(
     source: WorkbookValidationConfig | dict[str, Any],
+    compatibility_profile=None,
 ) -> WorkbookValidationConfig:
+    if compatibility_profile is not None:
+        source_data = (
+            source.model_dump(mode="json")
+            if isinstance(source, WorkbookValidationConfig)
+            else source
+        )
+        source = _deep_merge(
+            _read_config_mapping(compatibility_profile),
+            source_data,
+        )
     if isinstance(source, WorkbookValidationConfig):
         return source
     try:
@@ -64,11 +79,20 @@ def dump_validation_config(
 
 def load_validation_config(
     source: WorkbookValidationConfig | dict[str, Any] | str | Path,
+    compatibility_profile=None,
 ) -> WorkbookValidationConfig:
+    source_data = _read_config_mapping(source)
+    if compatibility_profile is not None:
+        profile_data = _read_config_mapping(compatibility_profile)
+        source_data = _deep_merge(profile_data, source_data)
+    return validate_config(source_data)
+
+
+def _read_config_mapping(source):
     if isinstance(source, WorkbookValidationConfig):
-        return source
+        return source.model_dump(mode="json")
     if isinstance(source, dict):
-        return validate_config(source)
+        return source
     try:
         is_path = isinstance(source, Path) or (
             isinstance(source, str)
@@ -94,15 +118,32 @@ def load_validation_config(
             try:
                 import yaml
             except ImportError as error:
-                from .models import DependencyError
-
                 raise DependencyError(
                     "PyYAML is required for YAML configuration"
                 ) from error
-            return validate_config(yaml.safe_load(payload))
-        return validate_config(json.loads(payload))
+            mapping = yaml.safe_load(payload)
+        else:
+            mapping = json.loads(payload)
+        if not isinstance(mapping, dict):
+            raise ConfigurationError(
+                "configuration must be a mapping",
+                field_path="source",
+            )
+        return mapping
     except (OSError, json.JSONDecodeError, TypeError) as error:
         raise ConfigurationError(
             "configuration must be a mapping or valid JSON/YAML",
             field_path="source",
         ) from error
+
+
+def _deep_merge(base, overrides):
+    if not isinstance(base, dict) or not isinstance(overrides, dict):
+        return overrides
+    merged = dict(base)
+    for key, value in overrides.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged

@@ -118,6 +118,37 @@ def test_validation_config_round_trips_through_yaml():
     assert load_validation_config(encoded) == config
 
 
+def test_validation_config_merges_caller_overrides_over_profile():
+    profile = make_config(
+        extra_sheet_action="error",
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="formula_error",
+                enabled=True,
+                scope="all_sheets",
+                options={"error_tokens": ["#DIV/0!"]},
+            )
+        ],
+    )
+    overrides = {
+        "sheet_policy": {
+            "extra_sheet_action": "warning",
+        },
+        "workbook_checks": [],
+    }
+
+    resolved = load_validation_config(
+        overrides,
+        compatibility_profile=profile,
+    )
+
+    assert resolved.sheet_policy.extra_sheet_action == "warning"
+    assert resolved.workbook_checks == []
+    assert resolved.sheet_policy.required_selectors == (
+        profile.sheet_policy.required_selectors
+    )
+
+
 def test_validate_config_reports_a_public_field_path():
     with pytest.raises(ConfigurationError) as error:
         validate_config(
