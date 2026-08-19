@@ -227,7 +227,58 @@ def test_validate_excel_reports_column_rules_excluded_by_enabled_rules(tmp_path)
     assert result.is_valid is True
     assert {
         event.rule_code for event in result.not_run
-    } == {"missing_value", "duplicate_value", "allowed_values"}
+    } == {
+        "column_header",
+        "missing_value",
+        "duplicate_value",
+        "allowed_values",
+    }
+    assert all(event.reason == "RULE_DISABLED" for event in result.not_run)
+
+
+def test_validate_excel_reports_table_rules_excluded_by_enabled_rules(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Wrong"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "enabled_rules": ["formula_error"],
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        columns=["reference"],
+                    ),
+                    column_definitions=[
+                        ColumnDefinition(
+                            name="reference",
+                            aliases=["Reference"],
+                        ),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["reference"],
+                    ),
+                    data_presence="require_one_usable_row",
+                    empty_row_rules=[
+                        EmptyRowRule(rows=[2], blank_policy="none_only")
+                    ],
+                )
+            ],
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is True
+    assert {
+        event.rule_code for event in result.not_run
+    } == {"column_header", "non_empty_data", "empty_row_pattern"}
     assert all(event.reason == "RULE_DISABLED" for event in result.not_run)
 
 

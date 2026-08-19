@@ -241,6 +241,32 @@ def validate_excel(
                 continue
             definitions = {definition.name: definition for definition in table.column_definitions}
             for sheet_name in sheet_matches:
+                enabled_rules = resolved_config.enabled_rules
+                header_rule_enabled = (
+                    enabled_rules is None or "column_header" in enabled_rules
+                )
+                data_presence_rule_enabled = (
+                    table.data_presence != "require_one_usable_row"
+                    or enabled_rules is None
+                    or "non_empty_data" in enabled_rules
+                )
+                empty_row_rule_enabled = (
+                    not table.empty_row_rules
+                    or enabled_rules is None
+                    or "empty_row_pattern" in enabled_rules
+                )
+                if not header_rule_enabled:
+                    not_run.append(
+                        ValidationEvent(
+                            rule_code="column_header",
+                            status="NOT_RUN",
+                            reason="RULE_DISABLED",
+                            description=(
+                                f"Header checks for table '{table.name}' "
+                                "are disabled by configuration"
+                            ),
+                        )
+                    )
                 sheet = value_workbook[sheet_name]
                 headers = [
                     sheet.cell(table.header_row, column).value
@@ -262,7 +288,7 @@ def validate_excel(
                             f"duplicate header: {header}"
                         )
                     seen_headers.add(normalised_header)
-                if physical_header_issues:
+                if physical_header_issues and header_rule_enabled:
                     errors.append(
                         ValidationEvent(
                             rule_code="column_header",
@@ -332,7 +358,7 @@ def validate_excel(
                         for column in (table.data_boundary.columns or [])
                     )
                 )
-                if missing_columns:
+                if missing_columns and header_rule_enabled:
                     event = ValidationEvent(
                         rule_code="column_header",
                         sheet_name=sheet_name,
@@ -358,7 +384,11 @@ def validate_excel(
                     if header is not None
                     and _normalise_header(header) not in known_headers
                 ]
-                if extra_headers and table.header_policy.extra_column_action != "allowed":
+                if (
+                    extra_headers
+                    and header_rule_enabled
+                    and table.header_policy.extra_column_action != "allowed"
+                ):
                     for header in extra_headers:
                         event = ValidationEvent(
                             rule_code="column_header",
@@ -375,7 +405,19 @@ def validate_excel(
                         else:
                             errors.append(event)
                 if table.data_presence == "require_one_usable_row":
-                    if boundary_resolution_failed:
+                    if not data_presence_rule_enabled:
+                        not_run.append(
+                            ValidationEvent(
+                                rule_code="non_empty_data",
+                                status="NOT_RUN",
+                                reason="RULE_DISABLED",
+                                description=(
+                                    f"Required table '{table.name}' data "
+                                    "presence check is disabled by configuration"
+                                ),
+                            )
+                        )
+                    elif boundary_resolution_failed:
                         not_run.append(
                             ValidationEvent(
                                 rule_code="non_empty_data",
@@ -414,7 +456,21 @@ def validate_excel(
                             )
                 formula_sheet = formula_workbook[sheet_name]
                 max_column = max(sheet.max_column, formula_sheet.max_column)
-                for empty_row_rule in table.empty_row_rules:
+                if table.empty_row_rules and not empty_row_rule_enabled:
+                    not_run.append(
+                        ValidationEvent(
+                            rule_code="empty_row_pattern",
+                            status="NOT_RUN",
+                            reason="RULE_DISABLED",
+                            description=(
+                                f"Empty row checks for table '{table.name}' "
+                                "are disabled by configuration"
+                            ),
+                        )
+                    )
+                for empty_row_rule in (
+                    table.empty_row_rules if empty_row_rule_enabled else []
+                ):
                     excluded_columns = {
                         column_index_from_string(column)
                         for column in empty_row_rule.excluded_columns
@@ -447,27 +503,41 @@ def validate_excel(
                 max_row = data_end_row
                 if header_resolution_failed:
                     for validation in table.column_validations:
-                        not_run.append(
-                            ValidationEvent(
-                                rule_code=(
-                                    "allowed_values"
-                                    if validation.allowed_values is not None
-                                    else "forbidden_values"
-                                ),
-                                status="NOT_RUN",
-                                reason="TABLE_HEADER_RESOLUTION_FAILED",
-                                severity=validation.severity
-                                or resolved_config.rule_severity.get(
-                                    "allowed_values"
-                                    if validation.allowed_values is not None
-                                    else "forbidden_values"
-                                ),
-                                description=(
-                                    f"Column rule for '{validation.column}' "
-                                    "requires resolved table headers"
-                                ),
+                        column_rule_codes = []
+                        if validation.required:
+                            column_rule_codes.append("missing_value")
+                        if validation.unique:
+                            column_rule_codes.append("duplicate_value")
+                        if validation.allowed_values is not None:
+                            column_rule_codes.append("allowed_values")
+                        if validation.forbidden_values is not None:
+                            column_rule_codes.append("forbidden_values")
+                        for rule_code in column_rule_codes:
+                            disabled = (
+                                enabled_rules is not None
+                                and rule_code not in enabled_rules
                             )
-                        )
+                            not_run.append(
+                                ValidationEvent(
+                                    rule_code=rule_code,
+                                    status="NOT_RUN",
+                                    reason=(
+                                        "RULE_DISABLED"
+                                        if disabled
+                                        else "TABLE_HEADER_RESOLUTION_FAILED"
+                                    ),
+                                    severity=validation.severity
+                                    or resolved_config.rule_severity.get(rule_code),
+                                    description=(
+                                        f"Column rule for '{validation.column}' "
+                                        + (
+                                            "is disabled by configuration"
+                                            if disabled
+                                            else "requires resolved table headers"
+                                        )
+                                    ),
+                                )
+                            )
                     continue
                 for validation in table.column_validations:
                     column_number = logical_columns.get(validation.column)
