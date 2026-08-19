@@ -163,6 +163,31 @@ class DataBoundary(_PublicModel):
     end_row: int | None = None
     table_name: str | None = None
 
+    @model_validator(mode="after")
+    def validate_mode_fields(self):
+        if self.mode not in {
+            "last_non_empty_row",
+            "fixed_end_row",
+            "excel_table",
+        }:
+            raise ValueError("mode must be last_non_empty_row, fixed_end_row, or excel_table")
+        if self.mode == "last_non_empty_row":
+            if not self.columns:
+                raise ValueError("columns is required for last_non_empty_row")
+            if self.end_row is not None or self.table_name is not None:
+                raise ValueError("only columns may be supplied for last_non_empty_row")
+        if self.mode == "fixed_end_row":
+            if self.end_row is None or self.end_row < 1:
+                raise ValueError("end_row must be a positive row number")
+            if self.columns is not None or self.table_name is not None:
+                raise ValueError("only end_row may be supplied for fixed_end_row")
+        if self.mode == "excel_table":
+            if not self.table_name:
+                raise ValueError("table_name is required for excel_table")
+            if self.columns is not None or self.end_row is not None:
+                raise ValueError("only table_name may be supplied for excel_table")
+        return self
+
 
 class TableConfig(_PublicModel):
     name: str
