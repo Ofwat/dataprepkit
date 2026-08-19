@@ -151,6 +151,12 @@ class HeaderPolicy(_PublicModel):
     missing_column_action: str = "error"
 
 
+class EmptyRowRule(_PublicModel):
+    rows: list[int] = Field(min_length=1)
+    excluded_columns: list[str] = Field(default_factory=list)
+    blank_policy: str = "none_only"
+
+
 class TableConfig(_PublicModel):
     name: str
     sheet_selector: SheetSelector | None = None
@@ -160,7 +166,7 @@ class TableConfig(_PublicModel):
     column_definitions: list[ColumnDefinition] = Field(default_factory=list)
     column_validations: list[ColumnValidation] = Field(default_factory=list)
     header_policy: HeaderPolicy | None = None
-    empty_row_rules: list[dict[str, Any]] = Field(default_factory=list)
+    empty_row_rules: list[EmptyRowRule] = Field(default_factory=list)
     data_presence: str = "allow_empty"
 
 

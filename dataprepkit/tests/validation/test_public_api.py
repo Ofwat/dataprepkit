@@ -11,6 +11,7 @@ from dataprepkit.validation import (
     CellLocation,
     ColumnDefinition,
     ColumnValidation,
+    EmptyRowRule,
     ExpectedCellCheck,
     HeaderPolicy,
     RuntimePolicy,
@@ -867,3 +868,53 @@ def test_reference_rule_is_not_run_without_reference_workbook(tmp_path):
     assert result.is_valid is True
     assert len(result.not_run) == 1
     assert result.not_run[0].reason == "REFERENCE_WORKBOOK_REQUIRED"
+
+
+def test_validate_excel_reports_non_blank_configured_empty_row(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Unit", "Reference"])
+    workbook.active.append(["£", "A"])
+    workbook.active.append([None, "Unexpected"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(
+                        mode="exact",
+                        value="Data",
+                    ),
+                    header_row=1,
+                    column_definitions=[
+                        ColumnDefinition(name="unit", aliases=["Unit"]),
+                        ColumnDefinition(
+                            name="reference",
+                            aliases=["Reference"],
+                        ),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["unit", "reference"],
+                    ),
+                    empty_row_rules=[
+                        EmptyRowRule(
+                            rows=[3],
+                            excluded_columns=["A"],
+                            blank_policy="blank_strings",
+                        )
+                    ],
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is False
+    assert [event.rule_code for event in result.errors] == [
+        "empty_row_pattern"
+    ]
+    assert result.errors[0].cell_reference == "B3"

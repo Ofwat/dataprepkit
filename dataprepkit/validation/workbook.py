@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import openpyxl
+from openpyxl.utils.cell import column_index_from_string
 
 from .config import validate_config
 from .models import (
@@ -282,6 +283,38 @@ def validate_excel(
                                 ),
                             )
                         )
+                formula_sheet = formula_workbook[sheet_name]
+                max_column = max(sheet.max_column, formula_sheet.max_column)
+                for empty_row_rule in table.empty_row_rules:
+                    excluded_columns = {
+                        column_index_from_string(column)
+                        for column in empty_row_rule.excluded_columns
+                    }
+                    for row_number in empty_row_rule.rows:
+                        for column_number in range(1, max_column + 1):
+                            if column_number in excluded_columns:
+                                continue
+                            cell = sheet.cell(row_number, column_number)
+                            if _is_blank_value(
+                                cell.value,
+                                empty_row_rule.blank_policy,
+                                resolved_config.comparison.null_tokens,
+                            ):
+                                continue
+                            errors.append(
+                                ValidationEvent(
+                                    rule_code="empty_row_pattern",
+                                    sheet_name=sheet_name,
+                                    cell_reference=cell.coordinate,
+                                    row_number=row_number,
+                                    actual_value=cell.value,
+                                    expected_value="blank",
+                                    description=(
+                                        f"Configured empty row {row_number} "
+                                        "contains a value"
+                                    ),
+                                )
+                            )
                 max_row = max(sheet.max_row, formula_workbook[sheet_name].max_row)
                 if header_resolution_failed:
                     for validation in table.column_validations:
@@ -659,6 +692,16 @@ def _values_equal(actual, expected, mode):
 
 def _normalise_header(value):
     return str(value).strip().casefold()
+
+
+def _is_blank_value(value, blank_policy, null_tokens):
+    if blank_policy == "none_only":
+        return value is None
+    if blank_policy == "blank_strings":
+        return value is None or value == ""
+    if blank_policy == "blank_strings_and_nulls":
+        return value is None or value == "" or value in null_tokens
+    return value is None
 
 
 def _content_shape(value_sheet, formula_sheet):
