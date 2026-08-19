@@ -1810,6 +1810,48 @@ configuration version, those workbook versions when supplied, target
 collation/comparison policy, and candidate filename so that a validation run
 can be audited and reproduced.
 
+## Implementation status
+
+Status is tracked against the public specification and updated as each
+public-API test and implementation slice is completed.
+
+Current status as of 2026-08-19:
+
+| Area | Status | Evidence or next action |
+| --- | --- | --- |
+| Direct `dqchecks` behavior documented | Complete | `EXCEL_WORKBOOK_CHECKS.md` |
+| Generic validation specification | Complete | This document |
+| Public API and result contract | Complete | Public exports and result model sections |
+| Compatibility profile definition | Complete | Pinned source and manifest schema |
+| Compatibility fixture files and manifest | Pending | Create the version-controlled fixture directory |
+| Public configuration models | Pending | Write failing import and model-validation tests |
+| Workbook loading and cleanup | Pending | Write public loader lifecycle tests |
+| `validate_config` and config serialization | Pending | Write failing YAML/schema tests |
+| `validate_excel` facade | Pending | Write standalone and reference-backed tests |
+| First validation rules | Pending | Start with required sheets and formula errors |
+| Remaining validation rules | Pending | Implement one public rule slice at a time |
+| Compatibility verification | Pending | Run the pinned profile against the fixture manifest |
+
+Implementation must not be marked complete from documentation alone. A row
+becomes `Complete` only when its public behavior has passing tests and the
+corresponding implementation is committed. `Pending` means no implementation
+or public contract test has been completed; `In progress` means a failing test
+or implementation work is currently underway.
+
+### TDD execution loop
+
+For every status row:
+
+1. Translate the relevant specification into a failing public-API test.
+2. Implement the smallest behavior that satisfies the test.
+3. Run the focused test and the relevant full test suite.
+4. Refactor without changing the public contract.
+5. Update this status table only after the tests pass.
+
+Tests must use exported APIs and real generated `.xlsx` fixtures where workbook
+behavior is involved. Private helpers may be tested indirectly but must not be
+the contract that drives implementation.
+
 ## Implementation phases
 
 ### Phase 1: Models and configuration
