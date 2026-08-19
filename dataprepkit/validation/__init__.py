@@ -1,4 +1,8 @@
-from .config import validate_config
+from .config import (
+    dump_validation_config,
+    load_validation_config,
+    validate_config,
+)
 from .models import (
     CellLocation,
     CellComparison,
@@ -52,6 +56,8 @@ __all__ = [
     "WorkbookCheck",
     "WorkbookReadError",
     "WorkbookValidationConfig",
+    "dump_validation_config",
+    "load_validation_config",
     "validate_config",
     "validate_excel",
 ]

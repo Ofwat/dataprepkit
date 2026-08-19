@@ -24,6 +24,8 @@ from dataprepkit.validation import (
     TableConfig,
     WorkbookValidationConfig,
     WorkbookCheck,
+    dump_validation_config,
+    load_validation_config,
     validate_config,
     validate_excel,
 )
@@ -96,6 +98,16 @@ def test_validate_config_returns_a_validated_public_model():
 
     assert resolved is config
     assert resolved.config_version == "1"
+
+
+def test_validation_config_round_trips_through_mapping_and_json():
+    config = make_config()
+
+    mapping = dump_validation_config(config, format="mapping")
+    assert load_validation_config(mapping) == config
+
+    encoded = dump_validation_config(config, format="json")
+    assert load_validation_config(encoded) == config
 
 
 def test_validate_config_reports_a_public_field_path():
