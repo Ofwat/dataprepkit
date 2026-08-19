@@ -211,6 +211,14 @@ def validate_excel(
                     for index, header in enumerate(headers)
                     if header is not None
                 }
+                logical_columns = {}
+                for definition in table.column_definitions:
+                    names = [definition.name, *definition.aliases]
+                    for name in names:
+                        position = normalised_headers.get(_normalise_header(name))
+                        if position is not None:
+                            logical_columns[definition.name] = position + 1
+                            break
                 required_positions = []
                 missing_columns = []
                 for logical_name in table.header_policy.required_columns:
@@ -273,6 +281,60 @@ def validate_excel(
                                 ),
                             )
                         )
+                max_row = max(sheet.max_row, formula_workbook[sheet_name].max_row)
+                for validation in table.column_validations:
+                    column_number = logical_columns.get(validation.column)
+                    if column_number is None:
+                        continue
+                    for row_number in range(table.header_row + 1, max_row + 1):
+                        cell = sheet.cell(row_number, column_number)
+                        actual_value = cell.value
+                        if actual_value is None and validation.null_policy == "allow":
+                            continue
+                        if (
+                            validation.allowed_values is not None
+                            and actual_value not in validation.allowed_values
+                        ):
+                            errors.append(
+                                ValidationEvent(
+                                    rule_code="allowed_values",
+                                    severity=validation.severity
+                                    or resolved_config.rule_severity.get(
+                                        "allowed_values"
+                                    ),
+                                    sheet_name=sheet_name,
+                                    cell_reference=cell.coordinate,
+                                    row_number=row_number,
+                                    actual_value=actual_value,
+                                    expected_value=validation.allowed_values,
+                                    description=(
+                                        f"Value is not allowed for column "
+                                        f"'{validation.column}'"
+                                    ),
+                                )
+                            )
+                        if (
+                            validation.forbidden_values is not None
+                            and actual_value in validation.forbidden_values
+                        ):
+                            errors.append(
+                                ValidationEvent(
+                                    rule_code="forbidden_values",
+                                    severity=validation.severity
+                                    or resolved_config.rule_severity.get(
+                                        "forbidden_values"
+                                    ),
+                                    sheet_name=sheet_name,
+                                    cell_reference=cell.coordinate,
+                                    row_number=row_number,
+                                    actual_value=actual_value,
+                                    expected_value=validation.forbidden_values,
+                                    description=(
+                                        f"Value is forbidden for column "
+                                        f"'{validation.column}'"
+                                    ),
+                                )
+                            )
         for check_index, check in enumerate(resolved_config.workbook_checks):
             if (
                 not check.enabled

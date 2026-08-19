@@ -10,6 +10,7 @@ from dataprepkit.validation import (
     ConfigurationError,
     CellLocation,
     ColumnDefinition,
+    ColumnValidation,
     ExpectedCellCheck,
     HeaderPolicy,
     RuntimePolicy,
@@ -644,6 +645,51 @@ def test_validate_excel_reports_required_table_without_data(tmp_path):
     assert result.is_valid is False
     assert [event.rule_code for event in result.errors] == ["non_empty_data"]
     assert result.errors[0].sheet_name == "Data"
+
+
+def test_validate_excel_reports_disallowed_column_values(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Unit"])
+    workbook.active.append(["£"])
+    workbook.active.append(["GBP"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(
+                        mode="exact",
+                        value="Data",
+                    ),
+                    header_row=1,
+                    column_definitions=[
+                        ColumnDefinition(name="unit", aliases=["Unit"]),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["unit"],
+                    ),
+                    column_validations=[
+                        ColumnValidation(
+                            column="unit",
+                            allowed_values=["£", "%"],
+                            null_policy="allow",
+                        )
+                    ],
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is False
+    assert [event.rule_code for event in result.errors] == ["allowed_values"]
+    assert result.errors[0].cell_reference == "A3"
+    assert result.errors[0].actual_value == "GBP"
 
 
 def test_validate_excel_reports_sheet_structure_differences(tmp_path):
