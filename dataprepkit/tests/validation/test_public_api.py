@@ -484,6 +484,7 @@ def test_validate_excel_reports_missing_table_header(tmp_path):
     workbook = openpyxl.Workbook()
     workbook.active.title = "Data"
     workbook.active.append(["Unit", "Other"])
+    workbook.active["Z11"]
     workbook.save(candidate_path)
 
     config = make_config().model_copy(
@@ -520,6 +521,7 @@ def test_validate_excel_reports_missing_table_header(tmp_path):
     assert result.is_valid is False
     assert [event.rule_code for event in result.errors] == ["column_header"]
     assert result.errors[0].sheet_name == "Data"
+    assert result.errors[0].actual_value == ["Unit", "Other"]
 
 
 def test_sheet_structure_ignores_blank_cells_outside_content(tmp_path):

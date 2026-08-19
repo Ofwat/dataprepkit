@@ -204,6 +204,8 @@ def validate_excel(
                     sheet.cell(table.header_row, column).value
                     for column in range(1, sheet.max_column + 1)
                 ]
+                while headers and headers[-1] is None:
+                    headers.pop()
                 normalised_headers = {
                     _normalise_header(header): index
                     for index, header in enumerate(headers)
