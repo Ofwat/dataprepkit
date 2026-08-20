@@ -781,6 +781,7 @@ def load_fact_from_maps(
     data_column_nullability: dict[str, bool] = {}
     data_column_backfills: dict[str, object] = {}
     data_column_types: dict[str, str] = {}
+    non_comparison_data_columns: set[str] = set()
     unique_data_columns: list[str] = []
     base_selects: list[str] = []
     base_joins: list[str] = []
@@ -1047,6 +1048,8 @@ def load_fact_from_maps(
         )
         data_column_nullability[column_name.casefold()] = nullable
         data_column_types[column_name.casefold()] = column_type
+        if column.get("compare_for_changes") is False:
+            non_comparison_data_columns.add(column_name.casefold())
         if "backfill_existing_rows" in column:
             data_column_backfills[column_name.casefold()] = column[
                 "backfill_existing_rows"
@@ -1144,7 +1147,10 @@ def load_fact_from_maps(
         comparison_columns = [
             name
             for name, _, _ in column_definitions
-            if name.casefold() not in metadata_target_columns
+            if (
+                name.casefold() not in metadata_target_columns
+                and name.casefold() not in non_comparison_data_columns
+            )
         ]
         projected_column_select_sql = ", ".join(
             f"p.{_quote_identifier(engine, name)} AS {_quote_identifier(engine, name)}"

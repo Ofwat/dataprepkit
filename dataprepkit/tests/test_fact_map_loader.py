@@ -2048,7 +2048,9 @@ def test_load_fact_from_maps_append_mode_inserts_only_changed_rows():
 
     with engine.begin() as conn:
         conn.execute(text("ATTACH DATABASE ':memory:' AS facts"))
-        conn.execute(text("CREATE TABLE staging_fact (Measure_Cd TEXT, Value REAL)"))
+        conn.execute(
+            text("CREATE TABLE staging_fact (Measure_Cd TEXT, Value REAL, Filename TEXT)")
+        )
         conn.execute(
             text(
                 """
@@ -2070,8 +2072,8 @@ def test_load_fact_from_maps_append_mode_inserts_only_changed_rows():
         conn.execute(
             text(
                 """
-                INSERT INTO staging_fact (Measure_Cd, Value)
-                VALUES ('MEASURE1', 1.5), ('MEASURE2', 2.5)
+                INSERT INTO staging_fact (Measure_Cd, Value, Filename)
+                VALUES ('MEASURE1', 1.5, 'file-v1'), ('MEASURE2', 2.5, 'file-v1')
                 """
             )
         )
@@ -2089,7 +2091,10 @@ def test_load_fact_from_maps_append_mode_inserts_only_changed_rows():
                 "target": {"column": "Measure_Instance_Id"},
             }
         },
-        "data_columns": [{"column": "Value"}],
+        "data_columns": [
+            {"column": "Value"},
+            {"column": "Filename", "compare_for_changes": False},
+        ],
         "additional_columns": [],
         "metadata_columns": [
             {
@@ -2107,7 +2112,13 @@ def test_load_fact_from_maps_append_mode_inserts_only_changed_rows():
     load_fact_from_maps(**kwargs, runtime_values={"batch_id": "BATCH1"})
     with engine.begin() as conn:
         conn.execute(
-            text("UPDATE staging_fact SET Value = 3.5 WHERE Measure_Cd = 'MEASURE2'")
+            text(
+                """
+                UPDATE staging_fact
+                SET Filename = 'file-v2',
+                    Value = CASE WHEN Measure_Cd = 'MEASURE2' THEN 3.5 ELSE Value END
+                """
+            )
         )
     load_fact_from_maps(**kwargs, runtime_values={"batch_id": "BATCH2"})
 
@@ -2115,7 +2126,7 @@ def test_load_fact_from_maps_append_mode_inserts_only_changed_rows():
         rows = conn.execute(
             text(
                 """
-                SELECT Batch_Id, Measure_Instance_Id, Value
+                SELECT Batch_Id, Measure_Instance_Id, Value, Filename
                 FROM facts.fact_result
                 ORDER BY Batch_Id
                 """
@@ -2123,9 +2134,24 @@ def test_load_fact_from_maps_append_mode_inserts_only_changed_rows():
         ).mappings().all()
 
     assert rows == [
-        {"Batch_Id": "BATCH1", "Measure_Instance_Id": 200, "Value": 1.5},
-        {"Batch_Id": "BATCH1", "Measure_Instance_Id": 201, "Value": 2.5},
-        {"Batch_Id": "BATCH2", "Measure_Instance_Id": 201, "Value": 3.5},
+        {
+            "Batch_Id": "BATCH1",
+            "Measure_Instance_Id": 200,
+            "Value": 1.5,
+            "Filename": "file-v1",
+        },
+        {
+            "Batch_Id": "BATCH1",
+            "Measure_Instance_Id": 201,
+            "Value": 2.5,
+            "Filename": "file-v1",
+        },
+        {
+            "Batch_Id": "BATCH2",
+            "Measure_Instance_Id": 201,
+            "Value": 3.5,
+            "Filename": "file-v2",
+        },
     ]
 
 
