@@ -755,6 +755,7 @@ def load_fact_from_maps(
     archive_base_dir: str | None = None,
     table_comment: str | None = None,
     mode: str = "replace",
+    append_only_changed_rows: bool = True,
 ) -> None:
     if mode not in {"replace", "append"}:
         raise ValueError("mode must be either 'replace' or 'append'.")
@@ -1135,7 +1136,35 @@ def load_fact_from_maps(
     projected_rows_sql = (
         f"SELECT {final_select_sql} FROM base_rows b {additional_join_sql}"
     )
-    final_source_sql = projected_rows_sql
+    if mode == "append" and append_only_changed_rows:
+        metadata_target_columns = {
+            str(config["target"]["column"]).casefold()
+            for config in metadata_columns
+        }
+        comparison_columns = [
+            name
+            for name, _, _ in column_definitions
+            if name.casefold() not in metadata_target_columns
+        ]
+        projected_column_select_sql = ", ".join(
+            f"p.{_quote_identifier(engine, name)} AS {_quote_identifier(engine, name)}"
+            for name, _, _ in column_definitions
+        )
+        duplicate_predicate = _null_safe_row_match_predicate(
+            engine,
+            left_alias="e",
+            right_alias="p",
+            columns=comparison_columns,
+        )
+        final_source_sql = (
+            f"SELECT {projected_column_select_sql} "
+            f"FROM ({projected_rows_sql}) p "
+            f"WHERE NOT EXISTS ("
+            f"SELECT 1 FROM {fact_sql} e WHERE {duplicate_predicate}"
+            f")"
+        )
+    else:
+        final_source_sql = projected_rows_sql
     insert_params = {
         **{
             key: value
