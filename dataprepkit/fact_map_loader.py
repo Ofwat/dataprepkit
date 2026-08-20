@@ -756,6 +756,7 @@ def load_fact_from_maps(
     table_comment: str | None = None,
     mode: str = "replace",
     append_only_changed_rows: bool = True,
+    create_only: bool = False,
 ) -> None:
     if mode not in {"replace", "append"}:
         raise ValueError("mode must be either 'replace' or 'append'.")
@@ -802,7 +803,7 @@ def load_fact_from_maps(
         )
 
     archive_filename: str | None = None
-    if archive_base_dir and any(
+    if not create_only and archive_base_dir and any(
         column["source"]["kind"] == "archive_filename" for column in metadata_columns
     ):
         batch_id_value = runtime_values.get("batch_id")
@@ -1281,6 +1282,7 @@ def load_fact_from_maps(
             if (
                 batch_metadata_column
                 and "batch_id" in runtime_values
+                and not create_only
                 and _batch_already_loaded(
                     conn,
                     engine,
@@ -1291,6 +1293,8 @@ def load_fact_from_maps(
                 )
             ):
                 return
+        if create_only:
+            return
         for column_name in unique_data_columns:
             _create_unique_index(
                 conn,
@@ -1328,4 +1332,40 @@ def load_fact_from_maps(
         table=fact_table,
         table_comment=table_comment,
         column_comments=column_comments,
+    )
+
+
+def ensure_fact_table_from_maps(
+    *,
+    engine: Engine,
+    lookup_map: Mapping[str, Mapping[str, object]],
+    data_columns: Sequence[Mapping[str, object]],
+    additional_columns: Sequence[Mapping[str, object]],
+    metadata_columns: Sequence[Mapping[str, object]] | None = None,
+    runtime_values: Mapping[str, object] | None = None,
+    expected_lookup_columns: Sequence[str] | None = None,
+    staging_table: str,
+    staging_schema: str | None,
+    fact_table: str,
+    fact_schema: str | None = None,
+    fact_pk_column: str | None = None,
+    table_comment: str | None = None,
+) -> None:
+    """Create or safely extend a fact table without inserting fact rows."""
+    load_fact_from_maps(
+        engine=engine,
+        lookup_map=lookup_map,
+        data_columns=data_columns,
+        additional_columns=additional_columns,
+        metadata_columns=metadata_columns,
+        runtime_values=runtime_values,
+        expected_lookup_columns=expected_lookup_columns,
+        staging_table=staging_table,
+        staging_schema=staging_schema,
+        fact_table=fact_table,
+        fact_schema=fact_schema,
+        fact_pk_column=fact_pk_column,
+        table_comment=table_comment,
+        mode="append",
+        create_only=True,
     )
