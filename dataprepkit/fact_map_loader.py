@@ -1136,7 +1136,7 @@ def load_fact_from_maps(
     projected_rows_sql = (
         f"SELECT {final_select_sql} FROM base_rows b {additional_join_sql}"
     )
-    if mode == "append" and append_only_changed_rows:
+    if mode == "append":
         metadata_target_columns = {
             str(config["target"]["column"]).casefold()
             for config in metadata_columns
@@ -1156,13 +1156,31 @@ def load_fact_from_maps(
             right_alias="p",
             columns=comparison_columns,
         )
-        final_source_sql = (
-            f"SELECT {projected_column_select_sql} "
-            f"FROM ({projected_rows_sql}) p "
-            f"WHERE NOT EXISTS ("
-            f"SELECT 1 FROM {fact_sql} e WHERE {duplicate_predicate}"
-            f")"
-        )
+        if append_only_changed_rows:
+            final_source_sql = (
+                f"SELECT {projected_column_select_sql} "
+                f"FROM ({projected_rows_sql}) p "
+                f"WHERE NOT EXISTS ("
+                f"SELECT 1 FROM {fact_sql} e WHERE {duplicate_predicate}"
+                f")"
+            )
+        else:
+            changed_predicate = _null_safe_row_match_predicate(
+                engine,
+                left_alias="e",
+                right_alias="c",
+                columns=comparison_columns,
+            )
+            final_source_sql = (
+                f"SELECT {projected_column_select_sql} "
+                f"FROM ({projected_rows_sql}) p "
+                f"WHERE EXISTS ("
+                f"SELECT 1 FROM ({projected_rows_sql}) c "
+                f"WHERE NOT EXISTS ("
+                f"SELECT 1 FROM {fact_sql} e WHERE {changed_predicate}"
+                f")"
+                f")"
+            )
     else:
         final_source_sql = projected_rows_sql
     insert_params = {

@@ -1911,9 +1911,16 @@ def test_load_fact_from_maps_append_mode_toggle_inserts_full_batch():
         runtime_values={"batch_id": "BATCH1"},
         append_only_changed_rows=False,
     )
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE staging_fact SET Value = 2.5"))
     load_fact_from_maps(
         **common_kwargs,
         runtime_values={"batch_id": "BATCH2"},
+        append_only_changed_rows=False,
+    )
+    load_fact_from_maps(
+        **common_kwargs,
+        runtime_values={"batch_id": "BATCH3"},
         append_only_changed_rows=False,
     )
 
@@ -1930,7 +1937,7 @@ def test_load_fact_from_maps_append_mode_toggle_inserts_full_batch():
 
     assert rows == [
         {"Batch_Id": "BATCH1", "Measure_Instance_Id": 200, "Value": 1.5},
-        {"Batch_Id": "BATCH2", "Measure_Instance_Id": 200, "Value": 1.5},
+        {"Batch_Id": "BATCH2", "Measure_Instance_Id": 200, "Value": 2.5},
     ]
 
 
