@@ -1225,8 +1225,21 @@ def _coerce_scd2_change_summary(
     )
 
 
-def _column_spec_clause(name: str, spec: ColumnSpec, engine: Engine) -> str:
+def _column_spec_clause(
+    name: str,
+    spec: ColumnSpec,
+    engine: Engine,
+    *,
+    business_key: bool = False,
+) -> str:
     column_type = spec.type or _column_type_for_engine(engine)
+    if (
+        business_key
+        and engine.dialect.name == "mssql"
+        and _is_text_like_type(column_type)
+        and "COLLATE" not in column_type.upper()
+    ):
+        column_type = f"{column_type} COLLATE Latin1_General_100_BIN2"
     constraints = []
     if not spec.nullable:
         constraints.append("NOT NULL")
@@ -1295,7 +1308,7 @@ def _ensure_target_table(engine: Engine, metadata: DimensionMetadata) -> list[st
         },
     }
     column_defs = [
-        _column_spec_clause(name, spec, engine)
+        _column_spec_clause(name, spec, engine, business_key=True)
         for name, spec in natural_specs.items()
     ]
     column_defs += [
@@ -1621,7 +1634,12 @@ def _evolve_table_columns(
             if spec is None:
                 logger.warning("Cannot evolve column '%s': no spec defined", column)
                 continue
-            clause = _column_spec_clause(column, spec, engine)
+            clause = _column_spec_clause(
+                column,
+                spec,
+                engine,
+                business_key=column in metadata.natural_key_cols,
+            )
             add_sql = text(f"ALTER TABLE {metadata.target_table} ADD {clause}")
             conn.execute(add_sql)
             added.append(column)

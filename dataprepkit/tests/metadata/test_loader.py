@@ -216,6 +216,64 @@ def test_ensure_target_table_relaxes_nullable_data_columns(monkeypatch):
     assert all('COLLATE "SQL_Latin1_General_CP1_CI_AS"' not in statement for statement in engine.statements)
 
 
+def test_ensure_target_table_collates_mssql_business_keys(monkeypatch):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeConn:
+        def __init__(self, statements):
+            self.statements = statements
+
+        def execute(self, statement, params=None):
+            self.statements.append(str(statement))
+
+    class _FakeTxn:
+        def __init__(self, statements):
+            self._conn = _FakeConn(statements)
+
+        def __enter__(self):
+            return self._conn
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+        def __init__(self):
+            self.statements = []
+
+        def begin(self):
+            return _FakeTxn(self.statements)
+
+    class _FakeInspector:
+        def has_table(self, table, schema=None):
+            return False
+
+    metadata = DimensionMetadata(
+        name="measure",
+        target_table="Dimensions.dim_measure",
+        natural_key_cols=["Measure_Cd"],
+        data_columns={"Measure_Name": {"type": "NVARCHAR(4000)"}},
+        surrogate_key="Measure_Instance_Id",
+        join_numeric_key="Measure_Id",
+        filepath="dummy.csv",
+    )
+    engine = _FakeEngine()
+
+    monkeypatch.setattr("dataprepkit.metadata_loader.inspect", lambda _engine: _FakeInspector())
+    monkeypatch.setattr("dataprepkit.metadata_loader.ensure_schema_exists", lambda *_: None)
+
+    _ensure_target_table(engine, metadata)
+
+    create_statement = engine.statements[0]
+    assert (
+        "[Measure_Cd] NVARCHAR(4000) COLLATE Latin1_General_100_BIN2 NOT NULL"
+        in create_statement
+    )
+    assert "[Measure_Name] NVARCHAR(4000) COLLATE" not in create_statement
+
+
 def test_run_dimension_na_row_is_optional():
     engine = create_engine("sqlite:///:memory:")
     METADATA_REGISTRY.pop("na_dimension", None)
