@@ -35,6 +35,7 @@ from .models import (
     WorkbookValidationConfig,
 )
 from .registry import (
+    list_available_rules,
     list_registered_rules,
     register_rule,
     unregister_rule,
@@ -76,6 +77,7 @@ __all__ = [
     "validate_config",
     "validate_excel",
     "list_registered_rules",
+    "list_available_rules",
     "register_rule",
     "unregister_rule",
 ]

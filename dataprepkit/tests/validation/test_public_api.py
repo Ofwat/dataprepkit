@@ -34,6 +34,7 @@ from dataprepkit.validation import (
     dump_validation_result,
     get_config_schema,
     list_profiles,
+    list_available_rules,
     list_registered_rules,
     register_rule,
     unregister_rule,
@@ -102,6 +103,31 @@ def test_public_validation_exports_are_available():
     assert WorkbookValidationConfig
     assert validate_config
     assert validate_excel
+
+
+def test_public_rule_catalogue_lists_all_builtin_checks():
+    rules = list_available_rules()
+
+    assert {rule["rule_code"] for rule in rules} == {
+        "required_sheet",
+        "extra_sheet",
+        "expected_cell",
+        "table_resolution",
+        "column_header",
+        "non_empty_data",
+        "empty_row_pattern",
+        "missing_value",
+        "duplicate_value",
+        "allowed_values",
+        "forbidden_values",
+        "missing_reference_sheet",
+        "sheet_structure",
+        "formula_difference",
+        "formula_error",
+        "feature_policy",
+        "feature_detection_unavailable",
+    }
+    assert all(rule["attachment"] and rule["description"] for rule in rules)
 
 
 def test_custom_rule_registration_runs_through_public_validator(tmp_path):

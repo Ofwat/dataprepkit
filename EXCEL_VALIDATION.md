@@ -110,6 +110,113 @@ Checks are configured with `workbook_checks`. Built-in checks include:
 | `formula_difference` | Compares candidate/reference formula text. |
 | `formula_error` | Finds configured Excel error tokens. |
 
+The complete built-in catalogue is also available in Python:
+
+```python
+from dataprepkit.validation import list_available_rules
+
+for rule in list_available_rules():
+    print(rule["rule_code"], "->", rule["attachment"])
+```
+
+### Complete check catalogue
+
+| Check | Configure it with | What it reports |
+| --- | --- | --- |
+| `required_sheet` | `sheet_policy.required_selectors` | A required sheet selector matched no sheet. |
+| `extra_sheet` | `sheet_policy.extra_sheet_action` | A candidate sheet was not selected or ignored. |
+| `expected_cell` | `expected_cells` | A resolved cell differs from its expected value. |
+| `table_resolution` | `tables` and `data_boundary` | A required table or data boundary cannot be resolved. |
+| `column_header` | `tables.header_policy` | Required, ordered, blank, duplicate, or extra headers are invalid. |
+| `non_empty_data` | `tables.data_presence: require_one_usable_row` | A required table has no usable data row. |
+| `empty_row_pattern` | `tables.empty_row_rules` | A row configured as blank contains a value. |
+| `missing_value` | `tables.column_validations[].required` | A required column value is null or blank. |
+| `duplicate_value` | `tables.column_validations[].unique` | A normalized column value occurs more than once. |
+| `allowed_values` | `tables.column_validations[].allowed_values` | A value is not in the configured allow-list. |
+| `forbidden_values` | `tables.column_validations[].forbidden_values` | A value is in the configured deny-list. |
+| `missing_reference_sheet` | `workbook_checks` | A sheet in the reference workbook is absent from the candidate. |
+| `sheet_structure` | `workbook_checks` | Candidate and reference content-based used areas differ. |
+| `formula_difference` | `workbook_checks` | Candidate and reference formula text differs at a cell. |
+| `formula_error` | `workbook_checks` | A cached cell contains one of the configured Excel error tokens. |
+| `feature_policy` | `runtime.feature_policy` | A configured workbook feature was detected. |
+| `feature_detection_unavailable` | `runtime.feature_policy.unavailable_action` | A configured feature could not be inspected. |
+
+`feature_policy` covers macros, external links, charts, pivot tables, named
+ranges, and merged cells. Formula evaluation is not performed: formula checks
+inspect formula text and cached values only.
+
+### Common table checks
+
+This example enables header, data presence, uniqueness, allow-list, deny-list,
+and required-value checks without using physical cell coordinates:
+
+```yaml
+tables:
+  - name: outputs
+    required: true
+    sheet_selector:
+      mode: exact
+      value: Data
+    header_row: 1
+    column_definitions:
+      - name: unit
+      - name: status
+    header_policy:
+      required_columns: [unit, status]
+      match_mode: exact_order
+      missing_column_action: error
+      extra_column_action: error
+    data_boundary:
+      mode: last_non_empty_row
+      columns: [unit]
+    data_presence: require_one_usable_row
+    column_validations:
+      - column: unit
+        required: true
+        allowed_values: ["£", "%", Ml, Number]
+      - column: status
+        forbidden_values: [DELETE, INVALID]
+        unique: true
+```
+
+`allowed_values` and `forbidden_values` are mutually exclusive on one column
+validation. Values are compared using the global `comparison` policy unless a
+column definition supplies its own comparison override.
+
+### Expected cells
+
+Use `expected_cells` when a small number of workbook-level values must be
+present. Use selectors and Excel cell references such as `Z11`; the location
+does not need to be hardcoded into validation code:
+
+```yaml
+expected_cells:
+  - name: reporting_period
+    locations:
+      - sheet_selector: {mode: exact, value: Metadata}
+        cell_reference: Z11
+    expected_value: "2025 Q4"
+    fallback_strategy: exactly_one
+```
+
+### Reference comparison
+
+Pass `reference_path` to enable reference checks. The standalone profile leaves
+these checks empty; the reference profile enables the normal comparison set:
+
+```python
+config = load_validation_config("profiles/reference.yaml")
+result = validate_excel(
+    candidate_path="candidate.xlsx",
+    reference_path="reference.xlsx",
+    config=config,
+)
+```
+
+Reference checks do not evaluate formulas. `formula_difference` compares text,
+with `whitespace_policy: exact` or `normalised`; `formula_error` checks cached
+Excel error values in the candidate.
+
 Formula options are typed and reject unknown keys:
 
 ```yaml
