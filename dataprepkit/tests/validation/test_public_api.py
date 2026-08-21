@@ -495,6 +495,161 @@ def test_expected_cell_date_comparison_uses_configured_formats(tmp_path):
     assert result.is_valid is True
 
 
+def test_expected_cell_numeric_comparison_rejects_nonfinite_and_boolean_values(
+    tmp_path,
+):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active["A1"] = "NaN"
+    workbook.active["A2"] = True
+    workbook.save(candidate_path)
+    numeric_comparison = CellComparison(
+        mode="numeric",
+        options={
+            "decimal_separator": ".",
+            "thousands_separator": ",",
+            "allow_numeric_strings": True,
+        },
+    )
+    config = make_config().model_copy(
+        update={
+            "expected_cells": [
+                ExpectedCellCheck(
+                    name="not_nan",
+                    locations=[
+                        CellLocation(
+                            sheet_selector=SheetSelector(
+                                mode="exact",
+                                value="Data",
+                            ),
+                            cell_reference="A1",
+                        )
+                    ],
+                    expected_value=0,
+                    comparison=numeric_comparison,
+                ),
+                ExpectedCellCheck(
+                    name="not_boolean",
+                    locations=[
+                        CellLocation(
+                            sheet_selector=SheetSelector(
+                                mode="exact",
+                                value="Data",
+                            ),
+                            cell_reference="A2",
+                        )
+                    ],
+                    expected_value=1,
+                    comparison=numeric_comparison,
+                ),
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert [event.rule_code for event in result.errors] == [
+        "expected_cell",
+        "expected_cell",
+    ]
+
+
+def test_column_null_policy_error_reports_configured_null_tokens(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Reference"])
+    workbook.active.append([" NULL "])
+    workbook.active.append([""])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "comparison": ComparisonConfig(
+                case_sensitive=False,
+                accent_sensitive=True,
+                trim_whitespace=True,
+                collapse_internal_whitespace=False,
+                empty_string_is_null=True,
+                null_tokens=["NULL"],
+                collation_name="mssql_case_insensitive",
+            ),
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    column_definitions=[ColumnDefinition(name="reference")],
+                    header_policy=HeaderPolicy(required_columns=["reference"]),
+                    data_boundary=DataBoundary(
+                        mode="fixed_end_row",
+                        end_row=3,
+                    ),
+                    column_validations=[
+                        ColumnValidation(
+                            column="reference",
+                            null_policy="error",
+                        )
+                    ],
+                )
+            ],
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert [event.rule_code for event in result.errors] == [
+        "missing_value",
+        "missing_value",
+    ]
+
+
+def test_unique_values_follow_accent_insensitive_sql_policy(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Reference"])
+    workbook.active.append(["cafe"])
+    workbook.active.append(["café"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "comparison": ComparisonConfig(
+                case_sensitive=False,
+                accent_sensitive=False,
+                trim_whitespace=True,
+                collapse_internal_whitespace=True,
+                empty_string_is_null=True,
+                null_tokens=[],
+                collation_name="mssql_case_insensitive_accent_insensitive",
+            ),
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    column_definitions=[ColumnDefinition(name="reference")],
+                    header_policy=HeaderPolicy(required_columns=["reference"]),
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        columns=["reference"],
+                    ),
+                    column_validations=[
+                        ColumnValidation(column="reference", unique=True)
+                    ],
+                )
+            ],
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert [event.rule_code for event in result.errors] == ["duplicate_value"]
+    assert result.errors[0].cell_reference == "A3"
+
+
 def test_expected_cell_rejects_unknown_comparison_mode():
     with pytest.raises(ValueError):
         CellComparison(mode="semantic")

@@ -766,7 +766,14 @@ def validate_excel(
                             comparison,
                         )
                         is_null = normalised_value is None
-                        if validation.required and missing_enabled and is_null:
+                        if (
+                            is_null
+                            and missing_enabled
+                            and (
+                                validation.required
+                                or validation.null_policy == "error"
+                            )
+                        ):
                             errors.append(
                                 ValidationEvent(
                                     rule_code="missing_value",
@@ -785,7 +792,10 @@ def validate_excel(
                                     ),
                                 )
                             )
-                        if is_null and validation.null_policy == "allow":
+                        if is_null and validation.null_policy in {
+                            "allow",
+                            "ignore",
+                        }:
                             continue
                         if validation.unique and duplicate_enabled:
                             value_key = repr(normalised_value)
@@ -1265,7 +1275,8 @@ def _numeric_value(value, options):
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float, Decimal)):
-        return Decimal(str(value))
+        number = Decimal(str(value))
+        return number if number.is_finite() else None
     if not options.get("allow_numeric_strings") or not isinstance(value, str):
         return None
     text = value.strip().replace(
@@ -1274,7 +1285,8 @@ def _numeric_value(value, options):
     )
     text = text.replace(options["decimal_separator"], ".")
     try:
-        return Decimal(text)
+        number = Decimal(text)
+        return number if number.is_finite() else None
     except (InvalidOperation, ValueError):
         return None
 
