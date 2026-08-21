@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.dialects.mssql import DATETIME2
+from sqlalchemy.dialects.mssql import DATETIME2, NVARCHAR
 from sqlalchemy.exc import ProgrammingError
 
 from dataprepkit.metadata_loader import (
@@ -808,6 +808,35 @@ def test_stage_dataframe_mssql_datetime_columns_use_datetime2(monkeypatch):
     assert dtype["start_ts"].precision == 3
     assert dtype["end_ts"].precision == 3
     assert "id" not in dtype
+
+
+def test_stage_dataframe_defaults_mssql_strings_to_bounded_binary_collation(
+    monkeypatch,
+):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    captured = {}
+
+    def fake_to_sql(self, name, con, if_exists, index, schema, dtype=None):
+        captured["dtype"] = dtype
+
+    monkeypatch.setattr("dataprepkit.helpers.staging.ensure_schema_exists", lambda *_: None)
+    monkeypatch.setattr(pd.DataFrame, "to_sql", fake_to_sql)
+
+    stage_dataframe(
+        _FakeEngine(),
+        "staging",
+        pd.DataFrame({"Measure_Cd": ["OUTC0007"]}),
+    )
+
+    measure_type = captured["dtype"]["Measure_Cd"]
+    assert isinstance(measure_type, NVARCHAR)
+    assert measure_type.length == 4000
+    assert measure_type.collation == "Latin1_General_100_BIN2"
 
 
 def test_stage_dataframe_copy_into_requires_parquet_base_dir():
