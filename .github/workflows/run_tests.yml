@@ -2,7 +2,8 @@ name: Run Unit Test via Pytest
 
 on: [push]
 
-permissions: {}
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -29,4 +30,17 @@ jobs:
       - name: Generate Coverage Report
         run: |
           coverage report -m
-          
+      - name: Run Excel validation benchmarks
+        run: |
+          python dataprepkit/tests/validation/run_benchmarks.py --output benchmark.json
+      - name: Track Excel benchmark history
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: customSmallerIsBetter
+          output-file-path: benchmark.json
+          benchmark-data-file-name: excel-validation.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          alert-threshold: '1.2'
+          comment-on-alert: true
+          fail-on-alert: false

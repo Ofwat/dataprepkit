@@ -94,6 +94,12 @@ Joins run inside SQL; pandas only reads the filtered result set, renames columns
 * `python -m pytest dataprepkit/tests/test_metadata_loader.py` — metadata parsing, datetime casting, dependency joins, schema aliases.
 * `python -m pytest dataprepkit/tests/scd2/test_apply_changes.py::test_nullable_data_column_allows_null_staging` — staging with nullable columns.
 
+## Excel validation
+
+Excel workbook validation, starter YAML profiles, and configuration examples
+are documented in [EXCEL_VALIDATION.md](EXCEL_VALIDATION.md). The public API is
+available from `dataprepkit.validation`.
+
 ## Examples
 
 * `examples/run_metadata_example_fabric.py` – registers multiple metadata objects and drives Fabric-based loading.
