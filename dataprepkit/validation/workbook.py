@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import re
 import unicodedata
 from pathlib import Path
+from zipfile import ZipFile
 
 import openpyxl
 from openpyxl.utils.cell import column_index_from_string, range_boundaries
@@ -1300,17 +1301,36 @@ def _detected_features(workbook, candidate_path):
         ("external_links", "_external_links"),
         ("named_ranges", "defined_names"),
     ):
+        if _package_feature_present(candidate_path, feature_name):
+            yield feature_name, None, None
+            continue
         try:
             if getattr(workbook, attribute):
                 yield feature_name, None, None
         except Exception as error:
             yield feature_name, None, str(error)
+    package_features = tuple(
+        feature_name
+        for feature_name in ("charts", "pivot_tables", "merged_cells")
+        if _package_feature_present(candidate_path, feature_name)
+    )
+    for feature_name in package_features:
+        if getattr(workbook, "read_only", False):
+            yield (
+                feature_name,
+                None,
+                "openpyxl read-only mode does not expose this feature",
+            )
+        else:
+            yield feature_name, None, None
     for sheet in workbook.worksheets:
         for feature_name, attribute in (
             ("charts", "_charts"),
             ("pivot_tables", "_pivots"),
             ("merged_cells", "merged_cells"),
         ):
+            if feature_name in package_features:
+                continue
             try:
                 feature = getattr(sheet, attribute, None)
                 if feature_name == "merged_cells":
@@ -1321,6 +1341,34 @@ def _detected_features(workbook, candidate_path):
                     yield feature_name, sheet.title, None
             except Exception as error:
                 yield feature_name, sheet.title, str(error)
+
+
+def _package_feature_present(path, feature_name):
+    try:
+        with ZipFile(path) as archive:
+            names = archive.namelist()
+            if feature_name == "charts":
+                return any(name.startswith("xl/charts/") for name in names)
+            if feature_name == "pivot_tables":
+                return any(
+                    name.startswith("xl/pivotTables/") for name in names
+                )
+            if feature_name == "external_links":
+                return any(
+                    name.startswith("xl/externalLinks/") for name in names
+                )
+            if feature_name == "named_ranges":
+                return b"<definedName " in archive.read("xl/workbook.xml")
+            if feature_name == "merged_cells":
+                return any(
+                    b"<mergeCells" in archive.read(name)
+                    for name in names
+                    if name.startswith("xl/worksheets/")
+                    and name.endswith(".xml")
+                )
+    except (KeyError, OSError, ValueError):
+        return False
+    return False
 
 
 def _normalise_header(value):

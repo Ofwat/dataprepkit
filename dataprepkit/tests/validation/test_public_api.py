@@ -1,5 +1,7 @@
 from datetime import datetime
 from pathlib import Path
+import shutil
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import openpyxl
 import pytest
@@ -2390,6 +2392,137 @@ def test_feature_policy_ignores_unavailable_detection_with_diagnostic(
     assert [event.code for event in result.diagnostics] == [
         "FEATURE_DETECTION_UNAVAILABLE",
     ]
+
+
+def _add_package_fixture_member(source, target, member_name):
+    with ZipFile(source) as source_zip, ZipFile(
+        target,
+        "w",
+        compression=ZIP_DEFLATED,
+    ) as target_zip:
+        for item in source_zip.infolist():
+            target_zip.writestr(item, source_zip.read(item.filename))
+        target_zip.writestr(member_name, b"<fixture />")
+
+
+def test_feature_policy_reports_external_link_and_pivot_package_fixtures(
+    tmp_path,
+):
+    source_path = tmp_path / "source.xlsx"
+    candidate_path = tmp_path / "candidate.xlsx"
+    write_workbook(source_path, "Data")
+    _add_package_fixture_member(
+        source_path,
+        candidate_path,
+        "xl/externalLinks/externalLink1.xml",
+    )
+    pivot_path = tmp_path / "candidate_with_pivot.xlsx"
+    _add_package_fixture_member(
+        candidate_path,
+        pivot_path,
+        "xl/pivotTables/pivotTable1.xml",
+    )
+
+    config = make_config().model_copy(
+        update={
+            "runtime": RuntimePolicy(
+                max_cells_scanned=1000,
+                read_only=False,
+                macro_policy="reject",
+                missing_formula_cache_action="not_run",
+                feature_policy=WorkbookFeaturePolicy(
+                    external_links="error",
+                    pivot_tables="error",
+                ),
+            )
+        }
+    )
+
+    result = validate_excel(candidate_path=pivot_path, config=config)
+
+    assert result.is_valid is False
+    assert [event.rule_code for event in result.errors] == [
+        "feature_policy",
+        "feature_policy",
+    ]
+    assert {event.description.split(": ")[-1] for event in result.errors} == {
+        "external_links",
+        "pivot_tables",
+    }
+
+
+def test_feature_policy_reports_macro_enabled_file_fixture(tmp_path):
+    source_path = tmp_path / "source.xlsx"
+    candidate_path = tmp_path / "candidate.xlsm"
+    write_workbook(source_path, "Data")
+    shutil.copyfile(source_path, candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "runtime": RuntimePolicy(
+                max_cells_scanned=1000,
+                read_only=False,
+                macro_policy="reject",
+                missing_formula_cache_action="not_run",
+                feature_policy=WorkbookFeaturePolicy(macros="error"),
+            )
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is False
+    assert [event.rule_code for event in result.errors] == ["feature_policy"]
+    assert "macros" in result.errors[0].description
+
+
+def test_feature_policy_reports_read_only_unavailable_features(tmp_path):
+    source_path = tmp_path / "source.xlsx"
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Data"
+    sheet["A1"] = 1
+    sheet.merge_cells("A1:B1")
+    workbook.save(source_path)
+    _add_package_fixture_member(
+        source_path,
+        candidate_path,
+        "xl/charts/chart1.xml",
+    )
+    pivot_path = tmp_path / "candidate_with_pivot.xlsx"
+    _add_package_fixture_member(
+        candidate_path,
+        pivot_path,
+        "xl/pivotTables/pivotTable1.xml",
+    )
+
+    config = make_config().model_copy(
+        update={
+            "runtime": RuntimePolicy(
+                max_cells_scanned=1000,
+                read_only=True,
+                macro_policy="reject",
+                missing_formula_cache_action="not_run",
+                feature_policy=WorkbookFeaturePolicy(
+                    unavailable_action="error",
+                ),
+            )
+        }
+    )
+
+    result = validate_excel(candidate_path=pivot_path, config=config)
+
+    assert result.is_valid is False
+    assert [event.rule_code for event in result.errors] == [
+        "feature_detection_unavailable",
+        "feature_detection_unavailable",
+        "feature_detection_unavailable",
+    ]
+    assert {
+        event.description.split(" for ")[-1].split(":")[0]
+        for event in result.errors
+    } == {"charts", "pivot_tables", "merged_cells"}
 
 
 def test_validate_excel_supports_regex_sheet_selectors(tmp_path):
