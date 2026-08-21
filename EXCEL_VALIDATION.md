@@ -236,6 +236,114 @@ workbook_checks:
 `rule_severity` may set a default severity per rule, while individual checks
 and table validations can override it.
 
+## Custom rules
+
+Use a custom rule when a check is specific to your organization and cannot be
+expressed with the built-in configuration. Register it once in the process,
+then reference its stable code in `workbook_checks`:
+
+```python
+from pathlib import Path
+
+from dataprepkit.validation import (
+    ValidationEvent,
+    WorkbookCheck,
+    load_validation_config,
+    register_rule,
+    validate_excel,
+)
+
+
+def check_workbook_name(context):
+    if Path(context.candidate_path).stem.startswith("submission_"):
+        return None
+    return ValidationEvent(
+        rule_code=context.rule_code,
+        severity="warning",
+        description="Candidate filename does not use the submission_ prefix",
+    )
+
+
+register_rule("workbook_name", check_workbook_name)
+try:
+    config = load_validation_config(
+        {
+            "workbook_checks": [
+                WorkbookCheck(
+                    rule_code="workbook_name",
+                    enabled=True,
+                    scope="all_sheets",
+                )
+            ]
+        },
+        compatibility_profile="profiles/standalone.yaml",
+    )
+    result = validate_excel("candidate.xlsx", config=config)
+finally:
+    # Registration is process-local; unregister it when the application no
+    # longer needs the rule or when tests must isolate their registries.
+    from dataprepkit.validation import unregister_rule
+
+    unregister_rule("workbook_name")
+```
+
+The validator receives a `RuleContext` containing:
+
+| Field | Meaning |
+| --- | --- |
+| `rule_code` | The registered code used by the configuration. |
+| `candidate_path` | Candidate workbook path as a string. |
+| `reference_path` | Reference workbook path, or `None`. |
+| `config` | The resolved `WorkbookValidationConfig`. |
+
+A validator may return `None`, one `ValidationEvent`, or a list of events.
+Use `severity="warning"` for non-blocking findings; failed events are errors
+by default. Use `status="NOT_RUN"` when the custom rule cannot be evaluated and
+include a useful `reason`. Custom registration is intentionally not serialized
+into YAML/JSON profiles, so every process must register the rule before loading
+or running a configuration that uses it.
+
+## Saving and restoring results
+
+`ValidationResult` is a stable, JSON-compatible record. It includes the result
+events plus audit metadata such as configuration version, profile name,
+candidate filename and version, reference version, comparison policy, and
+completion status:
+
+```python
+from pathlib import Path
+
+from dataprepkit.validation import (
+    dump_validation_result,
+    load_validation_result,
+    validate_excel,
+)
+
+result = validate_excel(
+    candidate_path=Path("candidate.xlsx"),
+    config=config,
+    candidate_version="2026-08-21T12:00:00Z",
+    run_id="run-123",
+)
+
+Path("validation-result.json").write_text(
+    dump_validation_result(result, format="json"),
+    encoding="utf-8",
+)
+
+restored = load_validation_result(
+    Path("validation-result.json").read_text(encoding="utf-8")
+)
+print(restored.is_valid)
+print(restored.format_report())
+```
+
+The loader also accepts a mapping or an existing `ValidationResult`. Restored
+results retain typed `ValidationEvent`, `DiagnosticEvent`, and comparison
+objects, so they can be inspected without reopening either workbook. Result
+serialization is separate from configuration serialization: use
+`dump_validation_config` and `load_validation_config` for profiles.
+
 ## Schema and validation
 
 The versioned schema is available as `dataprepkit/validation/schema/v1.json`
