@@ -9,6 +9,7 @@ from pathlib import Path
 
 import openpyxl
 from openpyxl.utils.cell import column_index_from_string, range_boundaries
+from openpyxl.worksheet._reader import WorkSheetParser
 
 from .config import validate_config
 from .models import (
@@ -1376,10 +1377,12 @@ class _WorkbookResolution:
         if key not in self._cell_cache:
             stored = getattr(sheet, "_cells", None)
             self._cell_cache[key] = (
-                tuple(stored.values()) if stored is not None else None
+                tuple(stored.values())
+                if stored is not None
+                else tuple(_read_only_cells(sheet))
             )
         cached = self._cell_cache[key]
-        return cached if cached is not None else _stored_cells(sheet)
+        return cached
 
     def shape(self, value_sheet, formula_sheet):
         key = (value_sheet.title, formula_sheet.title)
@@ -1434,6 +1437,22 @@ def _stored_cells(sheet):
         for row in sheet.iter_rows()
         for cell in row
     )
+
+
+def _read_only_cells(sheet):
+    with sheet._get_source() as source:
+        parser = WorkSheetParser(
+            source,
+            sheet._shared_strings,
+            data_only=sheet.parent.data_only,
+            epoch=sheet.parent.epoch,
+            date_formats=sheet.parent._date_formats,
+            timedelta_formats=sheet.parent._timedelta_formats,
+        )
+        for _row_number, row in parser.parse():
+            for cell in sheet._get_row(row):
+                if cell.value is not None:
+                    yield cell
 
 
 def _comparison_coordinates(

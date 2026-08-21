@@ -35,3 +35,29 @@ def test_large_workbook_validation_timing(tmp_path):
 
     assert result.is_valid is True
     assert elapsed < 10
+
+
+def test_read_only_inflated_dimension_does_not_scan_empty_rows(tmp_path):
+    path = tmp_path / "inflated.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active["A1048576"] = "last-row-value"
+    workbook.save(path)
+
+    config = make_config().model_copy(
+        update={
+            "runtime": RuntimePolicy(
+                max_cells_scanned=10,
+                read_only=True,
+                macro_policy="reject",
+                missing_formula_cache_action="not_run",
+            )
+        }
+    )
+    started = perf_counter()
+    result = validate_excel(candidate_path=path, config=config)
+    elapsed = perf_counter() - started
+
+    assert result.is_valid is True
+    assert result.errors == []
+    assert elapsed < 3
