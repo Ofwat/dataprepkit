@@ -1,0 +1,51 @@
+config_version: "1"
+profile_name: "single_file"
+
+comparison:
+  case_sensitive: false
+  accent_sensitive: true
+  trim_whitespace: true
+  collapse_internal_whitespace: false
+  empty_string_is_null: true
+  null_tokens: []
+  collation_name: "mssql_case_insensitive"
+
+sheet_policy:
+  required_selectors: []
+  ignored_selectors: []
+  extra_sheet_action: ignore
+  selector_match_action: all
+
+tables: []
+expected_cells: []
+
+workbook_checks:
+  - rule_code: formula_error
+    enabled: true
+    scope: all_sheets
+    options:
+      error_tokens:
+        - "#DIV/0!"
+        - "#N/A"
+        - "#NAME?"
+        - "#REF!"
+        - "#VALUE!"
+
+enabled_rules: null
+rule_severity: {}
+
+runtime:
+  max_cells_scanned: 10000000
+  read_only: false
+  macro_policy: reject
+  missing_formula_cache_action: not_run
+  feature_policy:
+    unavailable_action: warning
+    external_links: warning
+    charts: ignore
+    pivot_tables: warning
+    named_ranges: ignore
+    merged_cells: warning
+    macros: error
+
+compatibility: null

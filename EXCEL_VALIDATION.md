@@ -17,6 +17,7 @@ Two version-controlled starter profiles are included:
 
 | Profile | Use it for |
 | --- | --- |
+| `profiles/single_file.yaml` | Run formula-error and feature checks on one workbook only. |
 | `profiles/standalone.yaml` | Validate one workbook without a reference workbook. |
 | `profiles/reference.yaml` | Compare a candidate workbook with a reference workbook. |
 
