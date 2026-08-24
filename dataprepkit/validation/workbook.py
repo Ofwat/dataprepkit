@@ -1335,7 +1335,7 @@ def _detected_features(workbook, candidate_path):
                 None,
                 "openpyxl read-only mode does not expose this feature",
             )
-        else:
+        elif feature_name != "merged_cells":
             yield feature_name, None, None
     for sheet in workbook.worksheets:
         for feature_name, attribute in (
@@ -1343,7 +1343,10 @@ def _detected_features(workbook, candidate_path):
             ("pivot_tables", "_pivots"),
             ("merged_cells", "merged_cells"),
         ):
-            if feature_name in package_features:
+            if (
+                feature_name in package_features
+                and feature_name != "merged_cells"
+            ):
                 continue
             try:
                 feature = getattr(sheet, attribute, None)

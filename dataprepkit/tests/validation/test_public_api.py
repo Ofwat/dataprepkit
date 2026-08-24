@@ -2434,6 +2434,7 @@ def test_feature_policy_warning_does_not_invalidate_result(tmp_path):
 
     assert result.is_valid is True
     assert [event.rule_code for event in result.warnings] == ["feature_policy"]
+    assert result.warnings[0].sheet_name == "Data"
     assert result.diagnostics == []
 
 
