@@ -14,7 +14,7 @@ from pandas.api.types import (
 from sqlalchemy import Engine, inspect, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.sql.elements import quoted_name
-from sqlalchemy.dialects.mssql import DATETIME2, NVARCHAR
+from sqlalchemy.dialects.mssql import DATETIME2, NVARCHAR, VARCHAR
 from dataprepkit.fact_loader import (
     HashMismatchError as _HashMismatchError,
     MissingStageFileError as _MissingStageFileError,
@@ -382,6 +382,7 @@ def stage_dataframe(
     copy_source_base_url: str | None = None,
     copy_into_options: str = "",
     openrowset_max_rows_per_file: int = 1_000_000,
+    fabric_warehouse_types: bool = False,
 ) -> None:
     """
     Write a DataFrame into a staging table (generic helper).
@@ -410,6 +411,8 @@ def stage_dataframe(
         Additional COPY INTO options suffix (for example: ", MAXERRORS = 10").
     openrowset_max_rows_per_file
         Maximum rows per parquet part file for OPENROWSET loads.
+    fabric_warehouse_types
+        Use Fabric Warehouse-compatible VARCHAR columns without a collation.
     """
     resolved_schema = _normalize_bracket_identifier(schema)
     resolved_table = table_name.strip()
@@ -437,10 +440,13 @@ def stage_dataframe(
             ):
                 dtype_overrides[col] = DATETIME2(precision=3)
             elif is_object_dtype(pandas_dtype) or is_string_dtype(pandas_dtype):
-                dtype_overrides[col] = NVARCHAR(
-                    _MSSQL_STAGING_STRING_LENGTH,
-                    collation=_MSSQL_STAGING_STRING_COLLATION,
-                )
+                if fabric_warehouse_types:
+                    dtype_overrides[col] = VARCHAR(_MSSQL_STAGING_STRING_LENGTH)
+                else:
+                    dtype_overrides[col] = NVARCHAR(
+                        _MSSQL_STAGING_STRING_LENGTH,
+                        collation=_MSSQL_STAGING_STRING_COLLATION,
+                    )
 
         if use_copy_into_parquet:
             if not parquet_base_dir:
@@ -501,6 +507,11 @@ def stage_dataframe(
                 options_sql = copy_into_options.strip()
                 if options_sql and not options_sql.startswith(","):
                     options_sql = f", {options_sql}"
+                openrowset_options = (
+                    options_sql
+                    if fabric_warehouse_types
+                    else f", FORMAT = 'PARQUET'{options_sql}"
+                )
 
                 with engine.begin() as conn:
                     if if_exists == "replace" and table_exists:
@@ -518,8 +529,7 @@ def stage_dataframe(
                     INSERT INTO {destination_table} ({columns_sql})
                     SELECT {columns_sql}
                     FROM OPENROWSET(
-                        BULK '{escaped_source}',
-                        FORMAT = 'PARQUET'{options_sql}
+                        BULK '{escaped_source}'{openrowset_options}
                     ) AS src
                     """
                     )

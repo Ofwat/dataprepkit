@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.dialects.mssql import DATETIME2, NVARCHAR
+from sqlalchemy.dialects.mssql import DATETIME2, NVARCHAR, VARCHAR
 from sqlalchemy.exc import ProgrammingError
 
 from dataprepkit.metadata_loader import (
@@ -897,6 +897,34 @@ def test_stage_dataframe_defaults_mssql_strings_to_bounded_binary_collation(
     assert measure_type.collation == "Latin1_General_100_BIN2"
 
 
+def test_stage_dataframe_supports_fabric_warehouse_string_types(monkeypatch):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+    captured = {}
+
+    def fake_to_sql(self, name, con, if_exists, index, schema, dtype=None):
+        captured["dtype"] = dtype
+
+    monkeypatch.setattr("dataprepkit.helpers.staging.ensure_schema_exists", lambda *_: None)
+    monkeypatch.setattr(pd.DataFrame, "to_sql", fake_to_sql)
+
+    stage_dataframe(
+        _FakeEngine(),
+        "staging",
+        pd.DataFrame({"Measure_Cd": ["OUTC0007"]}),
+        fabric_warehouse_types=True,
+    )
+
+    measure_type = captured["dtype"]["Measure_Cd"]
+    assert isinstance(measure_type, VARCHAR)
+    assert measure_type.length == 4000
+    assert measure_type.collation is None
+
+
 def test_stage_dataframe_copy_into_requires_parquet_base_dir():
     class _FakeDialect:
         name = "mssql"
@@ -913,7 +941,16 @@ def test_stage_dataframe_copy_into_requires_parquet_base_dir():
         )
 
 
-def test_stage_dataframe_copy_into_writes_parquet_and_executes_copy(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    ("fabric_warehouse_types", "expects_format"),
+    [(False, True), (True, False)],
+)
+def test_stage_dataframe_copy_into_writes_parquet_and_executes_copy(
+    monkeypatch,
+    tmp_path,
+    fabric_warehouse_types,
+    expects_format,
+):
     class _FakeDialect:
         name = "mssql"
 
@@ -967,6 +1004,7 @@ def test_stage_dataframe_copy_into_writes_parquet_and_executes_copy(monkeypatch,
         use_copy_into_parquet=True,
         parquet_base_dir=str(tmp_path),
         if_exists="replace",
+        fabric_warehouse_types=fabric_warehouse_types,
     )
 
     assert written["path"].endswith(".parquet")
@@ -979,7 +1017,7 @@ def test_stage_dataframe_copy_into_writes_parquet_and_executes_copy(monkeypatch,
     assert truncate_params == {}
     assert "INSERT INTO [dbo].[stage_table] ([col])" in copy_sql
     assert "FROM OPENROWSET(" in copy_sql
-    assert "FORMAT = 'PARQUET'" in copy_sql
+    assert ("FORMAT = 'PARQUET'" in copy_sql) is expects_format
     assert f"BULK '{str(tmp_path).rstrip('/')}/stage_table/" in copy_sql
     assert "/*.parquet'" in copy_sql
     assert copy_params == {}
