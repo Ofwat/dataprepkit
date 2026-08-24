@@ -2532,7 +2532,7 @@ def test_feature_policy_reports_unavailable_detection(
         workbook_module,
         "_detected_features",
         lambda workbook, path: iter(
-            [("charts", "Data", None, "feature reader unavailable")]
+            [("charts", "Data", None, None, "feature reader unavailable")]
         ),
     )
     config = make_config().model_copy(
@@ -2569,7 +2569,7 @@ def test_feature_policy_ignores_unavailable_detection_with_diagnostic(
         workbook_module,
         "_detected_features",
         lambda workbook, path: iter(
-            [("charts", "Data", None, "feature reader unavailable")]
+            [("charts", "Data", None, None, "feature reader unavailable")]
         ),
     )
     config = make_config().model_copy(
@@ -2649,6 +2649,59 @@ def test_feature_policy_reports_external_link_and_pivot_package_fixtures(
         "external_links",
         "pivot_tables",
     }
+
+
+def test_feature_policy_lists_external_link_targets(tmp_path):
+    source_path = tmp_path / "source.xlsx"
+    candidate_path = tmp_path / "candidate.xlsx"
+    write_workbook(source_path, "Data")
+    with ZipFile(source_path) as source_zip, ZipFile(
+        candidate_path,
+        "w",
+        compression=ZIP_DEFLATED,
+    ) as target_zip:
+        for item in source_zip.infolist():
+            target_zip.writestr(item, source_zip.read(item.filename))
+        target_zip.writestr(
+            "xl/externalLinks/externalLink1.xml",
+            (
+                b'<externalLink xmlns="http://schemas.openxmlformats.org/'
+                b'spreadsheetml/2006/main" xmlns:r="http://schemas.openxml'
+                b'formats.org/officeDocument/2006/relationships">'
+                b'<externalBook r:id="rId1" /></externalLink>'
+            ),
+        )
+        target_zip.writestr(
+            "xl/externalLinks/_rels/externalLink1.xml.rels",
+            (
+                b'<Relationships xmlns="http://schemas.openxmlformats.org/'
+                b'package/2006/relationships">'
+                b'<Relationship Id="rId1" Type="external" '
+                b'Target="https://example.test/source.xlsx" />'
+                b'</Relationships>'
+            ),
+        )
+
+    config = make_config().model_copy(
+        update={
+            "runtime": RuntimePolicy(
+                max_cells_scanned=1000,
+                read_only=False,
+                macro_policy="reject",
+                missing_formula_cache_action="not_run",
+                feature_policy=WorkbookFeaturePolicy(
+                    external_links="warning",
+                ),
+            )
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is True
+    assert len(result.warnings) == 1
+    assert result.warnings[0].actual_value == "https://example.test/source.xlsx"
+    assert "https://example.test/source.xlsx" in result.warnings[0].description
 
 
 def test_feature_policy_reports_macro_enabled_file_fixture(tmp_path):

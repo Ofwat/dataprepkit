@@ -96,6 +96,7 @@ def validate_excel(
             feature_name,
             sheet_name,
             cell_reference,
+            detected_value,
             detection_error,
         ) in _detected_features(
             formula_workbook,
@@ -111,6 +112,7 @@ def validate_excel(
                     rule_code="feature_detection_unavailable",
                     sheet_name=sheet_name,
                     cell_reference=cell_reference,
+                    actual_value=detected_value,
                     severity=action,
                     description=description,
                 )
@@ -134,10 +136,13 @@ def validate_excel(
             description = f"Detected workbook feature: {feature_name}"
             if cell_reference is not None:
                 description += f" ({cell_reference})"
+            if detected_value is not None:
+                description += f": {detected_value}"
             event = ValidationEvent(
                 rule_code="feature_policy",
                 sheet_name=sheet_name,
                 cell_reference=cell_reference,
+                actual_value=detected_value,
                 severity=action,
                 description=description,
             )
@@ -1319,19 +1324,25 @@ def _date_value(value, options):
 
 def _detected_features(workbook, candidate_path):
     if candidate_path.suffix.lower() == ".xlsm":
-        yield "macros", None, None, None
+        yield "macros", None, None, None, None
     for feature_name, attribute in (
         ("external_links", "_external_links"),
         ("named_ranges", "defined_names"),
     ):
+        if feature_name == "external_links":
+            targets = _external_link_targets(workbook, candidate_path)
+            if targets:
+                for target in targets:
+                    yield feature_name, None, None, target, None
+                continue
         if _package_feature_present(candidate_path, feature_name):
-            yield feature_name, None, None, None
+            yield feature_name, None, None, None, None
             continue
         try:
             if getattr(workbook, attribute):
-                yield feature_name, None, None, None
+                yield feature_name, None, None, None, None
         except Exception as error:
-            yield feature_name, None, None, str(error)
+            yield feature_name, None, None, None, str(error)
     package_features = tuple(
         feature_name
         for feature_name in ("charts", "pivot_tables", "merged_cells")
@@ -1343,10 +1354,11 @@ def _detected_features(workbook, candidate_path):
                 feature_name,
                 None,
                 None,
+                None,
                 "openpyxl read-only mode does not expose this feature",
             )
         elif feature_name != "merged_cells":
-            yield feature_name, None, None, None
+            yield feature_name, None, None, None, None
     for sheet in workbook.worksheets:
         for feature_name, attribute in (
             ("charts", "_charts"),
@@ -1372,11 +1384,49 @@ def _detected_features(workbook, candidate_path):
                                 sheet.title,
                                 str(merged_range),
                                 None,
+                                None,
                             )
                     else:
-                        yield feature_name, sheet.title, None, None
+                        yield feature_name, sheet.title, None, None, None
             except Exception as error:
-                yield feature_name, sheet.title, None, str(error)
+                yield feature_name, sheet.title, None, None, str(error)
+
+
+def _external_link_targets(workbook, path):
+    targets = []
+    for external_link in getattr(workbook, "_external_links", []):
+        file_link = getattr(external_link, "file_link", None)
+        target = getattr(file_link, "Target", None)
+        if target is None:
+            target = getattr(file_link, "target", None)
+        if target and target not in targets:
+            targets.append(target)
+    try:
+        with ZipFile(path) as archive:
+            names = set(archive.namelist())
+            for name in sorted(names):
+                if not (
+                    name.startswith("xl/externalLinks/externalLink")
+                    and name.endswith(".xml")
+                ):
+                    continue
+                relationship_name = name.replace(
+                    "xl/externalLinks/",
+                    "xl/externalLinks/_rels/",
+                ).replace(".xml", ".xml.rels")
+                if relationship_name not in names:
+                    continue
+                relationships = archive.read(relationship_name)
+                for match in re.findall(
+                    rb'Target="([^"]+)"',
+                    relationships,
+                ):
+                    target = match.decode("utf-8")
+                    if target not in targets:
+                        targets.append(target)
+    except (OSError, ValueError):
+        pass
+    return targets
 
 
 def _package_feature_present(path, feature_name):
