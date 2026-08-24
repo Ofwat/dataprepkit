@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
@@ -462,6 +463,77 @@ class ValidationResult(_PublicModel):
     def raise_if_invalid(self) -> None:
         if not self.is_valid:
             raise ValidationFailedError(self)
+
+
+VALIDATION_RESULT_DATAFRAME_COLUMNS = [
+    "run_id",
+    "config_version",
+    "profile_name",
+    "candidate_filename",
+    "candidate_version",
+    "reference_version",
+    "is_valid",
+    "complete",
+    "event_type",
+    "rule_code",
+    "code",
+    "status",
+    "reason",
+    "severity",
+    "sheet_name",
+    "cell_reference",
+    "row_number",
+    "description",
+    "actual_value",
+    "expected_value",
+]
+
+
+def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
+    """Convert validation events and diagnostics into a tabular result."""
+    metadata = {
+        "run_id": result.run_id,
+        "config_version": result.config_version,
+        "profile_name": result.profile_name,
+        "candidate_filename": result.candidate_filename,
+        "candidate_version": result.candidate_version,
+        "reference_version": result.reference_version,
+        "is_valid": result.is_valid,
+        "complete": result.complete,
+    }
+    rows = []
+    for event_type, events in (
+        ("error", result.errors),
+        ("warning", result.warnings),
+        ("not_run", result.not_run),
+    ):
+        for event in events:
+            rows.append(
+                {
+                    **metadata,
+                    "event_type": event_type,
+                    "rule_code": event.rule_code,
+                    "status": event.status,
+                    "reason": event.reason,
+                    "severity": event.severity,
+                    "sheet_name": event.sheet_name,
+                    "description": event.description,
+                    "actual_value": event.actual_value,
+                    "expected_value": event.expected_value,
+                    "cell_reference": event.cell_reference,
+                    "row_number": event.row_number,
+                }
+            )
+    for diagnostic in result.diagnostics:
+        rows.append(
+            {
+                **metadata,
+                "event_type": "diagnostic",
+                "code": diagnostic.code,
+                "description": diagnostic.description,
+            }
+        )
+    return pd.DataFrame(rows, columns=VALIDATION_RESULT_DATAFRAME_COLUMNS)
 
 
 def dump_validation_result(

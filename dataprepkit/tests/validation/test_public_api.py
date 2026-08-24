@@ -30,6 +30,7 @@ from dataprepkit.validation import (
     TableConfig,
     ValidationEvent,
     ValidationResult,
+    validation_result_to_dataframe,
     WorkbookValidationConfig,
     WorkbookCheck,
     dump_validation_config,
@@ -236,6 +237,30 @@ def test_validation_result_round_trips_through_mapping_and_json():
 
     encoded = dump_validation_result(result, format="json")
     assert load_validation_result(encoded) == result
+
+
+def test_validation_result_to_dataframe_includes_events_and_metadata():
+    result = ValidationResult(
+        run_id="run-1",
+        config_version="1",
+        candidate_filename="candidate.xlsx",
+        errors=[
+            ValidationEvent(
+                rule_code="required_cell",
+                sheet_name="Data",
+                cell_reference="A1",
+                description="Value is required",
+            )
+        ],
+    )
+
+    frame = validation_result_to_dataframe(result)
+
+    assert list(frame["event_type"]) == ["error"]
+    assert frame.loc[0, "run_id"] == "run-1"
+    assert frame.loc[0, "rule_code"] == "required_cell"
+    assert frame.loc[0, "sheet_name"] == "Data"
+    assert frame.loc[0, "is_valid"] == False  # noqa: E712
 
 
 def test_validate_excel_populates_audit_metadata(tmp_path):
