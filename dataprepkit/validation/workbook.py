@@ -92,7 +92,12 @@ def validate_excel(
         warnings = []
         not_run = []
         diagnostics = []
-        for feature_name, sheet_name, detection_error in _detected_features(
+        for (
+            feature_name,
+            sheet_name,
+            cell_reference,
+            detection_error,
+        ) in _detected_features(
             formula_workbook,
             candidate_path,
         ):
@@ -105,6 +110,7 @@ def validate_excel(
                 event = ValidationEvent(
                     rule_code="feature_detection_unavailable",
                     sheet_name=sheet_name,
+                    cell_reference=cell_reference,
                     severity=action,
                     description=description,
                 )
@@ -126,9 +132,12 @@ def validate_excel(
                 feature_name,
             )
             description = f"Detected workbook feature: {feature_name}"
+            if cell_reference is not None:
+                description += f" ({cell_reference})"
             event = ValidationEvent(
                 rule_code="feature_policy",
                 sheet_name=sheet_name,
+                cell_reference=cell_reference,
                 severity=action,
                 description=description,
             )
@@ -1310,19 +1319,19 @@ def _date_value(value, options):
 
 def _detected_features(workbook, candidate_path):
     if candidate_path.suffix.lower() == ".xlsm":
-        yield "macros", None, None
+        yield "macros", None, None, None
     for feature_name, attribute in (
         ("external_links", "_external_links"),
         ("named_ranges", "defined_names"),
     ):
         if _package_feature_present(candidate_path, feature_name):
-            yield feature_name, None, None
+            yield feature_name, None, None, None
             continue
         try:
             if getattr(workbook, attribute):
-                yield feature_name, None, None
+                yield feature_name, None, None, None
         except Exception as error:
-            yield feature_name, None, str(error)
+            yield feature_name, None, None, str(error)
     package_features = tuple(
         feature_name
         for feature_name in ("charts", "pivot_tables", "merged_cells")
@@ -1333,10 +1342,11 @@ def _detected_features(workbook, candidate_path):
             yield (
                 feature_name,
                 None,
+                None,
                 "openpyxl read-only mode does not expose this feature",
             )
         elif feature_name != "merged_cells":
-            yield feature_name, None, None
+            yield feature_name, None, None, None
     for sheet in workbook.worksheets:
         for feature_name, attribute in (
             ("charts", "_charts"),
@@ -1355,9 +1365,18 @@ def _detected_features(workbook, candidate_path):
                 else:
                     present = bool(feature)
                 if present:
-                    yield feature_name, sheet.title, None
+                    if feature_name == "merged_cells":
+                        for merged_range in feature.ranges:
+                            yield (
+                                feature_name,
+                                sheet.title,
+                                str(merged_range),
+                                None,
+                            )
+                    else:
+                        yield feature_name, sheet.title, None, None
             except Exception as error:
-                yield feature_name, sheet.title, str(error)
+                yield feature_name, sheet.title, None, str(error)
 
 
 def _package_feature_present(path, feature_name):
