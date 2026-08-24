@@ -341,6 +341,10 @@ def _insert_rows(
 
 
 def _normalize_for_parquet(df: pd.DataFrame) -> pd.DataFrame:
+    def _is_missing_scalar(value) -> bool:
+        missing = pd.isna(value)
+        return getattr(missing, "ndim", 0) == 0 and bool(missing)
+
     normalized = df.copy()
     for col in normalized.columns:
         series = normalized[col]
@@ -348,7 +352,7 @@ def _normalize_for_parquet(df: pd.DataFrame) -> pd.DataFrame:
             normalized[col] = series.map(
                 lambda value: (
                     None
-                    if pd.isna(value)
+                    if _is_missing_scalar(value)
                     else pd.Timestamp(value).strftime("%Y-%m-%d %H:%M:%S.%f")
                 )
             )
@@ -358,7 +362,7 @@ def _normalize_for_parquet(df: pd.DataFrame) -> pd.DataFrame:
         normalized[col] = series.map(
             lambda value: (
                 None
-                if pd.isna(value)
+                if _is_missing_scalar(value)
                 else str(int(value))
                 if isinstance(value, float) and value.is_integer()
                 else value.decode("utf-8", errors="replace")

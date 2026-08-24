@@ -1202,6 +1202,57 @@ def test_stage_dataframe_copy_into_normalizes_mixed_object_columns(monkeypatch, 
     assert captured["values"] == ["A1", "10", None]
 
 
+def test_stage_dataframe_copy_into_normalizes_nested_object_values(
+    monkeypatch,
+    tmp_path,
+):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeConn:
+        def execute(self, statement, params=None):
+            return None
+
+    class _FakeBegin:
+        def __enter__(self):
+            return _FakeConn()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+        def begin(self):
+            return _FakeBegin()
+
+    class _FakeInspector:
+        @staticmethod
+        def has_table(_table, schema=None):
+            return True
+
+    captured = {}
+
+    def fake_to_parquet(self, path, index=False):
+        captured["values"] = self["actual_value"].tolist()
+
+    monkeypatch.setattr("dataprepkit.helpers.staging.ensure_schema_exists", lambda *_: None)
+    monkeypatch.setattr("dataprepkit.helpers.staging.inspect", lambda _: _FakeInspector())
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", fake_to_parquet)
+
+    stage_dataframe(
+        _FakeEngine(),
+        "stage_table",
+        pd.DataFrame({"actual_value": [[1, 2], None]}),
+        schema="dbo",
+        use_copy_into_parquet=True,
+        parquet_base_dir=str(tmp_path),
+        if_exists="append",
+    )
+
+    assert captured["values"] == ["[1, 2]", None]
+
+
 def test_stage_dataframe_copy_into_normalizes_integer_like_object_floats(monkeypatch, tmp_path):
     class _FakeDialect:
         name = "mssql"
