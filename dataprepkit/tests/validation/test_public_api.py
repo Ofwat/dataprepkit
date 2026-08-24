@@ -952,6 +952,47 @@ def test_formula_error_is_not_run_when_formula_cache_is_missing(tmp_path):
     assert result.not_run[0].cell_reference == "A1"
 
 
+def test_formula_error_accepts_cached_empty_string_result(tmp_path):
+    source_path = tmp_path / "source.xlsx"
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active["A1"] = '=IF(1=1,"","")'
+    workbook.save(source_path)
+
+    with ZipFile(source_path) as source_zip, ZipFile(
+        candidate_path,
+        "w",
+        compression=ZIP_DEFLATED,
+    ) as target_zip:
+        for item in source_zip.infolist():
+            content = source_zip.read(item.filename)
+            if item.filename == "xl/worksheets/sheet1.xml":
+                content = content.replace(
+                    b'<c r="A1">',
+                    b'<c r="A1" t="str">',
+                )
+            target_zip.writestr(item, content)
+
+    result = validate_excel(
+        candidate_path=candidate_path,
+        config=make_config(
+            workbook_checks=[
+                WorkbookCheck(
+                    rule_code="formula_error",
+                    enabled=True,
+                    scope="all_sheets",
+                    options={"error_tokens": ["#DIV/0!"]},
+                )
+            ]
+        ),
+    )
+
+    assert result.is_valid is True
+    assert result.errors == []
+    assert result.not_run == []
+
+
 def test_formula_error_fails_when_formula_cache_is_missing_and_policy_is_error(
     tmp_path,
 ):

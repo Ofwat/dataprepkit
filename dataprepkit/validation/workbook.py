@@ -1080,9 +1080,11 @@ def validate_excel(
             for formula_sheet in formula_workbook.worksheets:
                 value_sheet = value_workbook[formula_sheet.title]
                 for formula_cell in formula_resolution.cells(formula_sheet):
+                    value_cell = value_sheet[formula_cell.coordinate]
                     if (
                         formula_cell.data_type == "f"
-                        and value_sheet[formula_cell.coordinate].value is None
+                        and value_cell.value is None
+                        and value_cell.data_type not in {"s", "str"}
                     ):
                         missing_cache_cells.append(
                             (formula_sheet.title, formula_cell.coordinate)
