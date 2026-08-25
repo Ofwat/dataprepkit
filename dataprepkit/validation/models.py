@@ -614,6 +614,7 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                 "event_type": "summary",
                 "rule_code": rule_code,
                 "code": code,
+                "status": "PROCESSED",
                 "processed_count": processed_count,
                 "issue_count": issue_counts.get(key, 0),
                 "reason": "PROCESSING_SUMMARY",
