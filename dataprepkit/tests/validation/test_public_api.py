@@ -270,6 +270,19 @@ def test_validation_event_assigns_a_default_reason():
     assert event.reason == "REQUIRED_SHEET_MISSING"
 
 
+def test_validation_result_summary_status_reflects_rule_outcome():
+    result = ValidationResult(
+        processed_counts={"passed_rule": 10, "failed_rule": 10},
+        errors=[ValidationEvent(rule_code="failed_rule")],
+    )
+
+    frame = validation_result_to_dataframe(result)
+    statuses = frame.set_index("rule_code")["status"]
+
+    assert statuses["passed_rule"] == "PASSED"
+    assert statuses["failed_rule"] == "FAILED"
+
+
 def test_validate_excel_populates_audit_metadata(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     reference_path = tmp_path / "reference.xlsx"

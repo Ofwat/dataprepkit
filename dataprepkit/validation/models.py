@@ -553,10 +553,18 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
         return f"code:{code}" if code is not None else str(rule_code)
 
     issue_counts: dict[str, int] = {}
-    for events in (result.errors, result.warnings):
-        for event in events:
-            key = count_key(event.rule_code, None)
-            issue_counts[key] = issue_counts.get(key, 0) + 1
+    error_counts: dict[str, int] = {}
+    not_run_counts: dict[str, int] = {}
+    for event in result.errors:
+        key = count_key(event.rule_code, None)
+        issue_counts[key] = issue_counts.get(key, 0) + 1
+        error_counts[key] = error_counts.get(key, 0) + 1
+    for event in result.warnings:
+        key = count_key(event.rule_code, None)
+        issue_counts[key] = issue_counts.get(key, 0) + 1
+    for event in result.not_run:
+        key = count_key(event.rule_code, None)
+        not_run_counts[key] = not_run_counts.get(key, 0) + 1
     for diagnostic in result.diagnostics:
         key = count_key(None, diagnostic.code)
         issue_counts[key] = issue_counts.get(key, 0) + 1
@@ -608,13 +616,19 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
         else:
             rule_code = key
             code = None
+        if error_counts.get(key, 0):
+            summary_status = "FAILED"
+        elif processed_count == 0 and not_run_counts.get(key, 0):
+            summary_status = "NOT_RUN"
+        else:
+            summary_status = "PASSED"
         rows.append(
             {
                 **metadata,
                 "event_type": "summary",
                 "rule_code": rule_code,
                 "code": code,
-                "status": "PROCESSED",
+                "status": summary_status,
                 "processed_count": processed_count,
                 "issue_count": issue_counts.get(key, 0),
                 "reason": "PROCESSING_SUMMARY",
