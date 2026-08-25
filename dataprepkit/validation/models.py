@@ -429,6 +429,7 @@ class ValidationResult(_PublicModel):
     profile_name: str | None = None
     candidate_filename: str | None = None
     candidate_version: str | None = None
+    reference_filename: str | None = None
     reference_version: str | None = None
     comparison: ComparisonConfig | None = None
     complete: bool = True
@@ -471,6 +472,7 @@ VALIDATION_RESULT_DATAFRAME_COLUMNS = [
     "profile_name",
     "candidate_filename",
     "candidate_version",
+    "reference_filename",
     "reference_version",
     "is_valid",
     "complete",
@@ -497,6 +499,7 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
         "profile_name": result.profile_name,
         "candidate_filename": result.candidate_filename,
         "candidate_version": result.candidate_version,
+        "reference_filename": result.reference_filename,
         "reference_version": result.reference_version,
         "is_valid": result.is_valid,
         "complete": result.complete,

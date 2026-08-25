@@ -260,18 +260,22 @@ def test_validation_result_to_dataframe_includes_events_and_metadata():
     assert frame.loc[0, "run_id"] == "run-1"
     assert frame.loc[0, "rule_code"] == "required_cell"
     assert frame.loc[0, "sheet_name"] == "Data"
+    assert frame.loc[0, "reference_filename"] is None
     assert frame.loc[0, "is_valid"] == False  # noqa: E712
 
 
 def test_validate_excel_populates_audit_metadata(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
+    reference_path = tmp_path / "reference.xlsx"
     write_workbook(candidate_path, "Data")
+    write_workbook(reference_path, "Data")
     config = make_config().model_copy(
         update={"profile_name": "profile"},
     )
 
     result = validate_excel(
         candidate_path=candidate_path,
+        reference_path=reference_path,
         config=config,
         candidate_version="candidate-v1",
         run_id="run-1",
@@ -281,6 +285,7 @@ def test_validate_excel_populates_audit_metadata(tmp_path):
     assert result.config_version == "1"
     assert result.profile_name == "profile"
     assert result.candidate_filename == "candidate.xlsx"
+    assert result.reference_filename == "reference.xlsx"
     assert result.candidate_version == "candidate-v1"
     assert result.comparison == config.comparison
 

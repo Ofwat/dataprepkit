@@ -36,12 +36,14 @@ def validate_excel(
 ):
     resolved_config = validate_config(config)
     candidate_path = Path(candidate_path)
+    reference_path = Path(reference_path) if reference_path is not None else None
     result_metadata = {
         "run_id": run_id,
         "config_version": resolved_config.config_version,
         "profile_name": resolved_config.profile_name,
         "candidate_filename": candidate_path.name,
         "candidate_version": candidate_version,
+        "reference_filename": reference_path.name if reference_path else None,
         "reference_version": reference_version,
         "comparison": resolved_config.comparison,
     }
@@ -63,7 +65,6 @@ def validate_excel(
             keep_vba=candidate_path.suffix.lower() == ".xlsm",
         )
         if reference_path is not None:
-            reference_path = Path(reference_path)
             reference_formula_workbook = openpyxl.load_workbook(
                 reference_path,
                 read_only=resolved_config.runtime.read_only,
