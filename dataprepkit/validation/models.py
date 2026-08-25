@@ -473,6 +473,7 @@ class ValidationResult(_PublicModel):
     comparison: ComparisonConfig | None = None
     complete: bool = True
     processed_counts: dict[str, int] = Field(default_factory=dict)
+    processed_severities: dict[str, str | None] = Field(default_factory=dict)
     diagnostics: list[DiagnosticEvent] = Field(default_factory=list)
     errors: list[ValidationEvent] = Field(default_factory=list)
     warnings: list[ValidationEvent] = Field(default_factory=list)
@@ -615,6 +616,8 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                 "code": code,
                 "processed_count": processed_count,
                 "issue_count": issue_counts.get(key, 0),
+                "reason": "PROCESSING_SUMMARY",
+                "severity": result.processed_severities.get(key),
             }
         )
     return pd.DataFrame(rows, columns=VALIDATION_RESULT_DATAFRAME_COLUMNS)

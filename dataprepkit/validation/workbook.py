@@ -94,6 +94,16 @@ def validate_excel(
         not_run = []
         diagnostics = []
         processed_counts = {}
+        processed_severities = dict(resolved_config.rule_severity)
+        for check in resolved_config.workbook_checks:
+            processed_severities.setdefault(
+                check.rule_code,
+                check.severity,
+            )
+        processed_severities.setdefault(
+            "extra_sheet",
+            resolved_config.sheet_policy.extra_sheet_action,
+        )
 
         def record_processed(rule_code=None, count=1, code=None):
             key = f"code:{code}" if code is not None else rule_code
@@ -118,8 +128,10 @@ def validate_excel(
             if detection_error is not None:
                 action = resolved_config.runtime.feature_policy.unavailable_action
                 if action == "ignore":
+                    processed_severities["code:FEATURE_DETECTION_UNAVAILABLE"] = action
                     record_processed(code="FEATURE_DETECTION_UNAVAILABLE")
                 else:
+                    processed_severities["feature_detection_unavailable"] = action
                     record_processed("feature_detection_unavailable")
                 description = (
                     f"Feature detection unavailable for {feature_name}: "
@@ -152,8 +164,10 @@ def validate_excel(
                 feature_name,
             )
             if action == "ignore":
+                processed_severities["code:FEATURE_DETECTED"] = action
                 record_processed(code="FEATURE_DETECTED")
             else:
+                processed_severities["feature_policy"] = action
                 record_processed("feature_policy")
             description = f"Detected workbook feature: {feature_name}"
             if cell_reference is not None:
@@ -269,6 +283,7 @@ def validate_excel(
                 **result_metadata,
                 complete=False,
                 processed_counts=processed_counts,
+                processed_severities=processed_severities,
                 errors=errors,
                 warnings=warnings,
                 not_run=not_run,
@@ -760,6 +775,18 @@ def validate_excel(
                             )
                     continue
                 for validation in table.column_validations:
+                    for rule_code, enabled in (
+                        ("missing_value", validation.required or validation.null_policy == "error"),
+                        ("duplicate_value", validation.unique),
+                        ("allowed_values", validation.allowed_values is not None),
+                        ("forbidden_values", validation.forbidden_values is not None),
+                    ):
+                        if enabled:
+                            processed_severities.setdefault(
+                                rule_code,
+                                validation.severity
+                                or resolved_config.rule_severity.get(rule_code),
+                            )
                     column_number = logical_columns.get(validation.column)
                     if column_number is None:
                         continue
@@ -1225,6 +1252,7 @@ def validate_excel(
         return ValidationResult(
             **result_metadata,
             processed_counts=processed_counts,
+            processed_severities=processed_severities,
             errors=errors,
             warnings=warnings,
             not_run=not_run,
