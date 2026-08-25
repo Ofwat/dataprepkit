@@ -1139,6 +1139,7 @@ def validate_excel(
                     if cell.data_type == "e" or cell.value in tokens:
                         event = ValidationEvent(
                             rule_code="formula_error",
+                            reason="FORMULA_ERROR_VALUE",
                             severity=severity,
                             sheet_name=sheet.title,
                             cell_reference=cell.coordinate,
