@@ -281,6 +281,9 @@ def test_validation_result_summary_status_reflects_rule_outcome():
 
     assert statuses["passed_rule"] == "PASSED"
     assert statuses["failed_rule"] == "FAILED"
+    reasons = frame.set_index("rule_code")["reason"]
+    assert reasons["failed_rule"] == "FAILED_RULE_EVENT"
+    assert reasons["passed_rule"] == "PASSED_RULE_EVENT"
 
 
 def test_validate_excel_populates_audit_metadata(tmp_path):
