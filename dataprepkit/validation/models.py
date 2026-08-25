@@ -472,6 +472,7 @@ class ValidationResult(_PublicModel):
     reference_version: str | None = None
     comparison: ComparisonConfig | None = None
     complete: bool = True
+    processed_counts: dict[str, int] = Field(default_factory=dict)
     diagnostics: list[DiagnosticEvent] = Field(default_factory=list)
     errors: list[ValidationEvent] = Field(default_factory=list)
     warnings: list[ValidationEvent] = Field(default_factory=list)
@@ -516,6 +517,8 @@ VALIDATION_RESULT_DATAFRAME_COLUMNS = [
     "is_valid",
     "complete",
     "event_type",
+    "processed_count",
+    "issue_count",
     "rule_code",
     "code",
     "status",
@@ -545,6 +548,18 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
         "complete": result.complete,
     }
     rows = []
+    def count_key(rule_code: str | None, code: str | None) -> str:
+        return f"code:{code}" if code is not None else str(rule_code)
+
+    issue_counts: dict[str, int] = {}
+    for events in (result.errors, result.warnings):
+        for event in events:
+            key = count_key(event.rule_code, None)
+            issue_counts[key] = issue_counts.get(key, 0) + 1
+    for diagnostic in result.diagnostics:
+        key = count_key(None, diagnostic.code)
+        issue_counts[key] = issue_counts.get(key, 0) + 1
+
     for event_type, events in (
         ("error", result.errors),
         ("warning", result.warnings),
@@ -555,6 +570,10 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                 {
                     **metadata,
                     "event_type": event_type,
+                    "processed_count": result.processed_counts.get(
+                        count_key(event.rule_code, None)
+                    ),
+                    "issue_count": None,
                     "rule_code": event.rule_code,
                     "status": event.status,
                     "reason": event.reason,
@@ -571,10 +590,31 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
     for diagnostic in result.diagnostics:
         rows.append(
             {
+                    **metadata,
+                    "event_type": "diagnostic",
+                    "processed_count": result.processed_counts.get(
+                        count_key(None, diagnostic.code)
+                    ),
+                    "issue_count": None,
+                    "code": diagnostic.code,
+                    "description": diagnostic.description,
+                }
+            )
+    for key, processed_count in result.processed_counts.items():
+        if key.startswith("code:"):
+            rule_code = None
+            code = key[5:]
+        else:
+            rule_code = key
+            code = None
+        rows.append(
+            {
                 **metadata,
-                "event_type": "diagnostic",
-                "code": diagnostic.code,
-                "description": diagnostic.description,
+                "event_type": "summary",
+                "rule_code": rule_code,
+                "code": code,
+                "processed_count": processed_count,
+                "issue_count": issue_counts.get(key, 0),
             }
         )
     return pd.DataFrame(rows, columns=VALIDATION_RESULT_DATAFRAME_COLUMNS)
