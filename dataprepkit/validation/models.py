@@ -415,6 +415,7 @@ class ValidationEvent(_PublicModel):
     expected_value: Any = None
     cell_reference: str | None = None
     row_number: int | None = None
+    column_number: int | None = None
 
     @model_validator(mode="after")
     def default_reason(self):
@@ -442,6 +443,16 @@ class ValidationEvent(_PublicModel):
                 self.rule_code,
                 f"{normalized_code}_EVENT",
             )
+        if self.column_number is None and self.cell_reference is not None:
+            match = re.fullmatch(
+                r"\$?([A-Za-z]{1,3})\$?[1-9][0-9]*",
+                self.cell_reference,
+            )
+            if match:
+                self.column_number = sum(
+                    (ord(character.upper()) - ord("A") + 1) * 26**power
+                    for power, character in enumerate(reversed(match.group(1)))
+                )
         return self
 
 
@@ -513,6 +524,7 @@ VALIDATION_RESULT_DATAFRAME_COLUMNS = [
     "sheet_name",
     "cell_reference",
     "row_number",
+    "column_number",
     "description",
     "actual_value",
     "expected_value",
@@ -553,6 +565,7 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                     "expected_value": event.expected_value,
                     "cell_reference": event.cell_reference,
                     "row_number": event.row_number,
+                    "column_number": event.column_number,
                 }
             )
     for diagnostic in result.diagnostics:

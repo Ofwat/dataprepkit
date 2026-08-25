@@ -960,6 +960,7 @@ def test_validate_excel_reports_configured_formula_errors(tmp_path):
     assert result.errors[0].sheet_name == "Data"
     assert result.errors[0].cell_reference == "A1"
     assert result.errors[0].row_number == 1
+    assert result.errors[0].column_number == 1
     assert result.errors[0].actual_value == "#DIV/0!"
     assert result.errors[0].expected_value is None
     assert result.errors[0].reason == "FORMULA_ERROR_VALUE"
