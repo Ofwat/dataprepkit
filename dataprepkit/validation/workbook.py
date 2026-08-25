@@ -111,6 +111,7 @@ def validate_excel(
                 )
                 event = ValidationEvent(
                     rule_code="feature_detection_unavailable",
+                    reason="FEATURE_DETECTION_UNAVAILABLE",
                     sheet_name=sheet_name,
                     cell_reference=cell_reference,
                     actual_value=detected_value,
@@ -141,6 +142,7 @@ def validate_excel(
                 description += f": {detected_value}"
             event = ValidationEvent(
                 rule_code="feature_policy",
+                reason="FEATURE_DETECTED",
                 sheet_name=sheet_name,
                 cell_reference=cell_reference,
                 actual_value=detected_value,

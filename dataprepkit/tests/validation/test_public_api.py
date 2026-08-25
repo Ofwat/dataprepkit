@@ -2470,6 +2470,7 @@ def test_feature_policy_reports_merged_cells(tmp_path):
     assert result.is_valid is False
     assert [event.rule_code for event in result.errors] == ["feature_policy"]
     assert "merged_cells" in result.errors[0].description
+    assert result.errors[0].reason == "FEATURE_DETECTED"
     assert result.errors[0].sheet_name == "Data"
     assert result.errors[0].cell_reference == "A1:B1"
 
@@ -2499,6 +2500,7 @@ def test_feature_policy_warning_does_not_invalidate_result(tmp_path):
 
     assert result.is_valid is True
     assert [event.rule_code for event in result.warnings] == ["feature_policy"]
+    assert result.warnings[0].reason == "FEATURE_DETECTED"
     assert result.warnings[0].sheet_name == "Data"
     assert result.warnings[0].cell_reference == "A1:B1"
     assert result.diagnostics == []
@@ -2618,6 +2620,7 @@ def test_feature_policy_reports_unavailable_detection(
         "feature_detection_unavailable",
     ]
     assert "feature reader unavailable" in getattr(result, bucket)[0].description
+    assert getattr(result, bucket)[0].reason == "FEATURE_DETECTION_UNAVAILABLE"
 
 
 def test_feature_policy_ignores_unavailable_detection_with_diagnostic(
