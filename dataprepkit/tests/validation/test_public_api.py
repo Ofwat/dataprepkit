@@ -959,6 +959,7 @@ def test_validate_excel_reports_configured_formula_errors(tmp_path):
     assert result.errors[0].rule_code == "formula_error"
     assert result.errors[0].sheet_name == "Data"
     assert result.errors[0].cell_reference == "A1"
+    assert result.errors[0].row_number == 1
     assert result.errors[0].actual_value == "#DIV/0!"
     assert result.errors[0].expected_value is None
     assert result.errors[0].reason == "FORMULA_ERROR_VALUE"
@@ -1019,6 +1020,7 @@ def test_formula_error_is_not_run_when_formula_cache_is_missing(tmp_path):
     assert result.not_run[0].rule_code == "formula_error"
     assert result.not_run[0].reason == "FORMULA_RESULTS_UNAVAILABLE"
     assert result.not_run[0].cell_reference == "A1"
+    assert result.not_run[0].row_number == 1
 
 
 def test_formula_error_accepts_cached_empty_string_result(tmp_path):

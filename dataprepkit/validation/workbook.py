@@ -1107,7 +1107,11 @@ def validate_excel(
                         and value_cell.data_type not in {"s", "str"}
                     ):
                         missing_cache_cells.append(
-                            (formula_sheet.title, formula_cell.coordinate)
+                            (
+                                formula_sheet.title,
+                                formula_cell.coordinate,
+                                formula_cell.row,
+                            )
                         )
             if missing_cache_cells:
                 status = (
@@ -1115,7 +1119,7 @@ def validate_excel(
                     if missing_cache_action == "not_run"
                     else "FAILED"
                 )
-                for sheet_name, cell_reference in missing_cache_cells:
+                for sheet_name, cell_reference, row_number in missing_cache_cells:
                     event = ValidationEvent(
                         rule_code="formula_error",
                         status=status,
@@ -1123,6 +1127,7 @@ def validate_excel(
                         severity=severity,
                         sheet_name=sheet_name,
                         cell_reference=cell_reference,
+                        row_number=row_number,
                         description=(
                             "Formula result is unavailable because the "
                             "workbook has no cached value"
@@ -1145,6 +1150,7 @@ def validate_excel(
                             severity=severity,
                             sheet_name=sheet.title,
                             cell_reference=cell.coordinate,
+                            row_number=cell.row,
                             actual_value=cell.value,
                             expected_value=None,
                             description=(
