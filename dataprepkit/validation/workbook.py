@@ -1088,6 +1088,9 @@ def validate_excel(
             if check.rule_code != "formula_error":
                 continue
             tokens = (check.options or {}).get("error_tokens", [])
+            severity = check.severity or resolved_config.rule_severity.get(
+                "formula_error"
+            )
             missing_cache_action = (
                 resolved_config.runtime.missing_formula_cache_action
             )
@@ -1115,6 +1118,7 @@ def validate_excel(
                         rule_code="formula_error",
                         status=status,
                         reason="FORMULA_RESULTS_UNAVAILABLE",
+                        severity=severity,
                         sheet_name=sheet_name,
                         cell_reference=cell_reference,
                         description=(
@@ -1124,6 +1128,8 @@ def validate_excel(
                     )
                     if status == "NOT_RUN":
                         not_run.append(event)
+                    elif severity == "warning":
+                        warnings.append(event)
                     else:
                         errors.append(event)
                 if status == "NOT_RUN":
@@ -1131,18 +1137,21 @@ def validate_excel(
             for sheet in value_workbook.worksheets:
                 for cell in value_resolution.cells(sheet):
                     if cell.data_type == "e" or cell.value in tokens:
-                        errors.append(
-                            ValidationEvent(
-                                rule_code="formula_error",
-                                sheet_name=sheet.title,
-                                cell_reference=cell.coordinate,
-                                actual_value=cell.value,
-                                expected_value=None,
-                                description=(
-                                    f"Excel error value found: {cell.value}"
-                                ),
-                            )
+                        event = ValidationEvent(
+                            rule_code="formula_error",
+                            severity=severity,
+                            sheet_name=sheet.title,
+                            cell_reference=cell.coordinate,
+                            actual_value=cell.value,
+                            expected_value=None,
+                            description=(
+                                f"Excel error value found: {cell.value}"
+                            ),
                         )
+                        if severity == "warning":
+                            warnings.append(event)
+                        else:
+                            errors.append(event)
         return ValidationResult(
             **result_metadata,
             errors=errors,

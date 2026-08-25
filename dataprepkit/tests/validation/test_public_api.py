@@ -306,6 +306,7 @@ def test_validation_config_merges_caller_overrides_over_profile():
                 rule_code="formula_error",
                 enabled=True,
                 scope="all_sheets",
+                severity="error",
                 options={"error_tokens": ["#DIV/0!"]},
             )
         ],
@@ -954,6 +955,35 @@ def test_validate_excel_reports_configured_formula_errors(tmp_path):
     assert result.errors[0].cell_reference == "A1"
     assert result.errors[0].actual_value == "#DIV/0!"
     assert result.errors[0].expected_value is None
+    assert result.errors[0].severity == "error"
+
+
+def test_validate_excel_applies_formula_error_warning_severity(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active["A1"] = "#DIV/0!"
+    workbook.save(candidate_path)
+
+    config = make_config(
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="formula_error",
+                enabled=True,
+                scope="all_sheets",
+                severity="warning",
+                options={"error_tokens": ["#DIV/0!"]},
+            )
+        ]
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is True
+    assert result.errors == []
+    assert len(result.warnings) == 1
+    assert result.warnings[0].severity == "warning"
+    assert result.warnings[0].actual_value == "#DIV/0!"
 
 
 def test_formula_error_is_not_run_when_formula_cache_is_missing(tmp_path):
