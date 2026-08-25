@@ -416,6 +416,34 @@ class ValidationEvent(_PublicModel):
     cell_reference: str | None = None
     row_number: int | None = None
 
+    @model_validator(mode="after")
+    def default_reason(self):
+        if self.reason is None:
+            default_reasons = {
+                "required_sheet": "REQUIRED_SHEET_MISSING",
+                "extra_sheet": "EXTRA_SHEET_DETECTED",
+                "expected_cell": "EXPECTED_CELL_MISMATCH",
+                "table_resolution": "TABLE_RESOLUTION_FAILED",
+                "column_header": "COLUMN_HEADER_INVALID",
+                "non_empty_data": "NO_USABLE_DATA",
+                "empty_row_pattern": "EMPTY_ROW_VIOLATION",
+                "missing_value": "REQUIRED_VALUE_MISSING",
+                "duplicate_value": "DUPLICATE_VALUE",
+                "allowed_values": "VALUE_NOT_ALLOWED",
+                "forbidden_values": "VALUE_FORBIDDEN",
+                "missing_reference_sheet": "REFERENCE_SHEET_MISSING",
+                "sheet_structure": "SHEET_STRUCTURE_MISMATCH",
+                "formula_difference": "FORMULA_DIFFERENCE",
+                "sheet_selector": "SHEET_SELECTOR_MULTIPLE_MATCHES",
+                "WORKBOOK_LIMIT_ERROR": "WORKBOOK_CELL_LIMIT_EXCEEDED",
+            }
+            normalized_code = self.rule_code.upper().replace("-", "_")
+            self.reason = default_reasons.get(
+                self.rule_code,
+                f"{normalized_code}_EVENT",
+            )
+        return self
+
 
 class DiagnosticEvent(_PublicModel):
     run_id: str | None = None

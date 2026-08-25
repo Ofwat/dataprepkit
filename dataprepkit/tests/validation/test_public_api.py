@@ -264,6 +264,12 @@ def test_validation_result_to_dataframe_includes_events_and_metadata():
     assert frame.loc[0, "is_valid"] == False  # noqa: E712
 
 
+def test_validation_event_assigns_a_default_reason():
+    event = ValidationEvent(rule_code="required_sheet")
+
+    assert event.reason == "REQUIRED_SHEET_MISSING"
+
+
 def test_validate_excel_populates_audit_metadata(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     reference_path = tmp_path / "reference.xlsx"
