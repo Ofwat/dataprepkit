@@ -952,6 +952,8 @@ def test_validate_excel_reports_configured_formula_errors(tmp_path):
     assert result.errors[0].rule_code == "formula_error"
     assert result.errors[0].sheet_name == "Data"
     assert result.errors[0].cell_reference == "A1"
+    assert result.errors[0].actual_value == "#DIV/0!"
+    assert result.errors[0].expected_value is None
 
 
 def test_formula_error_is_not_run_when_formula_cache_is_missing(tmp_path):

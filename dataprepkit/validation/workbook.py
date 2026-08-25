@@ -1137,7 +1137,7 @@ def validate_excel(
                                 sheet_name=sheet.title,
                                 cell_reference=cell.coordinate,
                                 actual_value=cell.value,
-                                expected_value=tokens,
+                                expected_value=None,
                                 description=(
                                     f"Excel error value found: {cell.value}"
                                 ),
