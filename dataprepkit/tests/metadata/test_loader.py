@@ -1010,6 +1010,10 @@ def test_stage_dataframe_copy_into_writes_parquet_and_executes_copy(
     assert written["path"].endswith(".parquet")
     assert written["index"] is False
     assert "BATCHstage_" in written["path"]
+    batch_id = Path(written["path"]).parent.name.split("__BATCH", 1)[1]
+    assert batch_id.startswith("stage_")
+    assert len(batch_id.removeprefix("stage_")) == 32
+    assert all(character in "0123456789abcdef" for character in batch_id[6:])
     assert len(engine.conn.calls) == 2
     truncate_sql, truncate_params = engine.conn.calls[0]
     copy_sql, copy_params = engine.conn.calls[1]

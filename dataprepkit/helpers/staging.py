@@ -477,7 +477,7 @@ def stage_dataframe(
 
             path_info = archive_dataframe_path(
                 table_name=resolved_table,
-                batch_id=f"stage_{uuid.uuid4().hex[:8]}",
+                batch_id=f"stage_{uuid.uuid4().hex}",
                 base_dir=parquet_base_dir,
             )
             normalized_df = _normalize_for_parquet(df)
