@@ -1976,6 +1976,73 @@ def test_validate_excel_reports_sheet_structure_differences(tmp_path):
     }
 
 
+def test_dependent_formula_check_is_not_run_when_structure_fails(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    reference_path = tmp_path / "reference.xlsx"
+
+    candidate = openpyxl.Workbook()
+    candidate.active.title = "Data"
+    candidate.active["A1"] = "value"
+    candidate.active["B1"] = "=SUM(A1)"
+    candidate.save(candidate_path)
+
+    reference = openpyxl.Workbook()
+    reference.active.title = "Data"
+    reference.active["A1"] = "value"
+    reference.active["B1"] = "=SUM(A2)"
+    reference.active["C1"] = "extra"
+    reference.save(reference_path)
+
+    config = make_config(
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="formula_difference",
+                enabled=True,
+                scope="overlapping_sheets",
+                depends_on=["sheet_structure"],
+            ),
+            WorkbookCheck(
+                rule_code="sheet_structure",
+                enabled=True,
+                scope="overlapping_sheets",
+            ),
+        ]
+    )
+
+    result = validate_excel(
+        candidate_path=candidate_path,
+        reference_path=reference_path,
+        config=config,
+    )
+
+    assert [event.rule_code for event in result.errors] == ["sheet_structure"]
+    assert len(result.not_run) == 1
+    assert result.not_run[0].rule_code == "formula_difference"
+    assert result.not_run[0].reason == "DEPENDENCY_FAILED"
+    assert result.not_run[0].expected_value == ["sheet_structure"]
+
+
+def test_rule_dependencies_reject_cycles():
+    config = make_config(workbook_checks=[]).model_dump(mode="json")
+    config["workbook_checks"] = [
+        {
+            "rule_code": "first",
+            "enabled": True,
+            "scope": "all_sheets",
+            "depends_on": ["second"],
+        },
+        {
+            "rule_code": "second",
+            "enabled": True,
+            "scope": "all_sheets",
+            "depends_on": ["first"],
+        },
+    ]
+
+    with pytest.raises(ConfigurationError, match="cycles"):
+        validate_config(config)
+
+
 def test_reference_structure_check_is_not_run_without_reference_workbook(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     write_workbook(candidate_path, "Data")

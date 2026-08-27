@@ -78,6 +78,29 @@ runtime:
 the issue in `result.warnings`. `ignore` records a diagnostic in
 `result.diagnostics`.
 
+## Rule dependencies
+
+Workbook checks can declare prerequisites with `depends_on`. Dependencies are
+resolved in order even when the checks are listed in a different order. A
+dependent check runs only when every dependency completes without errors.
+Warnings count as a passing dependency; disabled or `NOT_RUN` dependencies
+block dependent checks and produce a `NOT_RUN` event.
+
+```yaml
+workbook_checks:
+  - rule_code: formula_difference
+    enabled: true
+    scope: overlapping_sheets
+    depends_on:
+      - sheet_structure
+  - rule_code: sheet_structure
+    enabled: true
+    scope: overlapping_sheets
+```
+
+Dependencies must refer to another configured `workbook_checks` rule. Duplicate
+rule codes and dependency cycles are rejected during configuration validation.
+
 ## Comparison options
 
 `comparison` defines the SQL Server-oriented text comparison policy:

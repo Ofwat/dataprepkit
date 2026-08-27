@@ -25,6 +25,25 @@ from .models import (
 from .registry import get_registered_rule, validate_custom_result
 
 
+def _ordered_workbook_checks(checks):
+    by_rule = {check.rule_code: check for check in checks}
+    ordered = []
+    visited = set()
+
+    def visit(rule_code):
+        if rule_code in visited:
+            return
+        visited.add(rule_code)
+        check = by_rule[rule_code]
+        for dependency in check.depends_on:
+            visit(dependency)
+        ordered.append(check)
+
+    for check in checks:
+        visit(check.rule_code)
+    return ordered
+
+
 def validate_excel(
     candidate_path,
     config: WorkbookValidationConfig,
@@ -979,7 +998,45 @@ def validate_excel(
                                     ),
                                 )
                             )
-        for check_index, check in enumerate(resolved_config.workbook_checks):
+        rule_outcomes = {}
+        workbook_checks = _ordered_workbook_checks(
+            resolved_config.workbook_checks
+        )
+        for check_index, check in enumerate(workbook_checks):
+            if any(
+                rule_outcomes.get(dependency) != "passed"
+                for dependency in check.depends_on
+            ):
+                failed_dependencies = [
+                    dependency
+                    for dependency in check.depends_on
+                    if rule_outcomes.get(dependency) != "passed"
+                ]
+                dependency_reason = (
+                    "DEPENDENCY_FAILED"
+                    if any(
+                        rule_outcomes.get(dependency) == "failed"
+                        for dependency in failed_dependencies
+                    )
+                    else "DEPENDENCY_NOT_RUN"
+                )
+                record_processed(check.rule_code, 0)
+                not_run.append(
+                    ValidationEvent(
+                        rule_code=check.rule_code,
+                        status="NOT_RUN",
+                        reason=dependency_reason,
+                        severity=check.severity
+                        or resolved_config.rule_severity.get(check.rule_code),
+                        expected_value=failed_dependencies,
+                        description=(
+                            f"Rule depends on checks that did not pass: "
+                            f"{', '.join(failed_dependencies)}"
+                        ),
+                    )
+                )
+                rule_outcomes[check.rule_code] = "not_run"
+                continue
             if (
                 not check.enabled
                 or (
@@ -998,6 +1055,7 @@ def validate_excel(
                         description="Rule is disabled by configuration",
                     )
                 )
+                rule_outcomes[check.rule_code] = "not_run"
                 continue
             if check.rule_code != "formula_error":
                 record_processed(check.rule_code)
@@ -1021,6 +1079,12 @@ def validate_excel(
                         warnings.append(event)
                     else:
                         errors.append(event)
+                if any(event.rule_code == check.rule_code for event in errors):
+                    rule_outcomes[check.rule_code] = "failed"
+                elif any(event.rule_code == check.rule_code for event in not_run):
+                    rule_outcomes[check.rule_code] = "not_run"
+                else:
+                    rule_outcomes[check.rule_code] = "passed"
                 continue
             if check.rule_code == "missing_reference_sheet":
                 if reference_workbook is None:
@@ -1034,6 +1098,7 @@ def validate_excel(
                             ),
                         )
                     )
+                    rule_outcomes[check.rule_code] = "not_run"
                     continue
                 candidate_names = set(formula_workbook.sheetnames)
                 for sheet_name in reference_workbook.sheetnames:
@@ -1047,6 +1112,11 @@ def validate_excel(
                                     f"{sheet_name}"
                                 ),
                             )
+                        )
+                rule_outcomes[check.rule_code] = (
+                    "failed"
+                    if any(event.rule_code == check.rule_code for event in errors)
+                    else "passed"
                 )
                 continue
             if check.rule_code == "sheet_structure":
@@ -1061,6 +1131,7 @@ def validate_excel(
                             ),
                         )
                     )
+                    rule_outcomes[check.rule_code] = "not_run"
                     continue
                 reference_sheets = {
                     sheet.title: sheet for sheet in reference_workbook.worksheets
@@ -1098,6 +1169,11 @@ def validate_excel(
                             ),
                         )
                     )
+                rule_outcomes[check.rule_code] = (
+                    "failed"
+                    if any(event.rule_code == check.rule_code for event in errors)
+                    else "passed"
+                )
                 continue
             if check.rule_code == "formula_difference":
                 whitespace_policy = (check.options or {}).get(
@@ -1123,6 +1199,7 @@ def validate_excel(
                             ),
                         )
                     )
+                    rule_outcomes[check.rule_code] = "not_run"
                     continue
                 reference_sheets = {
                     sheet.title: sheet for sheet in reference_formula_workbook.worksheets
@@ -1171,8 +1248,14 @@ def validate_excel(
                                     ),
                                 )
                             )
+                rule_outcomes[check.rule_code] = (
+                    "failed"
+                    if any(event.rule_code == check.rule_code for event in errors)
+                    else "passed"
+                )
                 continue
             if check.rule_code != "formula_error":
+                rule_outcomes[check.rule_code] = "passed"
                 continue
             processed_counts.setdefault("formula_error", 0)
             tokens = (check.options or {}).get("error_tokens", [])
@@ -1226,6 +1309,7 @@ def validate_excel(
                     else:
                         errors.append(event)
                 if status == "NOT_RUN":
+                    rule_outcomes[check.rule_code] = "not_run"
                     continue
             for sheet in value_workbook.worksheets:
                 for cell in value_resolution.cells(sheet):
@@ -1248,6 +1332,11 @@ def validate_excel(
                             warnings.append(event)
                         else:
                             errors.append(event)
+            rule_outcomes[check.rule_code] = (
+                "failed"
+                if any(event.rule_code == check.rule_code for event in errors)
+                else "passed"
+            )
         finalize_processed_counts()
         return ValidationResult(
             **result_metadata,

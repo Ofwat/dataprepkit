@@ -28,6 +28,8 @@ workbook_checks:
   - rule_code: formula_difference
     enabled: true
     scope: overlapping_sheets
+    depends_on:
+      - sheet_structure
     options:
       whitespace_policy: normalised
   - rule_code: formula_error

@@ -560,6 +560,13 @@
           "default": null,
           "title": "Options"
         },
+        "depends_on": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Depends On",
+          "type": "array"
+        },
         "rule_code": {
           "title": "Rule Code",
           "type": "string"

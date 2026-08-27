@@ -332,7 +332,17 @@ class WorkbookCheck(_PublicModel):
     enabled: bool
     scope: str
     options: dict[str, Any] | None = None
+    depends_on: list[str] = Field(default_factory=list)
     severity: str | None = None
+
+    @field_validator("depends_on")
+    @classmethod
+    def validate_dependencies(cls, value):
+        if len(value) != len(set(value)):
+            raise ValueError("depends_on must not contain duplicates")
+        if any(not dependency for dependency in value):
+            raise ValueError("depends_on must contain non-empty rule codes")
+        return value
 
     @model_validator(mode="after")
     def validate_rule_options(self):
@@ -395,6 +405,37 @@ class WorkbookValidationConfig(_PublicModel):
     rule_severity: dict[str, str] = Field(default_factory=dict)
     runtime: RuntimePolicy
     compatibility: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_rule_dependencies(self):
+        checks = {check.rule_code: check for check in self.workbook_checks}
+        if len(checks) != len(self.workbook_checks):
+            raise ValueError("workbook_checks must not contain duplicate rule codes")
+        for check in self.workbook_checks:
+            missing = set(check.depends_on) - checks.keys()
+            if missing:
+                raise ValueError(
+                    f"dependencies for {check.rule_code} are not configured: "
+                    f"{sorted(missing)}"
+                )
+
+        visiting = set()
+        visited = set()
+
+        def visit(rule_code):
+            if rule_code in visiting:
+                raise ValueError("workbook rule dependencies must not contain cycles")
+            if rule_code in visited:
+                return
+            visiting.add(rule_code)
+            for dependency in checks[rule_code].depends_on:
+                visit(dependency)
+            visiting.remove(rule_code)
+            visited.add(rule_code)
+
+        for rule_code in checks:
+            visit(rule_code)
+        return self
 
 
 class RuleContext(_PublicModel):
