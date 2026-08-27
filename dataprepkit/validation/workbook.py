@@ -146,19 +146,20 @@ def validate_excel(
         ):
             if detection_error is not None:
                 action = resolved_config.runtime.feature_policy.unavailable_action
+                event_code = f"{feature_name}_detection_unavailable"
                 if action == "ignore":
-                    processed_severities["code:FEATURE_DETECTION_UNAVAILABLE"] = action
-                    record_processed(code="FEATURE_DETECTION_UNAVAILABLE")
+                    processed_severities[f"code:{event_code.upper()}"] = action
+                    record_processed(code=event_code.upper())
                 else:
-                    processed_severities["feature_detection_unavailable"] = action
-                    record_processed("feature_detection_unavailable")
+                    processed_severities[event_code] = action
+                    record_processed(event_code)
                 description = (
                     f"Feature detection unavailable for {feature_name}: "
                     f"{detection_error}"
                 )
                 event = ValidationEvent(
-                    rule_code="feature_detection_unavailable",
-                    reason="FEATURE_DETECTION_UNAVAILABLE",
+                    rule_code=event_code,
+                    reason=event_code.upper(),
                     sheet_name=sheet_name,
                     cell_reference=cell_reference,
                     actual_value=detected_value,
@@ -173,7 +174,7 @@ def validate_excel(
                     diagnostics.append(
                         DiagnosticEvent(
                             run_id=run_id,
-                            code="FEATURE_DETECTION_UNAVAILABLE",
+                            code=event_code.upper(),
                             description=description,
                         )
                     )
@@ -182,20 +183,21 @@ def validate_excel(
                 resolved_config.runtime.feature_policy,
                 feature_name,
             )
+            event_code = feature_name
             if action == "ignore":
-                processed_severities["code:FEATURE_DETECTED"] = action
-                record_processed(code="FEATURE_DETECTED")
+                processed_severities[f"code:{event_code.upper()}"] = action
+                record_processed(code=event_code.upper())
             else:
-                processed_severities["feature_policy"] = action
-                record_processed("feature_policy")
+                processed_severities[event_code] = action
+                record_processed(event_code)
             description = f"Detected workbook feature: {feature_name}"
             if cell_reference is not None:
                 description += f" ({cell_reference})"
             if detected_value is not None:
                 description += f": {detected_value}"
             event = ValidationEvent(
-                rule_code="feature_policy",
-                reason="FEATURE_DETECTED",
+                rule_code=event_code,
+                reason=f"{event_code.upper()}_DETECTED",
                 sheet_name=sheet_name,
                 cell_reference=cell_reference,
                 actual_value=detected_value,
@@ -210,7 +212,7 @@ def validate_excel(
                 diagnostics.append(
                     DiagnosticEvent(
                         run_id=run_id,
-                        code="FEATURE_DETECTED",
+                        code=f"{event_code.upper()}_DETECTED",
                         description=description,
                     )
                 )

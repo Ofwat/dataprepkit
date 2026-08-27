@@ -2560,9 +2560,9 @@ def test_feature_policy_reports_merged_cells(tmp_path):
     result = validate_excel(candidate_path=candidate_path, config=config)
 
     assert result.is_valid is False
-    assert [event.rule_code for event in result.errors] == ["feature_policy"]
+    assert [event.rule_code for event in result.errors] == ["merged_cells"]
     assert "merged_cells" in result.errors[0].description
-    assert result.errors[0].reason == "FEATURE_DETECTED"
+    assert result.errors[0].reason == "MERGED_CELLS_DETECTED"
     assert result.errors[0].sheet_name == "Data"
     assert result.errors[0].cell_reference == "A1:B1"
 
@@ -2591,8 +2591,8 @@ def test_feature_policy_warning_does_not_invalidate_result(tmp_path):
     result = validate_excel(candidate_path=candidate_path, config=config)
 
     assert result.is_valid is True
-    assert [event.rule_code for event in result.warnings] == ["feature_policy"]
-    assert result.warnings[0].reason == "FEATURE_DETECTED"
+    assert [event.rule_code for event in result.warnings] == ["merged_cells"]
+    assert result.warnings[0].reason == "MERGED_CELLS_DETECTED"
     assert result.warnings[0].sheet_name == "Data"
     assert result.warnings[0].cell_reference == "A1:B1"
     assert result.diagnostics == []
@@ -2624,7 +2624,7 @@ def test_feature_policy_ignore_records_a_diagnostic(tmp_path):
     assert result.is_valid is True
     assert result.warnings == []
     assert [event.code for event in result.diagnostics] == [
-        "FEATURE_DETECTED",
+        "MERGED_CELLS_DETECTED",
     ]
 
 
@@ -2664,9 +2664,9 @@ def test_feature_policy_reports_broader_detected_features(
 
     result = validate_excel(candidate_path=candidate_path, config=config)
 
-    assert [event.rule_code for event in getattr(result, bucket)] == [
-        "feature_policy",
-        "feature_policy",
+    assert sorted(event.rule_code for event in getattr(result, bucket)) == [
+        "charts",
+        "named_ranges",
     ]
     assert {event.description.split(": ")[-1] for event in getattr(result, bucket)} == {
         "charts",
@@ -2709,10 +2709,13 @@ def test_feature_policy_reports_unavailable_detection(
     result = validate_excel(candidate_path=candidate_path, config=config)
 
     assert [event.rule_code for event in getattr(result, bucket)] == [
-        "feature_detection_unavailable",
+        "charts_detection_unavailable",
     ]
     assert "feature reader unavailable" in getattr(result, bucket)[0].description
-    assert getattr(result, bucket)[0].reason == "FEATURE_DETECTION_UNAVAILABLE"
+    assert (
+        getattr(result, bucket)[0].reason
+        == "CHARTS_DETECTION_UNAVAILABLE"
+    )
 
 
 def test_feature_policy_ignores_unavailable_detection_with_diagnostic(
@@ -2748,7 +2751,7 @@ def test_feature_policy_ignores_unavailable_detection_with_diagnostic(
 
     assert result.is_valid is True
     assert [event.code for event in result.diagnostics] == [
-        "FEATURE_DETECTION_UNAVAILABLE",
+        "CHARTS_DETECTION_UNAVAILABLE",
     ]
 
 
@@ -2800,8 +2803,8 @@ def test_feature_policy_reports_external_link_and_pivot_package_fixtures(
 
     assert result.is_valid is False
     assert [event.rule_code for event in result.errors] == [
-        "feature_policy",
-        "feature_policy",
+        "external_links",
+        "pivot_tables",
     ]
     assert {event.description.split(": ")[-1] for event in result.errors} == {
         "external_links",
@@ -2883,7 +2886,7 @@ def test_feature_policy_reports_macro_enabled_file_fixture(tmp_path):
     result = validate_excel(candidate_path=candidate_path, config=config)
 
     assert result.is_valid is False
-    assert [event.rule_code for event in result.errors] == ["feature_policy"]
+    assert [event.rule_code for event in result.errors] == ["macros"]
     assert "macros" in result.errors[0].description
 
 
@@ -2926,9 +2929,9 @@ def test_feature_policy_reports_read_only_unavailable_features(tmp_path):
 
     assert result.is_valid is False
     assert [event.rule_code for event in result.errors] == [
-        "feature_detection_unavailable",
-        "feature_detection_unavailable",
-        "feature_detection_unavailable",
+        "charts_detection_unavailable",
+        "pivot_tables_detection_unavailable",
+        "merged_cells_detection_unavailable",
     ]
     assert {
         event.description.split(" for ")[-1].split(":")[0]

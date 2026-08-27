@@ -162,11 +162,12 @@ for rule in list_available_rules():
 | `sheet_structure` | `workbook_checks` | Candidate and reference content-based used areas differ. |
 | `formula_difference` | `workbook_checks` | Candidate and reference formula text differs at a cell. |
 | `formula_error` | `workbook_checks` | A cached cell contains one of the configured Excel error tokens. |
-| `feature_policy` | `runtime.feature_policy` | A configured workbook feature was detected. |
-| `feature_detection_unavailable` | `runtime.feature_policy.unavailable_action` | A configured feature could not be inspected. |
+| `<feature_name>` | `runtime.feature_policy.<feature_name>` | The named workbook feature was detected. |
+| `<feature_name>_detection_unavailable` | `runtime.feature_policy.unavailable_action` | The named feature could not be inspected. |
 
-`feature_policy` covers macros, external links, charts, pivot tables, named
-ranges, and merged cells. Formula evaluation is not performed: formula checks
+Feature events use the concrete feature name: `macros`, `external_links`,
+`charts`, `pivot_tables`, `named_ranges`, or `merged_cells`. Formula evaluation
+is not performed: formula checks
 inspect formula text and cached values only.
 
 ### Common table checks
