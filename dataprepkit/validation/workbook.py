@@ -254,6 +254,11 @@ def validate_excel(
             ignored_sheet_names.update(
                 _match_sheets(sheet_names, selector)
             )
+        if (
+            not resolved_config.sheet_policy.required_selectors
+            and reference_workbook is not None
+        ):
+            selected_sheet_names.update(reference_workbook.sheetnames)
         extra_sheets = sheet_names - selected_sheet_names
         action = resolved_config.sheet_policy.extra_sheet_action
         for sheet_name in formula_workbook.sheetnames:

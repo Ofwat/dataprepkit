@@ -890,6 +890,60 @@ def test_validate_excel_reports_extra_sheets_as_warnings(tmp_path):
     assert [event.rule_code for event in result.warnings] == ["extra_sheet"]
 
 
+def test_reference_validation_uses_reference_sheets_when_selectors_are_empty(
+    tmp_path,
+):
+    candidate_path = tmp_path / "candidate.xlsx"
+    reference_path = tmp_path / "reference.xlsx"
+    write_workbook_with_sheets(candidate_path, ["Data", "Unexpected"])
+    write_workbook_with_sheets(reference_path, ["Data"])
+    config = make_config(extra_sheet_action="error").model_copy(
+        update={
+            "sheet_policy": SheetPolicy(
+                required_selectors=[],
+                ignored_selectors=[],
+                extra_sheet_action="error",
+                selector_match_action="all",
+            )
+        }
+    )
+
+    result = validate_excel(
+        candidate_path=candidate_path,
+        reference_path=reference_path,
+        config=config,
+    )
+
+    assert [event.sheet_name for event in result.errors] == ["Unexpected"]
+
+
+def test_reference_validation_accepts_matching_sheets_with_empty_selectors(
+    tmp_path,
+):
+    candidate_path = tmp_path / "candidate.xlsx"
+    reference_path = tmp_path / "reference.xlsx"
+    write_workbook_with_sheets(candidate_path, ["Data"])
+    write_workbook_with_sheets(reference_path, ["Data"])
+    config = make_config(extra_sheet_action="error").model_copy(
+        update={
+            "sheet_policy": SheetPolicy(
+                required_selectors=[],
+                ignored_selectors=[],
+                extra_sheet_action="error",
+                selector_match_action="all",
+            )
+        }
+    )
+
+    result = validate_excel(
+        candidate_path=candidate_path,
+        reference_path=reference_path,
+        config=config,
+    )
+
+    assert result.errors == []
+
+
 def test_validate_excel_ignores_configured_extra_sheets(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     write_workbook_with_sheets(candidate_path, ["Data", "Metadata"])
