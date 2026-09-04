@@ -9,12 +9,11 @@ from pandas.api.types import (
     is_datetime64_any_dtype,
     is_datetime64tz_dtype,
     is_object_dtype,
-    is_string_dtype,
 )
 from sqlalchemy import Engine, inspect, text
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.sql.elements import quoted_name
-from sqlalchemy.dialects.mssql import DATETIME2, NVARCHAR, VARCHAR
+from sqlalchemy.dialects.mssql import DATETIME2, VARCHAR
 from dataprepkit.fact_loader import (
     HashMismatchError as _HashMismatchError,
     MissingStageFileError as _MissingStageFileError,
@@ -33,10 +32,6 @@ StageFileSpec = _StageFileSpec
 assert_columns_have_single_distinct_row = _assert_single_distinct_row
 assert_columns_not_null = _assert_columns_not_null
 verify_stage_file_hashes = _verify_stage_file_hashes
-
-_MSSQL_STAGING_STRING_LENGTH = 4000
-_MSSQL_STAGING_STRING_COLLATION = "Latin1_General_100_BIN2"
-
 
 def _quote_mssql_identifier(identifier: str) -> str:
     normalized = _normalize_bracket_identifier(identifier) or ""
@@ -437,20 +432,11 @@ def stage_dataframe(
         schema_for_sql = None
 
     if engine.dialect.name == "mssql":
-        dtype_overrides = {}
-        for col, pandas_dtype in df.dtypes.items():
-            if is_datetime64_any_dtype(pandas_dtype) or is_datetime64tz_dtype(
-                pandas_dtype
-            ):
-                dtype_overrides[col] = DATETIME2(precision=3)
-            elif is_object_dtype(pandas_dtype) or is_string_dtype(pandas_dtype):
-                if fabric_warehouse_types:
-                    dtype_overrides[col] = VARCHAR(_MSSQL_STAGING_STRING_LENGTH)
-                else:
-                    dtype_overrides[col] = NVARCHAR(
-                        _MSSQL_STAGING_STRING_LENGTH,
-                        collation=_MSSQL_STAGING_STRING_COLLATION,
-                    )
+        dtype_overrides = {
+            col: DATETIME2(precision=3)
+            for col, dtype in df.dtypes.items()
+            if is_datetime64_any_dtype(dtype) or is_datetime64tz_dtype(dtype)
+        }
 
         if use_copy_into_parquet:
             if not parquet_base_dir:

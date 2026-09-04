@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.dialects.mssql import DATETIME2, NVARCHAR, VARCHAR
+from sqlalchemy.dialects.mssql import DATETIME2
 from sqlalchemy.exc import ProgrammingError
 
 from dataprepkit.metadata_loader import (
@@ -216,7 +216,7 @@ def test_ensure_target_table_relaxes_nullable_data_columns(monkeypatch):
     assert all('COLLATE "SQL_Latin1_General_CP1_CI_AS"' not in statement for statement in engine.statements)
 
 
-def test_ensure_target_table_collates_mssql_business_keys(monkeypatch):
+def test_ensure_target_table_preserves_default_mssql_collation(monkeypatch):
     class _FakeDialect:
         name = "mssql"
 
@@ -267,10 +267,7 @@ def test_ensure_target_table_collates_mssql_business_keys(monkeypatch):
     _ensure_target_table(engine, metadata)
 
     create_statement = engine.statements[0]
-    assert (
-        "[Measure_Cd] NVARCHAR(4000) COLLATE Latin1_General_100_BIN2 NOT NULL"
-        in create_statement
-    )
+    assert "[Measure_Cd] NVARCHAR(4000) NOT NULL" in create_statement
     assert "[Measure_Name] NVARCHAR(4000) COLLATE" not in create_statement
 
 
@@ -868,9 +865,7 @@ def test_stage_dataframe_mssql_datetime_columns_use_datetime2(monkeypatch):
     assert "id" not in dtype
 
 
-def test_stage_dataframe_defaults_mssql_strings_to_bounded_binary_collation(
-    monkeypatch,
-):
+def test_stage_dataframe_leaves_mssql_strings_to_database_defaults(monkeypatch):
     class _FakeDialect:
         name = "mssql"
 
@@ -891,13 +886,10 @@ def test_stage_dataframe_defaults_mssql_strings_to_bounded_binary_collation(
         pd.DataFrame({"Measure_Cd": ["OUTC0007"]}),
     )
 
-    measure_type = captured["dtype"]["Measure_Cd"]
-    assert isinstance(measure_type, NVARCHAR)
-    assert measure_type.length == 4000
-    assert measure_type.collation == "Latin1_General_100_BIN2"
+    assert captured["dtype"] is None
 
 
-def test_stage_dataframe_supports_fabric_warehouse_string_types(monkeypatch):
+def test_stage_dataframe_does_not_override_fabric_warehouse_string_types(monkeypatch):
     class _FakeDialect:
         name = "mssql"
 
@@ -919,10 +911,7 @@ def test_stage_dataframe_supports_fabric_warehouse_string_types(monkeypatch):
         fabric_warehouse_types=True,
     )
 
-    measure_type = captured["dtype"]["Measure_Cd"]
-    assert isinstance(measure_type, VARCHAR)
-    assert measure_type.length == 4000
-    assert measure_type.collation is None
+    assert captured["dtype"] is None
 
 
 def test_stage_dataframe_copy_into_requires_parquet_base_dir():
