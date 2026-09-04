@@ -64,6 +64,16 @@ _BUILT_IN_RULES = (
         "description": "Reject values that belong to a configured deny-list.",
     },
     {
+        "rule_code": "pandas_load",
+        "attachment": "tables.load_policy",
+        "description": "Load a resolved Excel table into pandas.",
+    },
+    {
+        "rule_code": "max_length",
+        "attachment": "tables.dataframe_checks",
+        "description": "Reject DataFrame values exceeding a configured length.",
+    },
+    {
         "rule_code": "missing_reference_sheet",
         "attachment": "workbook_checks",
         "description": "Find reference sheets absent from the candidate workbook.",

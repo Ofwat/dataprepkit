@@ -23,6 +23,8 @@ from dataprepkit.validation import (
     EmptyRowRule,
     ExpectedCellCheck,
     HeaderPolicy,
+    DataFrameCheck,
+    DataFrameLoadPolicy,
     RuntimePolicy,
     WorkbookFeaturePolicy,
     SheetPolicy,
@@ -127,6 +129,8 @@ def test_public_rule_catalogue_lists_all_builtin_checks():
         "sheet_structure",
         "formula_difference",
         "formula_error",
+        "pandas_load",
+        "max_length",
         "feature_policy",
         "feature_detection_unavailable",
     }
@@ -2095,6 +2099,55 @@ def test_rule_dependencies_reject_cycles():
 
     with pytest.raises(ConfigurationError, match="cycles"):
         validate_config(config)
+
+
+def test_validate_excel_runs_dataframe_max_length_check(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Measurements"
+    workbook.active.append(["Measure_Value"])
+    workbook.active.append(["x" * 4001])
+    workbook.save(candidate_path)
+
+    config = make_config(required_sheet="Measurements").model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="measurements",
+                    sheet_selector=SheetSelector(
+                        mode="exact",
+                        value="Measurements",
+                    ),
+                    header_row=1,
+                    column_definitions=[ColumnDefinition(name="Measure_Value")],
+                    header_policy=HeaderPolicy(
+                        required_columns=["Measure_Value"],
+                    ),
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        columns=["Measure_Value"],
+                    ),
+                    load_policy=DataFrameLoadPolicy(enabled=True),
+                    dataframe_checks=[
+                        DataFrameCheck(
+                            rule_code="max_length",
+                            column="Measure_Value",
+                            max_length=4000,
+                        )
+                    ],
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is False
+    assert [event.rule_code for event in result.errors] == ["max_length"]
+    assert result.errors[0].sheet_name == "Measurements"
+    assert result.errors[0].cell_reference == "A2"
+    assert result.errors[0].row_number == 2
+    assert result.errors[0].expected_value == 4000
 
 
 def test_reference_structure_check_is_not_run_without_reference_workbook(tmp_path):

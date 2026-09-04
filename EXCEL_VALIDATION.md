@@ -158,6 +158,8 @@ for rule in list_available_rules():
 | `duplicate_value` | `tables.column_validations[].unique` | A normalized column value occurs more than once. |
 | `allowed_values` | `tables.column_validations[].allowed_values` | A value is not in the configured allow-list. |
 | `forbidden_values` | `tables.column_validations[].forbidden_values` | A value is in the configured deny-list. |
+| `pandas_load` | `tables[].load_policy` | A resolved table could not be loaded into pandas. |
+| `max_length` | `tables[].dataframe_checks` | A loaded DataFrame value exceeds its configured length. |
 | `missing_reference_sheet` | `workbook_checks` | A sheet in the reference workbook is absent from the candidate. |
 | `sheet_structure` | `workbook_checks` | Candidate and reference content-based used areas differ. |
 | `formula_difference` | `workbook_checks` | Candidate and reference formula text differs at a cell. |
@@ -223,6 +225,48 @@ expected_cells:
     expected_value: "2025 Q4"
     fallback_strategy: exactly_one
 ```
+
+## Excel-to-pandas validation contract
+
+Table-local pandas checks run after direct Excel checks and table resolution.
+Each configured table is loaded at most once for a validation run. A table is
+loaded only when its sheet, headers, and data boundary resolve successfully.
+
+The initial pandas load contract is:
+
+- load the configured Excel region into pandas with type inference disabled by
+  default;
+- preserve the mapping from each DataFrame row to its original Excel row;
+- apply the existing comparison and null policies;
+- report load failures as `pandas_load` errors;
+- mark checks that depend on a failed load as `NOT_RUN`;
+- report DataFrame rule failures using the source sheet and Excel cell;
+- retain successfully loaded tables only when a later cross-table check needs
+  them.
+
+Table-local checks are configured under their table. For example:
+
+```yaml
+tables:
+  - name: measurements
+    sheet_selector: {mode: exact, value: Measurements}
+    header_row: 1
+    data_boundary:
+      mode: last_non_empty_row
+      columns: [Measure_Value]
+    load_policy:
+      enabled: true
+      infer_types: false
+    dataframe_checks:
+      - rule_code: max_length
+        column: Measure_Value
+        max_length: 4000
+        length_mode: characters
+```
+
+`max_length` ignores configured null values. Length modes are explicit so that
+Python character length is not accidentally confused with SQL Server byte or
+UTF-16 length semantics.
 
 ### Reference comparison
 

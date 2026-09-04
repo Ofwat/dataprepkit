@@ -304,6 +304,34 @@ class DataBoundary(_PublicModel):
         return self
 
 
+class DataFrameLoadPolicy(_PublicModel):
+    enabled: bool = True
+    infer_types: bool = False
+    preserve_empty_values: bool = True
+
+
+class DataFrameCheck(_PublicModel):
+    rule_code: str
+    column: str
+    max_length: int | None = None
+    min_length: int | None = None
+    length_mode: str = "characters"
+    enabled: bool = True
+    severity: str | None = None
+
+    @model_validator(mode="after")
+    def validate_options(self):
+        if self.rule_code != "max_length":
+            raise ValueError("unsupported DataFrame rule")
+        if self.max_length is None or self.max_length < 0:
+            raise ValueError("max_length must be a non-negative integer")
+        if self.min_length is not None and self.min_length < 0:
+            raise ValueError("min_length must be a non-negative integer")
+        if self.length_mode != "characters":
+            raise ValueError("length_mode must be characters")
+        return self
+
+
 class TableConfig(_PublicModel):
     name: str
     sheet_selector: SheetSelector | None = None
@@ -315,6 +343,8 @@ class TableConfig(_PublicModel):
     header_policy: HeaderPolicy | None = None
     empty_row_rules: list[EmptyRowRule] = Field(default_factory=list)
     data_presence: str = "allow_empty"
+    load_policy: DataFrameLoadPolicy | None = None
+    dataframe_checks: list[DataFrameCheck] = Field(default_factory=list)
 
     @field_validator("data_presence")
     @classmethod

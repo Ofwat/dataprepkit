@@ -9,12 +9,18 @@ from pathlib import Path
 from zipfile import ZipFile
 
 import openpyxl
-from openpyxl.utils.cell import column_index_from_string, range_boundaries
+import pandas as pd
+from openpyxl.utils.cell import (
+    column_index_from_string,
+    get_column_letter,
+    range_boundaries,
+)
 from openpyxl.worksheet._reader import WorkSheetParser
 
 from .config import validate_config
 from .models import (
     ConfigurationError,
+    ColumnDefinition,
     DiagnosticEvent,
     RuleContext,
     ValidationEvent,
@@ -1005,6 +1011,22 @@ def validate_excel(
                                     ),
                                 )
                             )
+        dataframe_errors, dataframe_not_run, dataframe_counts = (
+            _run_dataframe_checks(
+                candidate_path,
+                value_workbook,
+                formula_workbook,
+                resolved_config,
+                value_resolution,
+                formula_resolution,
+            )
+        )
+        errors.extend(dataframe_errors)
+        not_run.extend(dataframe_not_run)
+        for rule_code, count in dataframe_counts.items():
+            processed_counts[rule_code] = (
+                processed_counts.get(rule_code, 0) + count
+            )
         rule_outcomes = {}
         workbook_checks = _ordered_workbook_checks(
             resolved_config.workbook_checks
@@ -1361,6 +1383,215 @@ def validate_excel(
             reference_workbook.close()
         if reference_formula_workbook is not None:
             reference_formula_workbook.close()
+
+
+def _run_dataframe_checks(
+    candidate_path,
+    value_workbook,
+    formula_workbook,
+    config,
+    value_resolution,
+    formula_resolution,
+):
+    errors = []
+    not_run = []
+    processed_counts = {}
+
+    def skip_dataframe_checks(table, reason, sheet_name=None):
+        for check in table.dataframe_checks:
+            not_run.append(
+                ValidationEvent(
+                    rule_code=check.rule_code,
+                    status="NOT_RUN",
+                    reason=reason,
+                    sheet_name=sheet_name,
+                    description=(
+                        f"DataFrame check for '{check.column}' could not run: "
+                        f"{reason}"
+                    ),
+                )
+            )
+
+    for table in config.tables:
+        if table.load_policy is None or not table.load_policy.enabled:
+            continue
+        if config.enabled_rules is not None and "pandas_load" not in config.enabled_rules:
+            not_run.append(
+                ValidationEvent(
+                    rule_code="pandas_load",
+                    status="NOT_RUN",
+                    reason="RULE_DISABLED",
+                    description=f"Pandas loading for table '{table.name}' is disabled",
+                )
+            )
+            skip_dataframe_checks(table, "PANDAS_LOAD_DISABLED")
+            continue
+        if table.sheet_selector is None or table.header_row is None:
+            not_run.append(
+                ValidationEvent(
+                    rule_code="pandas_load",
+                    status="NOT_RUN",
+                    reason="TABLE_CONFIGURATION_INCOMPLETE",
+                    description=f"Table '{table.name}' is not configured for pandas loading",
+                )
+            )
+            skip_dataframe_checks(table, "TABLE_CONFIGURATION_INCOMPLETE")
+            continue
+        sheet_matches = _match_sheets(
+            value_workbook.sheetnames,
+            table.sheet_selector,
+        )
+        if not sheet_matches:
+            not_run.append(
+                ValidationEvent(
+                    rule_code="pandas_load",
+                    status="NOT_RUN",
+                    reason="TABLE_RESOLUTION_FAILED",
+                    description=f"Table '{table.name}' did not resolve",
+                )
+            )
+            skip_dataframe_checks(table, "TABLE_RESOLUTION_FAILED")
+            continue
+        for sheet_name in sheet_matches:
+            sheet = value_workbook[sheet_name]
+            formula_sheet = formula_workbook[sheet_name]
+            headers = value_resolution.headers(sheet, table.header_row, table)
+            while headers and headers[-1] is None:
+                headers.pop()
+            definitions = {
+                definition.name: definition
+                for definition in table.column_definitions
+            }
+            normalised_headers = {
+                _normalise_header(header): index + 1
+                for index, header in enumerate(headers)
+                if header is not None
+            }
+            logical_columns = {
+                name: next(
+                    (
+                        normalised_headers[_normalise_header(candidate)]
+                        for candidate in [name, *definitions.get(name, ColumnDefinition(name=name)).aliases]
+                        if _normalise_header(candidate) in normalised_headers
+                    ),
+                    None,
+                )
+                for name in definitions
+            }
+            required_columns = (
+                table.header_policy.required_columns
+                if table.header_policy is not None
+                else []
+            )
+            if any(column not in logical_columns for column in required_columns):
+                not_run.append(
+                    ValidationEvent(
+                        rule_code="pandas_load",
+                        status="NOT_RUN",
+                        reason="TABLE_HEADER_RESOLUTION_FAILED",
+                        sheet_name=sheet_name,
+                        description=f"Table '{table.name}' headers could not be resolved",
+                    )
+                )
+                skip_dataframe_checks(table, "TABLE_HEADER_RESOLUTION_FAILED", sheet_name)
+                continue
+            data_end_row = _table_data_end_row(
+                table,
+                table.header_row,
+                sheet,
+                formula_sheet,
+                logical_columns,
+                value_resolution,
+                formula_resolution,
+            )
+            if data_end_row is None:
+                not_run.append(
+                    ValidationEvent(
+                        rule_code="pandas_load",
+                        status="NOT_RUN",
+                        reason="DATA_BOUNDARY_RESOLUTION_FAILED",
+                        sheet_name=sheet_name,
+                        description=f"Table '{table.name}' data boundary could not be resolved",
+                    )
+                )
+                skip_dataframe_checks(table, "DATA_BOUNDARY_RESOLUTION_FAILED", sheet_name)
+                continue
+            try:
+                dataframe = pd.read_excel(
+                    candidate_path,
+                    sheet_name=sheet_name,
+                    header=table.header_row - 1,
+                    usecols=f"A:{get_column_letter(len(headers))}",
+                    nrows=max(0, data_end_row - table.header_row),
+                    dtype=None if table.load_policy.infer_types else object,
+                    keep_default_na=not table.load_policy.preserve_empty_values,
+                )
+            except Exception as error:
+                errors.append(
+                    ValidationEvent(
+                        rule_code="pandas_load",
+                        sheet_name=sheet_name,
+                        actual_value=str(error),
+                        description=f"Could not load table '{table.name}' into pandas: {error}",
+                    )
+                )
+                continue
+            processed_counts["pandas_load"] = processed_counts.get("pandas_load", 0) + 1
+            for check in table.dataframe_checks:
+                enabled = (
+                    check.enabled
+                    and (
+                        config.enabled_rules is None
+                        or check.rule_code in config.enabled_rules
+                    )
+                )
+                if not enabled:
+                    not_run.append(
+                        ValidationEvent(
+                            rule_code=check.rule_code,
+                            status="NOT_RUN",
+                            reason="RULE_DISABLED",
+                            sheet_name=sheet_name,
+                            description=f"DataFrame check for '{check.column}' is disabled",
+                        )
+                    )
+                    continue
+                if check.column not in dataframe.columns:
+                    errors.append(
+                        ValidationEvent(
+                            rule_code=check.rule_code,
+                            sheet_name=sheet_name,
+                            description=f"DataFrame column not found: {check.column}",
+                        )
+                    )
+                    continue
+                column_number = logical_columns.get(check.column)
+                if column_number is None:
+                    continue
+                for dataframe_row, value in dataframe[check.column].items():
+                    if value is None or (isinstance(value, float) and pd.isna(value)):
+                        continue
+                    if len(str(value)) <= check.max_length:
+                        continue
+                    excel_row = table.header_row + 1 + int(dataframe_row)
+                    errors.append(
+                        ValidationEvent(
+                            rule_code=check.rule_code,
+                            severity=check.severity
+                            or config.rule_severity.get(check.rule_code),
+                            sheet_name=sheet_name,
+                            cell_reference=f"{get_column_letter(column_number)}{excel_row}",
+                            row_number=excel_row,
+                            column_number=column_number,
+                            actual_value=value,
+                            expected_value=check.max_length,
+                            description=(
+                                f"Value in column '{check.column}' exceeds "
+                                f"the maximum length of {check.max_length}"
+                            ),
+                        )
+                    )
+    return errors, not_run, processed_counts
 
 
 def _match_sheets(sheet_names, selector):

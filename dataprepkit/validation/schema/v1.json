@@ -240,6 +240,31 @@
       "title": "DataBoundary",
       "type": "object"
     },
+    "DataFrameCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "column": {"title": "Column", "type": "string"},
+        "enabled": {"default": true, "title": "Enabled", "type": "boolean"},
+        "length_mode": {"default": "characters", "title": "Length Mode", "type": "string"},
+        "max_length": {"anyOf": [{"type": "integer"}, {"type": "null"}], "default": null},
+        "min_length": {"anyOf": [{"type": "integer"}, {"type": "null"}], "default": null},
+        "rule_code": {"title": "Rule Code", "type": "string"},
+        "severity": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null}
+      },
+      "required": ["rule_code", "column"],
+      "title": "DataFrameCheck",
+      "type": "object"
+    },
+    "DataFrameLoadPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"default": true, "title": "Enabled", "type": "boolean"},
+        "infer_types": {"default": false, "title": "Infer Types", "type": "boolean"},
+        "preserve_empty_values": {"default": true, "title": "Preserve Empty Values", "type": "boolean"}
+      },
+      "title": "DataFrameLoadPolicy",
+      "type": "object"
+    },
     "EmptyRowRule": {
       "additionalProperties": false,
       "properties": {
@@ -483,6 +508,11 @@
           "title": "Data Presence",
           "type": "string"
         },
+        "dataframe_checks": {
+          "items": {"$ref": "#/$defs/DataFrameCheck"},
+          "title": "Dataframe Checks",
+          "type": "array"
+        },
         "empty_row_rules": {
           "items": {
             "$ref": "#/$defs/EmptyRowRule"
@@ -512,6 +542,13 @@
           ],
           "default": null,
           "title": "Header Row"
+        },
+        "load_policy": {
+          "anyOf": [
+            {"$ref": "#/$defs/DataFrameLoadPolicy"},
+            {"type": "null"}
+          ],
+          "default": null
         },
         "name": {
           "title": "Name",
