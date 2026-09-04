@@ -273,6 +273,12 @@
           "default": null
         },
         "enabled": {"default": true, "title": "Enabled", "type": "boolean"},
+        "duplicate_reference_action": {
+          "default": "allow",
+          "enum": ["allow", "error"],
+          "title": "Duplicate Reference Action",
+          "type": "string"
+        },
         "name": {"title": "Name", "type": "string"},
         "reference_column": {"title": "Reference Column", "type": "string"},
         "reference_table": {"title": "Reference Table", "type": "string"},

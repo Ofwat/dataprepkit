@@ -269,6 +269,28 @@ tables:
 Python character length is not accidentally confused with SQL Server byte or
 UTF-16 length semantics.
 
+Cross-table checks use the same table definitions and can match several sheets
+when a selector matches several sheets. Values from all reference matches are
+treated as one reference set, while failures retain the source sheet and Excel
+cell location. Reference duplicates are allowed by default; reject normalized
+duplicates explicitly when the lookup must be unique:
+
+```yaml
+cross_table_checks:
+  - name: measurement_units_exist
+    rule_code: values_in_reference
+    source_table: measurements
+    source_column: unit
+    reference_table: allowed_units
+    reference_column: unit
+    null_policy: ignore
+    duplicate_reference_action: error
+```
+
+The check counts every source row it evaluates in the result summary. A failed
+or unresolved pandas load produces `NOT_RUN` events for dependent checks rather
+than attempting to read an unbounded worksheet region.
+
 ### Reference comparison
 
 Pass `reference_path` to enable reference checks. The standalone profile leaves

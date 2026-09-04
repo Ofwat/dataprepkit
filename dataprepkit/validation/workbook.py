@@ -125,6 +125,17 @@ def validate_excel(
                 check.rule_code,
                 check.severity,
             )
+        for table in resolved_config.tables:
+            for check in table.dataframe_checks:
+                processed_severities.setdefault(
+                    check.rule_code,
+                    check.severity or resolved_config.rule_severity.get(check.rule_code),
+                )
+        for check in resolved_config.cross_table_checks:
+            processed_severities.setdefault(
+                check.rule_code,
+                check.severity or resolved_config.rule_severity.get(check.rule_code),
+            )
         processed_severities.setdefault(
             "extra_sheet",
             resolved_config.sheet_policy.extra_sheet_action,
@@ -1027,12 +1038,19 @@ def validate_excel(
             processed_counts[rule_code] = (
                 processed_counts.get(rule_code, 0) + count
             )
-        cross_errors, cross_not_run = _run_cross_table_checks(
+        cross_errors, cross_not_run, cross_counts, cross_severities = (
+            _run_cross_table_checks(
             resolved_config,
             dataframe_cache,
+            )
         )
         errors.extend(cross_errors)
         not_run.extend(cross_not_run)
+        for rule_code, count in cross_counts.items():
+            processed_counts[rule_code] = (
+                processed_counts.get(rule_code, 0) + count
+            )
+        processed_severities.update(cross_severities)
         rule_outcomes = {}
         workbook_checks = _ordered_workbook_checks(
             resolved_config.workbook_checks
@@ -1296,7 +1314,7 @@ def validate_excel(
             tokens = (check.options or {}).get("error_tokens", [])
             severity = check.severity or resolved_config.rule_severity.get(
                 "formula_error"
-            )
+            ) or "error"
             missing_cache_action = (
                 resolved_config.runtime.missing_formula_cache_action
             )
@@ -1550,7 +1568,12 @@ def _run_dataframe_checks(
                 continue
             processed_counts["pandas_load"] = processed_counts.get("pandas_load", 0) + 1
             if table.name in cached_table_names:
-                dataframe_cache.setdefault(table.name, {})[sheet_name] = dataframe
+                dataframe_cache.setdefault(table.name, {})[sheet_name] = {
+                    "dataframe": dataframe,
+                    "sheet_name": sheet_name,
+                    "header_row": table.header_row,
+                    "column_number": logical_columns,
+                }
             for check in table.dataframe_checks:
                 enabled = (
                     check.enabled
@@ -1583,6 +1606,9 @@ def _run_dataframe_checks(
                 if column_number is None:
                     continue
                 for dataframe_row, value in dataframe[check.column].items():
+                    processed_counts[check.rule_code] = (
+                        processed_counts.get(check.rule_code, 0) + 1
+                    )
                     if value is None or (isinstance(value, float) and pd.isna(value)):
                         continue
                     if len(str(value)) <= check.max_length:
@@ -1611,7 +1637,11 @@ def _run_dataframe_checks(
 def _run_cross_table_checks(config, dataframe_cache):
     errors = []
     not_run = []
+    processed_counts = {}
+    processed_severities = {}
     for check in config.cross_table_checks:
+        severity = check.severity or config.rule_severity.get(check.rule_code)
+        processed_severities.setdefault(check.rule_code, severity)
         if (
             not check.enabled
             or (
@@ -1630,9 +1660,7 @@ def _run_cross_table_checks(config, dataframe_cache):
             continue
         source_tables = dataframe_cache.get(check.source_table, {})
         reference_tables = dataframe_cache.get(check.reference_table, {})
-        source = next(iter(source_tables.values()), None) if len(source_tables) == 1 else None
-        reference = next(iter(reference_tables.values()), None) if len(reference_tables) == 1 else None
-        if source is None or reference is None:
+        if not source_tables or not reference_tables:
             not_run.append(
                 ValidationEvent(
                     rule_code=check.rule_code,
@@ -1645,77 +1673,114 @@ def _run_cross_table_checks(config, dataframe_cache):
                 )
             )
             continue
-        if check.source_column not in source.columns:
+        missing_reference = next(
+            (
+                entry["sheet_name"]
+                for entry in reference_tables.values()
+                if check.reference_column not in entry["dataframe"].columns
+            ),
+            None,
+        )
+        if missing_reference is not None:
             errors.append(
                 ValidationEvent(
                     rule_code=check.rule_code,
-                    severity=check.severity,
-                    description=f"DataFrame column not found: {check.source_column}",
-                )
-            )
-            continue
-        if check.reference_column not in reference.columns:
-            errors.append(
-                ValidationEvent(
-                    rule_code=check.rule_code,
-                    severity=check.severity,
+                    severity=severity,
+                    sheet_name=missing_reference,
                     description=f"DataFrame column not found: {check.reference_column}",
                 )
             )
             continue
-        source_config = next(
-            table
-            for table in config.tables
-            if table.name == check.source_table
-        )
-        source_sheet_name = (
-            source_config.sheet_selector.value
-            if source_config.sheet_selector is not None
-            and source_config.sheet_selector.mode == "exact"
-            else None
-        )
-        source_column_number = source.columns.get_loc(check.source_column) + 1
         comparison = check.comparison or config.comparison
         allowed = {
             _normalise_comparison_value(value, comparison)
-            for value in reference[check.reference_column].tolist()
-            if value is not None and not (isinstance(value, float) and pd.isna(value))
+            for entry in reference_tables.values()
+            for value in entry["dataframe"][check.reference_column].tolist()
+            if value is not None
+            and not (isinstance(value, float) and pd.isna(value))
         }
-        for row_index, value in source[check.source_column].items():
-            if value is None or (isinstance(value, float) and pd.isna(value)):
-                if check.null_policy == "error":
-                    errors.append(
-                        ValidationEvent(
-                            rule_code=check.rule_code,
-                            severity=check.severity,
-                            actual_value=value,
-                            sheet_name=None,
-                            description=f"Null value found in '{check.source_column}'",
+        reference_label = f"{check.reference_table}.{check.reference_column}"
+        if check.duplicate_reference_action == "error":
+            seen = set()
+            for entry in reference_tables.values():
+                for row_index, value in entry["dataframe"][check.reference_column].items():
+                    if value is None or (isinstance(value, float) and pd.isna(value)):
+                        continue
+                    key = _normalise_comparison_value(value, comparison)
+                    if key in seen:
+                        column_number = entry["column_number"].get(check.reference_column)
+                        excel_row = entry["header_row"] + 1 + int(row_index)
+                        errors.append(
+                            ValidationEvent(
+                                rule_code=check.rule_code,
+                                severity=severity,
+                                sheet_name=entry["sheet_name"],
+                                cell_reference=(
+                                    f"{get_column_letter(column_number)}{excel_row}"
+                                    if column_number is not None else None
+                                ),
+                                row_number=excel_row,
+                                column_number=column_number,
+                                actual_value=value,
+                                expected_value="unique reference value",
+                                description=f"Duplicate value found in '{reference_label}'",
+                            )
                         )
+                    seen.add(key)
+        for entry in source_tables.values():
+            dataframe = entry["dataframe"]
+            if check.source_column not in dataframe.columns:
+                errors.append(
+                    ValidationEvent(
+                        rule_code=check.rule_code,
+                        severity=severity,
+                        sheet_name=entry["sheet_name"],
+                        description=f"DataFrame column not found: {check.source_column}",
                     )
-                continue
-            if _normalise_comparison_value(value, comparison) in allowed:
-                continue
-            errors.append(
-                ValidationEvent(
-                    rule_code=check.rule_code,
-                    severity=check.severity,
-                    actual_value=value,
-                    expected_value=check.reference_table,
-                    sheet_name=source_sheet_name,
-                    cell_reference=(
-                        f"{get_column_letter(source_column_number)}"
-                        f"{source_config.header_row + 1 + int(row_index)}"
-                    ),
-                    row_number=source_config.header_row + 1 + int(row_index),
-                    column_number=source_column_number,
-                    description=(
-                        f"Value in '{check.source_column}' was not found in "
-                        f"'{check.reference_table}.{check.reference_column}'"
-                    ),
                 )
-            )
-    return errors, not_run
+                continue
+            column_number = entry["column_number"].get(check.source_column)
+            for row_index, value in dataframe[check.source_column].items():
+                processed_counts[check.rule_code] = processed_counts.get(check.rule_code, 0) + 1
+                excel_row = entry["header_row"] + 1 + int(row_index)
+                cell_reference = (
+                    f"{get_column_letter(column_number)}{excel_row}"
+                    if column_number is not None else None
+                )
+                if value is None or (isinstance(value, float) and pd.isna(value)):
+                    if check.null_policy == "error":
+                        errors.append(
+                            ValidationEvent(
+                                rule_code=check.rule_code,
+                                severity=severity,
+                                actual_value=value,
+                                sheet_name=entry["sheet_name"],
+                                cell_reference=cell_reference,
+                                row_number=excel_row,
+                                column_number=column_number,
+                                description=f"Null value found in '{check.source_column}'",
+                            )
+                        )
+                    continue
+                if _normalise_comparison_value(value, comparison) in allowed:
+                    continue
+                errors.append(
+                    ValidationEvent(
+                        rule_code=check.rule_code,
+                        severity=severity,
+                        actual_value=value,
+                        expected_value=reference_label,
+                        sheet_name=entry["sheet_name"],
+                        cell_reference=cell_reference,
+                        row_number=excel_row,
+                        column_number=column_number,
+                        description=(
+                            f"Value in '{check.source_column}' was not found in "
+                            f"'{reference_label}'"
+                        ),
+                    )
+                )
+    return errors, not_run, processed_counts, processed_severities
 
 
 def _match_sheets(sheet_names, selector):

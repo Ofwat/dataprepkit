@@ -132,6 +132,7 @@ def test_public_rule_catalogue_lists_all_builtin_checks():
         "formula_error",
         "pandas_load",
         "max_length",
+        "values_in_reference",
         "feature_policy",
         "feature_detection_unavailable",
     }
@@ -199,6 +200,9 @@ def test_get_config_schema_returns_versioned_public_schema():
     assert schema["title"] == "WorkbookValidationConfig"
     assert schema["type"] == "object"
     assert schema["additionalProperties"] is False
+    assert schema["$defs"]["CrossTableCheck"]["properties"][
+        "duplicate_reference_action"
+    ]["enum"] == ["allow", "error"]
 
 
 def test_get_config_schema_rejects_unsupported_version():
@@ -282,11 +286,12 @@ def test_validation_result_summary_status_reflects_rule_outcome():
     )
 
     frame = validation_result_to_dataframe(result)
-    statuses = frame.set_index("rule_code")["status"]
+    summary = frame[frame["event_type"] == "summary"]
+    statuses = summary.set_index("rule_code")["status"]
 
     assert statuses["passed_rule"] == "PASSED"
     assert statuses["failed_rule"] == "FAILED"
-    reasons = frame.set_index("rule_code")["reason"]
+    reasons = summary.set_index("rule_code")["reason"]
     assert reasons["failed_rule"] == "FAILED_RULE_EVENT"
     assert reasons["passed_rule"] == "PASSED_RULE_EVENT"
 
@@ -2200,6 +2205,114 @@ def test_validate_excel_runs_cross_table_values_check(tmp_path):
     assert result.errors[0].actual_value == "missing"
     assert result.errors[0].sheet_name == "Source"
     assert result.errors[0].cell_reference == "A2"
+    summaries = validation_result_to_dataframe(result)
+    summary = summaries[
+        (summaries["event_type"] == "summary")
+        & (summaries["rule_code"] == "values_in_reference")
+    ].iloc[0]
+    assert summary["processed_count"] == 1
+    assert summary["issue_count"] == 1
+
+
+def test_cross_table_check_unions_multiple_sheet_matches(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    source = workbook.active
+    source.title = "Source 1"
+    source.append(["reference"])
+    source.append(["Known A"])
+    source.append(["Known B"])
+    source_2 = workbook.create_sheet("Source 2")
+    source_2.append(["reference"])
+    source_2.append(["Known C"])
+    lookup_1 = workbook.create_sheet("Lookup 1")
+    lookup_1.append(["reference"])
+    lookup_1.append(["Known A"])
+    lookup_2 = workbook.create_sheet("Lookup 2")
+    lookup_2.append(["reference"])
+    lookup_2.append(["Known B"])
+    lookup_2.append(["Known C"])
+    workbook.save(candidate_path)
+
+    def table(name, pattern):
+        return TableConfig(
+            name=name,
+            sheet_selector=SheetSelector(mode="regex", value=pattern),
+            header_row=1,
+            column_definitions=[ColumnDefinition(name="reference")],
+            header_policy=HeaderPolicy(required_columns=["reference"]),
+            data_boundary=DataBoundary(mode="last_non_empty_row", columns=["reference"]),
+            load_policy=DataFrameLoadPolicy(),
+        )
+
+    config = make_config(required_sheet="Source 1").model_copy(
+        update={
+            "tables": [table("source", r"Source [12]"), table("lookup", r"Lookup [12]")],
+            "cross_table_checks": [
+                CrossTableCheck(
+                    name="references_exist",
+                    source_table="source",
+                    source_column="reference",
+                    reference_table="lookup",
+                    reference_column="reference",
+                )
+            ],
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.errors == []
+    assert result.processed_counts["values_in_reference"] == 3
+
+
+def test_cross_table_check_can_reject_duplicate_reference_values(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    source = workbook.active
+    source.title = "Source"
+    source.append(["reference"])
+    source.append(["Known"])
+    lookup = workbook.create_sheet("Lookup")
+    lookup.append(["reference"])
+    lookup.append(["Known"])
+    lookup.append([" known "])
+    workbook.save(candidate_path)
+
+    def table(name, sheet_name):
+        return TableConfig(
+            name=name,
+            sheet_selector=SheetSelector(mode="exact", value=sheet_name),
+            header_row=1,
+            column_definitions=[ColumnDefinition(name="reference")],
+            header_policy=HeaderPolicy(required_columns=["reference"]),
+            data_boundary=DataBoundary(mode="last_non_empty_row", columns=["reference"]),
+            load_policy=DataFrameLoadPolicy(),
+        )
+
+    config = make_config(required_sheet="Source").model_copy(
+        update={
+            "tables": [table("source", "Source"), table("lookup", "Lookup")],
+            "cross_table_checks": [
+                CrossTableCheck(
+                    name="unique_lookup",
+                    source_table="source",
+                    source_column="reference",
+                    reference_table="lookup",
+                    reference_column="reference",
+                    duplicate_reference_action="error",
+                )
+            ],
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert [event.rule_code for event in result.errors] == [
+        "values_in_reference"
+    ]
+    assert result.errors[0].sheet_name == "Lookup"
+    assert result.errors[0].cell_reference == "A3"
 
 
 def test_cross_table_check_requires_configured_tables():
