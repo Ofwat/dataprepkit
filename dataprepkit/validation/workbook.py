@@ -1544,7 +1544,7 @@ def _run_dataframe_checks(
                 )
                 continue
             processed_counts["pandas_load"] = processed_counts.get("pandas_load", 0) + 1
-            dataframe_cache[table.name] = dataframe
+            dataframe_cache.setdefault(table.name, {})[sheet_name] = dataframe
             for check in table.dataframe_checks:
                 enabled = (
                     check.enabled
@@ -1622,8 +1622,10 @@ def _run_cross_table_checks(config, dataframe_cache):
                 )
             )
             continue
-        source = dataframe_cache.get(check.source_table)
-        reference = dataframe_cache.get(check.reference_table)
+        source_tables = dataframe_cache.get(check.source_table, {})
+        reference_tables = dataframe_cache.get(check.reference_table, {})
+        source = next(iter(source_tables.values()), None) if len(source_tables) == 1 else None
+        reference = next(iter(reference_tables.values()), None) if len(reference_tables) == 1 else None
         if source is None or reference is None:
             not_run.append(
                 ValidationEvent(
@@ -1667,15 +1669,26 @@ def _run_cross_table_checks(config, dataframe_cache):
             else None
         )
         source_column_number = source.columns.get_loc(check.source_column) + 1
+        comparison = check.comparison or config.comparison
         allowed = {
-            value
+            _normalise_comparison_value(value, comparison)
             for value in reference[check.reference_column].tolist()
             if value is not None and not (isinstance(value, float) and pd.isna(value))
         }
         for row_index, value in source[check.source_column].items():
             if value is None or (isinstance(value, float) and pd.isna(value)):
+                if check.null_policy == "error":
+                    errors.append(
+                        ValidationEvent(
+                            rule_code=check.rule_code,
+                            severity=check.severity,
+                            actual_value=value,
+                            sheet_name=None,
+                            description=f"Null value found in '{check.source_column}'",
+                        )
+                    )
                 continue
-            if value in allowed:
+            if _normalise_comparison_value(value, comparison) in allowed:
                 continue
             errors.append(
                 ValidationEvent(

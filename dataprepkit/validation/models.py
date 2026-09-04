@@ -341,11 +341,15 @@ class CrossTableCheck(_PublicModel):
     reference_column: str
     enabled: bool = True
     severity: str | None = None
+    comparison: ComparisonConfig | None = None
+    null_policy: str = "ignore"
 
     @model_validator(mode="after")
     def validate_rule(self):
         if self.rule_code != "values_in_reference":
             raise ValueError("unsupported cross-table rule")
+        if self.null_policy not in {"ignore", "error"}:
+            raise ValueError("null_policy must be ignore or error")
         return self
 
 
