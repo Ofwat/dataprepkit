@@ -456,6 +456,19 @@ class WorkbookValidationConfig(_PublicModel):
 
     @model_validator(mode="after")
     def validate_rule_dependencies(self):
+        table_names = {table.name for table in self.tables}
+        if len(table_names) != len(self.tables):
+            raise ValueError("tables must not contain duplicate names")
+        for check in self.cross_table_checks:
+            missing_tables = {
+                check.source_table,
+                check.reference_table,
+            } - table_names
+            if missing_tables:
+                raise ValueError(
+                    "cross-table checks require configured tables: "
+                    f"{sorted(missing_tables)}"
+                )
         checks = {check.rule_code: check for check in self.workbook_checks}
         if len(checks) != len(self.workbook_checks):
             raise ValueError("workbook_checks must not contain duplicate rule codes")

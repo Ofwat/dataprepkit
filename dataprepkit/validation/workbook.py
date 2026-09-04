@@ -1606,7 +1606,13 @@ def _run_cross_table_checks(config, dataframe_cache):
     errors = []
     not_run = []
     for check in config.cross_table_checks:
-        if not check.enabled:
+        if (
+            not check.enabled
+            or (
+                config.enabled_rules is not None
+                and check.rule_code not in config.enabled_rules
+            )
+        ):
             not_run.append(
                 ValidationEvent(
                     rule_code=check.rule_code,
