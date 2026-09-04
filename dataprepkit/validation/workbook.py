@@ -1403,6 +1403,11 @@ def _run_dataframe_checks(
     not_run = []
     processed_counts = {}
     dataframe_cache = {}
+    cached_table_names = {
+        table_name
+        for check in config.cross_table_checks
+        for table_name in (check.source_table, check.reference_table)
+    }
 
     def skip_dataframe_checks(table, reason, sheet_name=None):
         for check in table.dataframe_checks:
@@ -1544,7 +1549,8 @@ def _run_dataframe_checks(
                 )
                 continue
             processed_counts["pandas_load"] = processed_counts.get("pandas_load", 0) + 1
-            dataframe_cache.setdefault(table.name, {})[sheet_name] = dataframe
+            if table.name in cached_table_names:
+                dataframe_cache.setdefault(table.name, {})[sheet_name] = dataframe
             for check in table.dataframe_checks:
                 enabled = (
                     check.enabled
