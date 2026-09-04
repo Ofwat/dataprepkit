@@ -201,8 +201,8 @@ def test_mssql_key_column_clauses_default_to_int():
 
     engine = _FakeEngine()
 
-    assert _surrogate_column_clause(engine, "dim_id") == "dim_id INT IDENTITY(1,1) PRIMARY KEY"
-    assert _join_numeric_clause(engine, "join_id") == "join_id INT NOT NULL"
+    assert _surrogate_column_clause(engine, "dim_id") == "[dim_id] INT IDENTITY(1,1) PRIMARY KEY"
+    assert _join_numeric_clause(engine, "join_id") == "[join_id] INT NOT NULL"
 
 
 def test_current_business_key_index_sql_uses_business_keys_and_current_ind():
@@ -214,7 +214,7 @@ def test_current_business_key_index_sql_uses_business_keys_and_current_ind():
 
     assert (
         sql
-        == "CREATE INDEX ix_dim_measure_Measure_Cd_Region_Cd_Current_Ind ON Dimensions.dim_measure (Measure_Cd, Region_Cd, Current_Ind)"
+        == 'CREATE INDEX ix_dim_measure_Measure_Cd_Region_Cd_Current_Ind ON Dimensions.dim_measure ("Measure_Cd", "Region_Cd", "Current_Ind")'
     )
 
 

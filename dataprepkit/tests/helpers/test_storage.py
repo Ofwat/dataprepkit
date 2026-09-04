@@ -192,7 +192,12 @@ def test_refresh_sql_endpoint_posts_refresh_request(monkeypatch):
     monkeypatch.setattr(storage, "fabric", _Fabric)
     monkeypatch.setattr(storage, "requests", _Requests)
 
-    result = refresh_sql_endpoint("Workspace A", "Database A")
+    result = refresh_sql_endpoint(
+        "Workspace A",
+        "Database A",
+        recreate_tables=True,
+        wait_for_completion=False,
+    )
 
     assert isinstance(result, SQLMetadataRefresh)
     assert result.sql_endpoint_id == "sql-1"
