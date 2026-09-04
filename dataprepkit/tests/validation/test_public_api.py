@@ -25,6 +25,7 @@ from dataprepkit.validation import (
     HeaderPolicy,
     DataFrameCheck,
     DataFrameLoadPolicy,
+    CrossTableCheck,
     RuntimePolicy,
     WorkbookFeaturePolicy,
     SheetPolicy,
@@ -2148,6 +2149,57 @@ def test_validate_excel_runs_dataframe_max_length_check(tmp_path):
     assert result.errors[0].cell_reference == "A2"
     assert result.errors[0].row_number == 2
     assert result.errors[0].expected_value == 4000
+
+
+def test_validate_excel_runs_cross_table_values_check(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    source = workbook.active
+    source.title = "Source"
+    source.append(["reference"])
+    source.append(["missing"])
+    lookup = workbook.create_sheet("Lookup")
+    lookup.append(["reference"])
+    lookup.append(["known"])
+    workbook.save(candidate_path)
+
+    def table(name, sheet_name):
+        return TableConfig(
+            name=name,
+            sheet_selector=SheetSelector(mode="exact", value=sheet_name),
+            header_row=1,
+            column_definitions=[ColumnDefinition(name="reference")],
+            header_policy=HeaderPolicy(required_columns=["reference"]),
+            data_boundary=DataBoundary(
+                mode="last_non_empty_row",
+                columns=["reference"],
+            ),
+            load_policy=DataFrameLoadPolicy(),
+        )
+
+    config = make_config(required_sheet="Source").model_copy(
+        update={
+            "tables": [table("source", "Source"), table("lookup", "Lookup")],
+            "cross_table_checks": [
+                CrossTableCheck(
+                    name="source_references_exist",
+                    source_table="source",
+                    source_column="reference",
+                    reference_table="lookup",
+                    reference_column="reference",
+                )
+            ],
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert [event.rule_code for event in result.errors] == [
+        "values_in_reference"
+    ]
+    assert result.errors[0].actual_value == "missing"
+    assert result.errors[0].sheet_name == "Source"
+    assert result.errors[0].cell_reference == "A2"
 
 
 def test_reference_structure_check_is_not_run_without_reference_workbook(tmp_path):

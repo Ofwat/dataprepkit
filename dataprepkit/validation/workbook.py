@@ -1011,7 +1011,7 @@ def validate_excel(
                                     ),
                                 )
                             )
-        dataframe_errors, dataframe_not_run, dataframe_counts = (
+        dataframe_errors, dataframe_not_run, dataframe_counts, dataframe_cache = (
             _run_dataframe_checks(
                 candidate_path,
                 value_workbook,
@@ -1027,6 +1027,12 @@ def validate_excel(
             processed_counts[rule_code] = (
                 processed_counts.get(rule_code, 0) + count
             )
+        cross_errors, cross_not_run = _run_cross_table_checks(
+            resolved_config,
+            dataframe_cache,
+        )
+        errors.extend(cross_errors)
+        not_run.extend(cross_not_run)
         rule_outcomes = {}
         workbook_checks = _ordered_workbook_checks(
             resolved_config.workbook_checks
@@ -1396,6 +1402,7 @@ def _run_dataframe_checks(
     errors = []
     not_run = []
     processed_counts = {}
+    dataframe_cache = {}
 
     def skip_dataframe_checks(table, reason, sheet_name=None):
         for check in table.dataframe_checks:
@@ -1537,6 +1544,7 @@ def _run_dataframe_checks(
                 )
                 continue
             processed_counts["pandas_load"] = processed_counts.get("pandas_load", 0) + 1
+            dataframe_cache[table.name] = dataframe
             for check in table.dataframe_checks:
                 enabled = (
                     check.enabled
@@ -1591,7 +1599,98 @@ def _run_dataframe_checks(
                             ),
                         )
                     )
-    return errors, not_run, processed_counts
+    return errors, not_run, processed_counts, dataframe_cache
+
+
+def _run_cross_table_checks(config, dataframe_cache):
+    errors = []
+    not_run = []
+    for check in config.cross_table_checks:
+        if not check.enabled:
+            not_run.append(
+                ValidationEvent(
+                    rule_code=check.rule_code,
+                    status="NOT_RUN",
+                    reason="RULE_DISABLED",
+                    description=f"Cross-table check '{check.name}' is disabled",
+                )
+            )
+            continue
+        source = dataframe_cache.get(check.source_table)
+        reference = dataframe_cache.get(check.reference_table)
+        if source is None or reference is None:
+            not_run.append(
+                ValidationEvent(
+                    rule_code=check.rule_code,
+                    status="NOT_RUN",
+                    reason="PANDAS_LOAD_FAILED",
+                    description=(
+                        f"Cross-table check '{check.name}' requires loaded "
+                        f"tables '{check.source_table}' and '{check.reference_table}'"
+                    ),
+                )
+            )
+            continue
+        if check.source_column not in source.columns:
+            errors.append(
+                ValidationEvent(
+                    rule_code=check.rule_code,
+                    severity=check.severity,
+                    description=f"DataFrame column not found: {check.source_column}",
+                )
+            )
+            continue
+        if check.reference_column not in reference.columns:
+            errors.append(
+                ValidationEvent(
+                    rule_code=check.rule_code,
+                    severity=check.severity,
+                    description=f"DataFrame column not found: {check.reference_column}",
+                )
+            )
+            continue
+        source_config = next(
+            table
+            for table in config.tables
+            if table.name == check.source_table
+        )
+        source_sheet_name = (
+            source_config.sheet_selector.value
+            if source_config.sheet_selector is not None
+            and source_config.sheet_selector.mode == "exact"
+            else None
+        )
+        source_column_number = source.columns.get_loc(check.source_column) + 1
+        allowed = {
+            value
+            for value in reference[check.reference_column].tolist()
+            if value is not None and not (isinstance(value, float) and pd.isna(value))
+        }
+        for row_index, value in source[check.source_column].items():
+            if value is None or (isinstance(value, float) and pd.isna(value)):
+                continue
+            if value in allowed:
+                continue
+            errors.append(
+                ValidationEvent(
+                    rule_code=check.rule_code,
+                    severity=check.severity,
+                    actual_value=value,
+                    expected_value=check.reference_table,
+                    sheet_name=source_sheet_name,
+                    cell_reference=(
+                        f"{get_column_letter(source_column_number)}"
+                        f"{source_config.header_row + 1 + int(row_index)}"
+                    ),
+                    row_number=source_config.header_row + 1 + int(row_index),
+                    column_number=source_column_number,
+                    description=(
+                        f"Value in '{check.source_column}' was not found in "
+                        f"'{check.reference_table}.{check.reference_column}'"
+                    ),
+                )
+            )
+    return errors, not_run
 
 
 def _match_sheets(sheet_names, selector):

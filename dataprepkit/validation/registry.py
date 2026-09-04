@@ -74,6 +74,11 @@ _BUILT_IN_RULES = (
         "description": "Reject DataFrame values exceeding a configured length.",
     },
     {
+        "rule_code": "values_in_reference",
+        "attachment": "cross_table_checks",
+        "description": "Require source values to exist in another loaded table.",
+    },
+    {
         "rule_code": "missing_reference_sheet",
         "attachment": "workbook_checks",
         "description": "Find reference sheets absent from the candidate workbook.",

@@ -160,6 +160,7 @@ for rule in list_available_rules():
 | `forbidden_values` | `tables.column_validations[].forbidden_values` | A value is in the configured deny-list. |
 | `pandas_load` | `tables[].load_policy` | A resolved table could not be loaded into pandas. |
 | `max_length` | `tables[].dataframe_checks` | A loaded DataFrame value exceeds its configured length. |
+| `values_in_reference` | `cross_table_checks` | A source value is absent from another loaded table. |
 | `missing_reference_sheet` | `workbook_checks` | A sheet in the reference workbook is absent from the candidate. |
 | `sheet_structure` | `workbook_checks` | Candidate and reference content-based used areas differ. |
 | `formula_difference` | `workbook_checks` | Candidate and reference formula text differs at a cell. |

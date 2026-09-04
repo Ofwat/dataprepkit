@@ -332,6 +332,23 @@ class DataFrameCheck(_PublicModel):
         return self
 
 
+class CrossTableCheck(_PublicModel):
+    name: str
+    rule_code: str = "values_in_reference"
+    source_table: str
+    source_column: str
+    reference_table: str
+    reference_column: str
+    enabled: bool = True
+    severity: str | None = None
+
+    @model_validator(mode="after")
+    def validate_rule(self):
+        if self.rule_code != "values_in_reference":
+            raise ValueError("unsupported cross-table rule")
+        return self
+
+
 class TableConfig(_PublicModel):
     name: str
     sheet_selector: SheetSelector | None = None
@@ -429,6 +446,7 @@ class WorkbookValidationConfig(_PublicModel):
     comparison: ComparisonConfig
     sheet_policy: SheetPolicy
     tables: list[TableConfig] = Field(default_factory=list)
+    cross_table_checks: list[CrossTableCheck] = Field(default_factory=list)
     expected_cells: list[ExpectedCellCheck] = Field(default_factory=list)
     workbook_checks: list[WorkbookCheck] = Field(default_factory=list)
     enabled_rules: list[str] | None = None

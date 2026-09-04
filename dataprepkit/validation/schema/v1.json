@@ -265,6 +265,22 @@
       "title": "DataFrameLoadPolicy",
       "type": "object"
     },
+    "CrossTableCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"default": true, "title": "Enabled", "type": "boolean"},
+        "name": {"title": "Name", "type": "string"},
+        "reference_column": {"title": "Reference Column", "type": "string"},
+        "reference_table": {"title": "Reference Table", "type": "string"},
+        "rule_code": {"default": "values_in_reference", "title": "Rule Code", "type": "string"},
+        "severity": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null},
+        "source_column": {"title": "Source Column", "type": "string"},
+        "source_table": {"title": "Source Table", "type": "string"}
+      },
+      "required": ["name", "source_table", "source_column", "reference_table", "reference_column"],
+      "title": "CrossTableCheck",
+      "type": "object"
+    },
     "EmptyRowRule": {
       "additionalProperties": false,
       "properties": {
@@ -680,6 +696,11 @@
   "properties": {
     "comparison": {
       "$ref": "#/$defs/ComparisonConfig"
+    },
+    "cross_table_checks": {
+      "items": {"$ref": "#/$defs/CrossTableCheck"},
+      "title": "Cross Table Checks",
+      "type": "array"
     },
     "compatibility": {
       "anyOf": [
