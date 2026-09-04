@@ -1,4 +1,5 @@
 from time import perf_counter
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import openpyxl
 
@@ -52,6 +53,41 @@ def test_read_only_inflated_dimension_does_not_scan_empty_rows(tmp_path):
     workbook.active.title = "Data"
     workbook.active["A1048576"] = "last-row-value"
     workbook.save(path)
+
+    config = make_config().model_copy(
+        update={
+            "runtime": RuntimePolicy(
+                max_cells_scanned=10,
+                read_only=True,
+                macro_policy="reject",
+                missing_formula_cache_action="not_run",
+            )
+        }
+    )
+    started = perf_counter()
+    result = validate_excel(candidate_path=path, config=config)
+    elapsed = perf_counter() - started
+
+    assert result.is_valid is True
+    assert result.errors == []
+    assert elapsed < 3
+
+
+def test_read_only_inflated_column_dimension_stays_sparse(tmp_path):
+    source_path = tmp_path / "source.xlsx"
+    path = tmp_path / "inflated_columns.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active["A1"] = "value"
+    workbook.active["B1"] = "=1+1"
+    workbook.save(source_path)
+
+    with ZipFile(source_path) as source, ZipFile(path, "w", ZIP_DEFLATED) as target:
+        for item in source.infolist():
+            data = source.read(item.filename)
+            if item.filename == "xl/worksheets/sheet1.xml":
+                data = data.replace(b'ref="A1:A1"', b'ref="A1:XFC91"')
+            target.writestr(item, data)
 
     config = make_config().model_copy(
         update={

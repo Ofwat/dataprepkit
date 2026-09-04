@@ -16,6 +16,7 @@ from openpyxl.utils.cell import (
     range_boundaries,
 )
 from openpyxl.worksheet._reader import WorkSheetParser
+from openpyxl.worksheet._read_only import ReadOnlyCell
 
 from .config import validate_config
 from .models import (
@@ -1321,12 +1322,16 @@ def validate_excel(
             missing_cache_cells = []
             for formula_sheet in formula_workbook.worksheets:
                 value_sheet = value_workbook[formula_sheet.title]
+                value_cells = {
+                    cell.coordinate: cell
+                    for cell in value_resolution.cells(value_sheet)
+                }
                 for formula_cell in formula_resolution.cells(formula_sheet):
-                    value_cell = value_sheet[formula_cell.coordinate]
+                    value_cell = value_cells.get(formula_cell.coordinate)
                     if (
                         formula_cell.data_type == "f"
-                        and value_cell.value is None
-                        and value_cell.data_type not in {"s", "str"}
+                        and (value_cell is None or value_cell.value is None)
+                        and (value_cell is None or value_cell.data_type not in {"s", "str"})
                     ):
                         missing_cache_cells.append(
                             (
@@ -2209,9 +2214,8 @@ def _read_only_cells(sheet):
             timedelta_formats=sheet.parent._timedelta_formats,
         )
         for _row_number, row in parser.parse():
-            for cell in sheet._get_row(row):
-                if cell.value is not None:
-                    yield cell
+            for cell in row:
+                yield ReadOnlyCell(sheet, **cell)
 
 
 def _comparison_coordinates(
