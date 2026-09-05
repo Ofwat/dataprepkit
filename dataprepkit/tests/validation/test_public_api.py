@@ -1047,6 +1047,30 @@ def test_validate_excel_reports_configured_formula_errors(tmp_path):
     assert result.errors[0].severity == "error"
 
 
+def test_formula_error_filters_native_excel_errors_by_configured_tokens(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active["A1"] = "#REF!"
+    workbook.active["A2"] = "#VALUE!"
+    workbook.save(candidate_path)
+
+    config = make_config(
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="formula_error",
+                enabled=True,
+                scope="all_sheets",
+                options={"error_tokens": ["#REF!"]},
+            )
+        ]
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert [event.actual_value for event in result.errors] == ["#REF!"]
+
+
 def test_validate_excel_applies_formula_error_warning_severity(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()

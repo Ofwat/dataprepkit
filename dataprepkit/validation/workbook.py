@@ -1372,7 +1372,7 @@ def validate_excel(
             for sheet in value_workbook.worksheets:
                 for cell in value_resolution.cells(sheet):
                     record_processed("formula_error")
-                    if cell.data_type == "e" or cell.value in tokens:
+                    if cell.value in tokens:
                         event = ValidationEvent(
                             rule_code="formula_error",
                             reason="FORMULA_ERROR_VALUE",
