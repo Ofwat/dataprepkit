@@ -1047,6 +1047,49 @@ def test_validate_excel_reports_configured_formula_errors(tmp_path):
     assert result.errors[0].severity == "error"
 
 
+@pytest.mark.parametrize(
+    "scope, expected_sheets",
+    [
+        ("all_sheets", {"Data", "Other"}),
+        ({"type": "selected_sheets", "sheets": ["Data"]}, {"Data"}),
+        ({"type": "sheet_pattern", "pattern": r"^Data$"}, {"Data"}),
+    ],
+)
+def test_formula_error_honors_sheet_scope(tmp_path, scope, expected_sheets):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active["A1"] = "#VALUE!"
+    other = workbook.create_sheet("Other")
+    other["A1"] = "#VALUE!"
+    workbook.save(candidate_path)
+
+    config = make_config(
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="formula_error",
+                enabled=True,
+                scope=scope,
+                options={"error_tokens": ["#VALUE!"]},
+            )
+        ]
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert {event.sheet_name for event in result.errors} == expected_sheets
+
+
+def test_workbook_check_rejects_invalid_sheet_scope_pattern():
+    with pytest.raises(ValueError, match="invalid sheet pattern"):
+        WorkbookCheck(
+            rule_code="formula_error",
+            enabled=True,
+            scope={"type": "sheet_pattern", "pattern": "["},
+            options={"error_tokens": ["#VALUE!"]},
+        )
+
+
 def test_formula_error_filters_native_excel_errors_by_configured_tokens(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()
@@ -2968,7 +3011,7 @@ def test_feature_policy_scopes_merged_cells(tmp_path, scope, expected_sheets):
 
 
 def test_feature_policy_rejects_invalid_merged_cell_sheet_pattern():
-    with pytest.raises(ValueError, match="invalid merged cell sheet pattern"):
+    with pytest.raises(ValueError, match="invalid sheet pattern"):
         WorkbookFeaturePolicy(
             merged_cells={
                 "action": "warning",
@@ -3103,7 +3146,7 @@ def test_feature_policy_reports_unavailable_detection(
     monkeypatch.setattr(
         workbook_module,
         "_detected_features",
-        lambda workbook, path: iter(
+            lambda workbook, path, *args: iter(
             [("charts", "Data", None, None, "feature reader unavailable")]
         ),
     )
@@ -3144,7 +3187,7 @@ def test_feature_policy_ignores_unavailable_detection_with_diagnostic(
     monkeypatch.setattr(
         workbook_module,
         "_detected_features",
-        lambda workbook, path: iter(
+            lambda workbook, path, *args: iter(
             [("charts", "Data", None, None, "feature reader unavailable")]
         ),
     )

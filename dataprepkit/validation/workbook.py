@@ -161,6 +161,7 @@ def validate_excel(
         ) in _detected_features(
             formula_workbook,
             candidate_path,
+            resolved_config.runtime.feature_policy.merged_cells.scope,
         ):
             if (
                 feature_name == "merged_cells"
@@ -1384,6 +1385,8 @@ def validate_excel(
                     rule_outcomes[check.rule_code] = "not_run"
                     continue
             for sheet in value_workbook.worksheets:
+                if not _sheet_in_scope(sheet.title, check.scope):
+                    continue
                 for cell in value_resolution.cells(sheet):
                     record_processed("formula_error")
                     if cell.value in tokens:
@@ -1966,7 +1969,7 @@ def _date_value(value, options):
     return None
 
 
-def _detected_features(workbook, candidate_path):
+def _detected_features(workbook, candidate_path, merged_cells_scope=None):
     if candidate_path.suffix.lower() == ".xlsm":
         yield "macros", None, None, None, None
     for feature_name, attribute in (
@@ -2014,6 +2017,11 @@ def _detected_features(workbook, candidate_path):
                 and feature_name != "merged_cells"
             ):
                 continue
+            if feature_name == "merged_cells" and not _sheet_in_scope(
+                sheet.title,
+                merged_cells_scope,
+            ):
+                continue
             try:
                 feature = getattr(sheet, attribute, None)
                 if feature_name == "merged_cells":
@@ -2040,6 +2048,18 @@ def _merged_sheet_in_scope(sheet_name, policy):
     scope = getattr(policy, "scope", None)
     if scope is None:
         return True
+    if scope.type == "all_sheets":
+        return True
+    if scope.type == "selected_sheets":
+        return sheet_name in scope.sheets
+    return re.search(scope.pattern, sheet_name) is not None
+
+
+def _sheet_in_scope(sheet_name, scope):
+    if scope is None or scope == "all_sheets":
+        return True
+    if isinstance(scope, str):
+        return scope == "all_sheets"
     if scope.type == "all_sheets":
         return True
     if scope.type == "selected_sheets":

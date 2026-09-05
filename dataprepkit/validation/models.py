@@ -75,7 +75,7 @@ class ComparisonConfig(_PublicModel):
     collation_name: str
 
 
-class MergedCellsScope(_PublicModel):
+class SheetScope(_PublicModel):
     type: str = "all_sheets"
     sheets: list[str] = Field(default_factory=list)
     pattern: str | None = None
@@ -95,7 +95,7 @@ class MergedCellsScope(_PublicModel):
             try:
                 re.compile(self.pattern)
             except re.error as error:
-                raise ValueError(f"invalid merged cell sheet pattern: {error}") from error
+                raise ValueError(f"invalid sheet pattern: {error}") from error
         if self.type != "sheet_pattern" and self.pattern is not None:
             raise ValueError("pattern is only valid for sheet_pattern scope")
         if self.type != "selected_sheets" and self.sheets:
@@ -103,9 +103,12 @@ class MergedCellsScope(_PublicModel):
         return self
 
 
+MergedCellsScope = SheetScope
+
+
 class MergedCellsPolicy(_PublicModel):
     action: str = "ignore"
-    scope: MergedCellsScope = Field(default_factory=MergedCellsScope)
+    scope: SheetScope = Field(default_factory=SheetScope)
 
     @field_validator("action")
     @classmethod
@@ -429,7 +432,7 @@ class TableConfig(_PublicModel):
 class WorkbookCheck(_PublicModel):
     rule_code: str
     enabled: bool
-    scope: str
+    scope: str | SheetScope
     options: dict[str, Any] | None = None
     depends_on: list[str] = Field(default_factory=list)
     severity: str | None = None
@@ -445,6 +448,13 @@ class WorkbookCheck(_PublicModel):
 
     @model_validator(mode="after")
     def validate_rule_options(self):
+        if isinstance(self.scope, str) and self.scope not in {
+            "all_sheets",
+            "overlapping_sheets",
+        }:
+            raise ValueError(
+                "scope must be all_sheets, overlapping_sheets, or a sheet scope"
+            )
         options = self.options or {}
         built_in_options = {
             "formula_error": {"error_tokens"},

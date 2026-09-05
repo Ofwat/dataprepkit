@@ -636,8 +636,11 @@
           "type": "string"
         },
         "scope": {
-          "title": "Scope",
-          "type": "string"
+          "anyOf": [
+            {"enum": ["all_sheets", "overlapping_sheets"], "type": "string"},
+            {"$ref": "#/$defs/SheetScope"}
+          ],
+          "title": "Scope"
         },
         "severity": {
           "anyOf": [
@@ -709,11 +712,11 @@
           "enum": ["ignore", "warning", "error"],
           "type": "string"
         },
-        "scope": {"$ref": "#/$defs/MergedCellsScope"}
+        "scope": {"$ref": "#/$defs/SheetScope"}
       },
       "type": "object"
     },
-    "MergedCellsScope": {
+    "SheetScope": {
       "additionalProperties": false,
       "properties": {
         "type": {
