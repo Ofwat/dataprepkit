@@ -684,9 +684,8 @@
           "type": "string"
         },
         "merged_cells": {
-          "default": "ignore",
-          "title": "Merged Cells",
-          "type": "string"
+          "$ref": "#/$defs/MergedCellsPolicy",
+          "title": "Merged Cells"
         },
         "named_ranges": {
           "default": "ignore",
@@ -700,6 +699,31 @@
         }
       },
       "title": "WorkbookFeaturePolicy",
+      "type": "object"
+    },
+    "MergedCellsPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "default": "ignore",
+          "enum": ["ignore", "warning", "error"],
+          "type": "string"
+        },
+        "scope": {"$ref": "#/$defs/MergedCellsScope"}
+      },
+      "type": "object"
+    },
+    "MergedCellsScope": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "default": "all_sheets",
+          "enum": ["all_sheets", "selected_sheets", "sheet_pattern"],
+          "type": "string"
+        },
+        "sheets": {"items": {"type": "string"}, "type": "array"},
+        "pattern": {"type": ["string", "null"]}
+      },
       "type": "object"
     }
   },

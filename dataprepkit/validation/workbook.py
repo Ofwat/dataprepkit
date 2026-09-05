@@ -162,6 +162,15 @@ def validate_excel(
             formula_workbook,
             candidate_path,
         ):
+            if (
+                feature_name == "merged_cells"
+                and sheet_name is not None
+                and not _merged_sheet_in_scope(
+                    sheet_name,
+                    resolved_config.runtime.feature_policy.merged_cells,
+                )
+            ):
+                continue
             if detection_error is not None:
                 action = resolved_config.runtime.feature_policy.unavailable_action
                 event_code = f"{feature_name}_detection_unavailable"
@@ -201,6 +210,8 @@ def validate_excel(
                 resolved_config.runtime.feature_policy,
                 feature_name,
             )
+            if feature_name == "merged_cells":
+                action = action.action
             event_code = feature_name
             if action == "ignore":
                 processed_severities[f"code:{event_code.upper()}"] = action
@@ -210,7 +221,10 @@ def validate_excel(
                 record_processed(event_code)
             description = f"Detected workbook feature: {feature_name}"
             if cell_reference is not None:
-                description += f" ({cell_reference})"
+                if feature_name == "merged_cells":
+                    description = f"Merged cell range detected: {cell_reference}"
+                else:
+                    description += f" ({cell_reference})"
             if detected_value is not None:
                 description += f": {detected_value}"
             event = ValidationEvent(
@@ -2020,6 +2034,17 @@ def _detected_features(workbook, candidate_path):
                         yield feature_name, sheet.title, None, None, None
             except Exception as error:
                 yield feature_name, sheet.title, None, None, str(error)
+
+
+def _merged_sheet_in_scope(sheet_name, policy):
+    scope = getattr(policy, "scope", None)
+    if scope is None:
+        return True
+    if scope.type == "all_sheets":
+        return True
+    if scope.type == "selected_sheets":
+        return sheet_name in scope.sheets
+    return re.search(scope.pattern, sheet_name) is not None
 
 
 def _external_link_targets(workbook, path):

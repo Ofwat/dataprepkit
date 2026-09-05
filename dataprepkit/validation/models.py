@@ -75,13 +75,53 @@ class ComparisonConfig(_PublicModel):
     collation_name: str
 
 
+class MergedCellsScope(_PublicModel):
+    type: str = "all_sheets"
+    sheets: list[str] = Field(default_factory=list)
+    pattern: str | None = None
+
+    @model_validator(mode="after")
+    def validate_scope(self):
+        if self.type not in {"all_sheets", "selected_sheets", "sheet_pattern"}:
+            raise ValueError(
+                "merged cell scope type must be all_sheets, selected_sheets, "
+                "or sheet_pattern"
+            )
+        if self.type == "selected_sheets" and not self.sheets:
+            raise ValueError("selected_sheets scope requires sheets")
+        if self.type == "sheet_pattern":
+            if not self.pattern:
+                raise ValueError("sheet_pattern scope requires pattern")
+            try:
+                re.compile(self.pattern)
+            except re.error as error:
+                raise ValueError(f"invalid merged cell sheet pattern: {error}") from error
+        if self.type != "sheet_pattern" and self.pattern is not None:
+            raise ValueError("pattern is only valid for sheet_pattern scope")
+        if self.type != "selected_sheets" and self.sheets:
+            raise ValueError("sheets is only valid for selected_sheets scope")
+        return self
+
+
+class MergedCellsPolicy(_PublicModel):
+    action: str = "ignore"
+    scope: MergedCellsScope = Field(default_factory=MergedCellsScope)
+
+    @field_validator("action")
+    @classmethod
+    def validate_action(cls, value):
+        if value not in {"ignore", "warning", "error"}:
+            raise ValueError("merged_cells action must be ignore, warning, or error")
+        return value
+
+
 class WorkbookFeaturePolicy(_PublicModel):
     unavailable_action: str = "warning"
     external_links: str = "ignore"
     charts: str = "ignore"
     pivot_tables: str = "ignore"
     named_ranges: str = "ignore"
-    merged_cells: str = "ignore"
+    merged_cells: MergedCellsPolicy = Field(default_factory=MergedCellsPolicy)
     macros: str = "ignore"
 
     @model_validator(mode="after")
@@ -98,7 +138,10 @@ class WorkbookFeaturePolicy(_PublicModel):
             "merged_cells",
             "macros",
         ):
-            if getattr(self, name) not in {"ignore", "warning", "error"}:
+            value = getattr(self, name)
+            if name == "merged_cells":
+                continue
+            if value not in {"ignore", "warning", "error"}:
                 raise ValueError(
                     f"{name} action must be ignore, warning, or error"
                 )

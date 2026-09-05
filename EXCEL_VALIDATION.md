@@ -55,7 +55,8 @@ config = load_validation_config(
 | `feature_policy` | Actions for workbook features and unavailable feature detection. |
 
 Feature policies use `ignore`, `warning`, or `error` for `macros`,
-`external_links`, `charts`, `pivot_tables`, `named_ranges`, and `merged_cells`.
+`external_links`, `charts`, `pivot_tables`, and `named_ranges`. Merged-cell
+detection uses the structured `action` and `scope` policy shown below.
 `unavailable_action` applies when a feature cannot be inspected:
 
 ```yaml
@@ -71,8 +72,27 @@ runtime:
     charts: ignore
     pivot_tables: warning
     named_ranges: ignore
-    merged_cells: error
+    merged_cells:
+      action: error
+      scope:
+        type: all_sheets
 ```
+
+`merged_cells` must be configured as a structured policy and may be scoped to
+specific sheets:
+
+```yaml
+feature_policy:
+  merged_cells:
+    action: warning
+    scope:
+      type: sheet_pattern
+      pattern: "^Data_"
+```
+
+The supported scope types are `all_sheets`, `selected_sheets` with a `sheets`
+list, and `sheet_pattern` with a regular-expression `pattern`. Only merged-cell
+detection supports this scope; all other feature detections remain workbook-wide.
 
 `error` makes the result invalid. `warning` keeps the result valid but records
 the issue in `result.warnings`. `ignore` records a diagnostic in

@@ -45,7 +45,10 @@ runtime:
     charts: ignore
     pivot_tables: warning
     named_ranges: ignore
-    merged_cells: warning
+    merged_cells:
+      action: warning
+      scope:
+        type: all_sheets
     macros: error
 
 compatibility: null

@@ -2911,7 +2911,7 @@ def test_feature_policy_reports_merged_cells(tmp_path):
                 macro_policy="reject",
                 missing_formula_cache_action="not_run",
                 feature_policy=WorkbookFeaturePolicy(
-                    merged_cells="error",
+                    merged_cells={"action": "error"},
                 ),
             )
         }
@@ -2921,10 +2921,65 @@ def test_feature_policy_reports_merged_cells(tmp_path):
 
     assert result.is_valid is False
     assert [event.rule_code for event in result.errors] == ["merged_cells"]
-    assert "merged_cells" in result.errors[0].description
+    assert result.errors[0].description == "Merged cell range detected: A1:B1"
     assert result.errors[0].reason == "MERGED_CELLS_DETECTED"
     assert result.errors[0].sheet_name == "Data"
     assert result.errors[0].cell_reference == "A1:B1"
+
+
+@pytest.mark.parametrize(
+    "scope, expected_sheets",
+    [
+        ({"type": "all_sheets"}, {"Data_2024", "Summary"}),
+        ({"type": "selected_sheets", "sheets": ["Data_2024"]}, {"Data_2024"}),
+        ({"type": "sheet_pattern", "pattern": r"^Data_"}, {"Data_2024"}),
+    ],
+)
+def test_feature_policy_scopes_merged_cells(tmp_path, scope, expected_sheets):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data_2024"
+    workbook.active.merge_cells("A1:B1")
+    summary = workbook.create_sheet("Summary")
+    summary.merge_cells("C2:D2")
+    workbook.save(candidate_path)
+
+    config = make_config(required_sheet="Data_2024").model_copy(
+        update={
+            "runtime": RuntimePolicy(
+                max_cells_scanned=1000,
+                read_only=False,
+                macro_policy="reject",
+                missing_formula_cache_action="not_run",
+                feature_policy=WorkbookFeaturePolicy(
+                    merged_cells={"action": "error", "scope": scope},
+                ),
+            )
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert {event.sheet_name for event in result.errors} == expected_sheets
+    assert all(
+        event.description == "Merged cell range detected: " + event.cell_reference
+        for event in result.errors
+    )
+
+
+def test_feature_policy_rejects_invalid_merged_cell_sheet_pattern():
+    with pytest.raises(ValueError, match="invalid merged cell sheet pattern"):
+        WorkbookFeaturePolicy(
+            merged_cells={
+                "action": "warning",
+                "scope": {"type": "sheet_pattern", "pattern": "["},
+            }
+        )
+
+
+def test_feature_policy_rejects_scalar_merged_cells_action():
+    with pytest.raises(ValueError):
+        WorkbookFeaturePolicy(merged_cells="warning")
 
 
 def test_feature_policy_warning_does_not_invalidate_result(tmp_path):
@@ -2942,7 +2997,7 @@ def test_feature_policy_warning_does_not_invalidate_result(tmp_path):
                 macro_policy="reject",
                 missing_formula_cache_action="not_run",
                 feature_policy=WorkbookFeaturePolicy(
-                    merged_cells="warning",
+                    merged_cells={"action": "warning"},
                 ),
             )
         }
@@ -2973,7 +3028,7 @@ def test_feature_policy_ignore_records_a_diagnostic(tmp_path):
                 macro_policy="reject",
                 missing_formula_cache_action="not_run",
                 feature_policy=WorkbookFeaturePolicy(
-                    merged_cells="ignore",
+                    merged_cells={"action": "ignore"},
                 ),
             )
         }
