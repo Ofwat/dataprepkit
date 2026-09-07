@@ -227,6 +227,20 @@ tables:
         unique: true
 ```
 
+For `last_non_empty_row`, `columns` identifies the columns that determine the
+boundary. To use every column resolved from the configured header row, set
+`infer_columns: true` instead:
+
+```yaml
+    data_boundary:
+      mode: last_non_empty_row
+      infer_columns: true
+```
+
+If both are supplied, explicit `columns` take precedence. Supplying neither
+remains invalid, because the validator cannot determine which columns define
+the data boundary.
+
 `allowed_values` and `forbidden_values` are mutually exclusive on one column
 validation. Values are compared using the global `comparison` policy unless a
 column definition supplies its own comparison override.
@@ -321,6 +335,14 @@ tables:
         column: Measure_Value
         max_length: 4000
         length_mode: characters
+```
+
+The same pandas load can infer its boundary columns:
+
+```yaml
+    data_boundary:
+      mode: last_non_empty_row
+      infer_columns: true
 ```
 
 `max_length` ignores configured null values. Length modes are explicit so that

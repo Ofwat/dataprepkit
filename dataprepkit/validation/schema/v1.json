@@ -214,6 +214,11 @@
           "default": null,
           "title": "Columns"
         },
+        "infer_columns": {
+          "default": false,
+          "title": "Infer Columns",
+          "type": "boolean"
+        },
         "end_row": {
           "anyOf": [
             {

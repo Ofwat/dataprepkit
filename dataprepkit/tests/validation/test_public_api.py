@@ -2946,6 +2946,71 @@ def test_forbidden_values_and_patterns_match_with_sheet_pattern_selector(tmp_pat
     assert {event.sheet_name for event in result.errors} == {"Data_2024"}
 
 
+def test_last_non_empty_row_can_infer_columns_and_explicit_columns_win(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    sheet = workbook.active
+    sheet.append(["Unit", "Status"])
+    sheet.append(["Ml", "Open"])
+    sheet.append(["Ml", "Closed"])
+    sheet.append([None, "Closed after explicit boundary"])
+    workbook.save(candidate_path)
+
+    base_table = dict(
+        name="outputs",
+        sheet_selector=SheetSelector(mode="exact", value="Data"),
+        header_row=1,
+        column_definitions=[
+            ColumnDefinition(name="unit"),
+            ColumnDefinition(name="status"),
+        ],
+        header_policy=HeaderPolicy(required_columns=["unit", "status"]),
+        column_validations=[
+            ColumnValidation(
+                column="status",
+                forbidden_values=["Closed", "Closed after explicit boundary"],
+            )
+        ],
+    )
+
+    inferred_config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    **base_table,
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        infer_columns=True,
+                    ),
+                )
+            ]
+        }
+    )
+    inferred_result = validate_excel(candidate_path, config=inferred_config)
+    assert [event.cell_reference for event in inferred_result.errors] == [
+        "B3",
+        "B4",
+    ]
+
+    explicit_config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    **base_table,
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        columns=["unit"],
+                        infer_columns=True,
+                    ),
+                )
+            ]
+        }
+    )
+    explicit_result = validate_excel(candidate_path, config=explicit_config)
+    assert [event.cell_reference for event in explicit_result.errors] == ["B3"]
+
+
 def test_forbidden_patterns_reject_invalid_and_empty_patterns():
     with pytest.raises(ValueError, match="invalid forbidden pattern"):
         ColumnValidation(column="status", forbidden_patterns=["["])

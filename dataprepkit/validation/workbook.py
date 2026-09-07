@@ -567,12 +567,24 @@ def validate_excel(
                         if position is not None:
                             logical_columns[definition.name] = position + 1
                             break
+                boundary_columns = dict(logical_columns)
+                if (
+                    table.data_boundary is not None
+                    and table.data_boundary.infer_columns
+                ):
+                    boundary_columns.update(
+                        {
+                            str(header): index + 1
+                            for index, header in enumerate(headers)
+                            if header is not None
+                        }
+                    )
                 data_end_row = _table_data_end_row(
                     table,
                     table.header_row,
                     sheet,
                     formula_workbook[sheet_name],
-                    logical_columns,
+                    boundary_columns,
                     value_resolution,
                     formula_resolution,
                 )
@@ -1618,6 +1630,15 @@ def _run_dataframe_checks(
                 )
                 for name in definitions
             }
+            boundary_columns = dict(logical_columns)
+            if table.data_boundary is not None and table.data_boundary.infer_columns:
+                boundary_columns.update(
+                    {
+                        str(header): index + 1
+                        for index, header in enumerate(headers)
+                        if header is not None
+                    }
+                )
             required_columns = (
                 table.header_policy.required_columns
                 if table.header_policy is not None
@@ -1640,7 +1661,7 @@ def _run_dataframe_checks(
                 table.header_row,
                 sheet,
                 formula_sheet,
-                logical_columns,
+                boundary_columns,
                 value_resolution,
                 formula_resolution,
             )
@@ -2402,12 +2423,17 @@ def _table_data_end_row(
             range_boundaries(excel_table.ref)
         )
         return max_table_row
-    if boundary.mode == "last_non_empty_row" and boundary.columns:
+    if boundary.mode == "last_non_empty_row" and (
+        boundary.columns or boundary.infer_columns
+    ):
+        requested_columns = boundary.columns or list(logical_columns)
         column_numbers = [
             logical_columns[column]
-            for column in boundary.columns
+            for column in requested_columns
             if column in logical_columns
         ]
+        if not column_numbers and boundary.infer_columns:
+            return None
         if hasattr(value_sheet, "_cells") and hasattr(formula_sheet, "_cells"):
             rows = [
                 cell.row
