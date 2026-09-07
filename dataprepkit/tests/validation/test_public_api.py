@@ -2810,6 +2810,78 @@ def test_column_rules_respect_fixed_table_data_boundary(tmp_path):
     assert result.errors[0].cell_reference == "A2"
 
 
+def test_forbidden_values_and_patterns_match_with_sheet_pattern_selector(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data_2024"
+    sheet = workbook.active
+    sheet.append(["Status"])
+    sheet.append(["Closed"])
+    sheet.append(["Test account"])
+    sheet.append(["Old Deprecated"])
+    sheet.append(["Open"])
+    other = workbook.create_sheet("Summary")
+    other.append(["Status"])
+    other.append(["Closed"])
+    workbook.save(candidate_path)
+
+    config = make_config(required_sheet="Data_2024").model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="accounts",
+                    sheet_selector=SheetSelector(
+                        mode="sheet_pattern",
+                        value=r"^Data_",
+                    ),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        columns=["status"],
+                    ),
+                    column_definitions=[ColumnDefinition(name="status")],
+                    header_policy=HeaderPolicy(required_columns=["status"]),
+                    column_validations=[
+                        ColumnValidation(
+                            column="status",
+                            forbidden_values=["Closed"],
+                            forbidden_patterns=["^Test", "Deprecated$"],
+                        )
+                    ],
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert [event.actual_value for event in result.errors] == [
+        "Closed",
+        "Test account",
+        "Old Deprecated",
+    ]
+    assert result.errors[0].expected_value == ["Closed"]
+    assert result.errors[1].expected_value == "^Test"
+    assert result.errors[1].description == "Value matches forbidden pattern: ^Test"
+    assert result.errors[2].expected_value == "Deprecated$"
+    assert {event.sheet_name for event in result.errors} == {"Data_2024"}
+
+
+def test_forbidden_patterns_reject_invalid_and_empty_patterns():
+    with pytest.raises(ValueError, match="invalid forbidden pattern"):
+        ColumnValidation(column="status", forbidden_patterns=["["])
+    with pytest.raises(ValueError, match="cannot contain empty patterns"):
+        ColumnValidation(column="status", forbidden_patterns=[""])
+    with pytest.raises(ValueError, match="must not be empty"):
+        ColumnValidation(column="status", forbidden_patterns=[])
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        ColumnValidation(
+            column="status",
+            allowed_values=["Open"],
+            forbidden_patterns=["^Test"],
+        )
+
+
 def test_data_presence_is_not_run_when_boundary_column_cannot_resolve(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()

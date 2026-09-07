@@ -231,6 +231,21 @@ tables:
 validation. Values are compared using the global `comparison` policy unless a
 column definition supplies its own comparison override.
 
+Use `forbidden_patterns` for regular-expression exclusions. Exact values and
+patterns may be combined; a value fails if either check matches. Patterns are
+validated during configuration loading and are applied to the normalized text
+under the configured comparison policy:
+
+```yaml
+      - column: status
+        forbidden_values: [Closed, Cancelled]
+        forbidden_patterns: ["^Test", "Deprecated$"]
+```
+
+`allowed_values` cannot be combined with either forbidden list. Pattern-based
+findings identify the matching pattern in `expected_value` and the event
+description.
+
 ### Expected cells
 
 Use `expected_cells` when a small number of workbook-level values must be

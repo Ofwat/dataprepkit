@@ -780,7 +780,10 @@ def validate_excel(
                             column_rule_codes.append("duplicate_value")
                         if validation.allowed_values is not None:
                             column_rule_codes.append("allowed_values")
-                        if validation.forbidden_values is not None:
+                        if (
+                            validation.forbidden_values is not None
+                            or validation.forbidden_patterns is not None
+                        ):
                             column_rule_codes.append("forbidden_values")
                         for rule_code in column_rule_codes:
                             not_run.append(
@@ -804,7 +807,10 @@ def validate_excel(
                             column_rule_codes.append("duplicate_value")
                         if validation.allowed_values is not None:
                             column_rule_codes.append("allowed_values")
-                        if validation.forbidden_values is not None:
+                        if (
+                            validation.forbidden_values is not None
+                            or validation.forbidden_patterns is not None
+                        ):
                             column_rule_codes.append("forbidden_values")
                         for rule_code in column_rule_codes:
                             disabled = (
@@ -838,7 +844,11 @@ def validate_excel(
                         ("missing_value", validation.required or validation.null_policy == "error"),
                         ("duplicate_value", validation.unique),
                         ("allowed_values", validation.allowed_values is not None),
-                        ("forbidden_values", validation.forbidden_values is not None),
+                        (
+                            "forbidden_values",
+                            validation.forbidden_values is not None
+                            or validation.forbidden_patterns is not None,
+                        ),
                     ):
                         if enabled:
                             processed_severities.setdefault(
@@ -865,6 +875,9 @@ def validate_excel(
                         column_rule_codes.append("allowed_values")
                     if validation.forbidden_values is not None:
                         column_rule_codes.append("forbidden_values")
+                    if validation.forbidden_patterns is not None:
+                        if "forbidden_values" not in column_rule_codes:
+                            column_rule_codes.append("forbidden_values")
                     disabled_column_rules = [
                         rule_code
                         for rule_code in column_rule_codes
@@ -1008,17 +1021,29 @@ def validate_excel(
                                     ),
                                 )
                             )
-                        if (
+                        exact_forbidden = (
                             validation.forbidden_values is not None
-                            and forbidden_enabled
-                            and normalised_value
-                            in {
-                                    _normalise_comparison_value(
-                                        value,
-                                        comparison,
-                                    )
+                            and normalised_value in {
+                                _normalise_comparison_value(value, comparison)
                                 for value in validation.forbidden_values
                             }
+                        )
+                        matched_pattern = next(
+                            (
+                                pattern
+                                for pattern in validation.forbidden_patterns or []
+                                if re.search(
+                                    _normalise_text(pattern, comparison),
+                                    normalised_value
+                                    if isinstance(normalised_value, str)
+                                    else str(normalised_value),
+                                )
+                            ),
+                            None,
+                        )
+                        if (
+                            forbidden_enabled
+                            and (exact_forbidden or matched_pattern is not None)
                         ):
                             errors.append(
                                 ValidationEvent(
@@ -1031,10 +1056,15 @@ def validate_excel(
                                     cell_reference=cell.coordinate,
                                     row_number=row_number,
                                     actual_value=actual_value,
-                                    expected_value=validation.forbidden_values,
+                                    expected_value=(
+                                        matched_pattern
+                                        if matched_pattern is not None
+                                        else validation.forbidden_values
+                                    ),
                                     description=(
-                                        f"Value is forbidden for column "
-                                        f"'{validation.column}'"
+                                        f"Value matches forbidden pattern: {matched_pattern}"
+                                        if matched_pattern is not None
+                                        else f"Value is forbidden for column '{validation.column}'"
                                     ),
                                 )
                             )
@@ -1811,7 +1841,7 @@ def _match_sheets(sheet_names, selector):
             return [name for name in sheet_names if name == selector.value]
         expected = selector.value.casefold()
         return [name for name in sheet_names if name.casefold() == expected]
-    if selector.mode == "regex":
+    if selector.mode in {"regex", "sheet_pattern"}:
         try:
             pattern = re.compile(
                 selector.value,
@@ -1821,11 +1851,8 @@ def _match_sheets(sheet_names, selector):
             raise ConfigurationError(
                 f"invalid sheet selector regex: {error}"
             ) from error
-        return [
-            name
-            for name in sheet_names
-            if pattern.fullmatch(name) is not None
-        ]
+        matcher = pattern.search if selector.mode == "sheet_pattern" else pattern.fullmatch
+        return [name for name in sheet_names if matcher(name) is not None]
     return []
 
 

@@ -101,6 +101,15 @@
           "default": null,
           "title": "Forbidden Values"
         },
+        "forbidden_patterns": {
+          "items": {"type": "string"},
+          "anyOf": [
+            {"minItems": 1, "type": "array"},
+            {"type": "null"}
+          ],
+          "default": null,
+          "title": "Forbidden Patterns"
+        },
         "null_policy": {
           "anyOf": [
             {

@@ -179,15 +179,31 @@ class ColumnValidation(_PublicModel):
     unique: bool = False
     allowed_values: list[Any] | None = None
     forbidden_values: list[Any] | None = None
+    forbidden_patterns: list[str] | None = None
     null_policy: str | None = None
     severity: str | None = None
 
     @model_validator(mode="after")
     def validate_value_lists(self):
-        if self.allowed_values is not None and self.forbidden_values is not None:
+        if self.allowed_values is not None and (
+            self.forbidden_values is not None
+            or self.forbidden_patterns is not None
+        ):
             raise ValueError(
-                "allowed_values and forbidden_values are mutually exclusive"
+                "allowed_values and forbidden values/patterns are mutually exclusive"
             )
+        if self.forbidden_patterns is not None:
+            if not self.forbidden_patterns:
+                raise ValueError("forbidden_patterns must not be empty")
+            for pattern in self.forbidden_patterns:
+                if not pattern:
+                    raise ValueError("forbidden_patterns cannot contain empty patterns")
+                try:
+                    re.compile(pattern)
+                except re.error as error:
+                    raise ValueError(
+                        f"invalid forbidden pattern {pattern!r}: {error}"
+                    ) from error
         if self.null_policy not in {None, "ignore", "error", "allow"}:
             raise ValueError("null_policy must be ignore, error, or allow")
         return self
