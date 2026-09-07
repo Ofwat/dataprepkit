@@ -1080,6 +1080,85 @@ def test_formula_error_honors_sheet_scope(tmp_path, scope, expected_sheets):
     assert {event.sheet_name for event in result.errors} == expected_sheets
 
 
+@pytest.mark.parametrize(
+    "scope, expected_cells",
+    [
+        ("all_sheets", {"Data_2026!A1", "Summary!A1", "Data_2026!B1"}),
+        (
+            {"type": "selected_sheets", "sheets": ["Data_2026"]},
+            {"Data_2026!A1", "Data_2026!B1"},
+        ),
+        (
+            {"type": "sheet_pattern", "pattern": r"^Data_"},
+            {"Data_2026!A1", "Data_2026!B1"},
+        ),
+    ],
+)
+def test_workbook_forbidden_values_scans_scoped_cells(
+    tmp_path,
+    scope,
+    expected_cells,
+):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data_2026"
+    sheet = workbook.active
+    sheet["A1"] = "Test account"
+    sheet["B1"] = 12345
+    summary = workbook.create_sheet("Summary")
+    summary["A1"] = "status Deprecated"
+    workbook.save(candidate_path)
+
+    config = make_config(required_sheet="Data_2026").model_copy(
+        update={
+            "workbook_checks": [
+                WorkbookCheck(
+                    rule_code="forbidden_values",
+                    enabled=True,
+                    scope=scope,
+                    severity="error",
+                    options={
+                        "forbidden_patterns": ["^Test", "Deprecated$", "^12345$"],
+                    },
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert {
+        f"{event.sheet_name}!{event.cell_reference}"
+        for event in result.errors
+    } == expected_cells
+    assert all(event.expected_value in {"^Test", "Deprecated$", "^12345$"} for event in result.errors)
+    assert all("matches forbidden pattern" in event.description for event in result.errors)
+
+
+def test_workbook_forbidden_values_rejects_invalid_options():
+    with pytest.raises(ValueError, match="requires forbidden_patterns as a list"):
+        WorkbookCheck(
+            rule_code="forbidden_values",
+            enabled=True,
+            scope="all_sheets",
+            options={"forbidden_patterns": "^Test"},
+        )
+    with pytest.raises(ValueError, match="invalid forbidden pattern"):
+        WorkbookCheck(
+            rule_code="forbidden_values",
+            enabled=True,
+            scope="all_sheets",
+            options={"forbidden_patterns": ["["]},
+        )
+    with pytest.raises(ValueError, match="must not be empty"):
+        WorkbookCheck(
+            rule_code="forbidden_values",
+            enabled=True,
+            scope="all_sheets",
+            options={"forbidden_patterns": []},
+        )
+
+
 def test_workbook_check_rejects_invalid_sheet_scope_pattern():
     with pytest.raises(ValueError, match="invalid sheet pattern"):
         WorkbookCheck(

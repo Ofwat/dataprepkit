@@ -177,7 +177,7 @@ for rule in list_available_rules():
 | `missing_value` | `tables.column_validations[].required` | A required column value is null or blank. |
 | `duplicate_value` | `tables.column_validations[].unique` | A normalized column value occurs more than once. |
 | `allowed_values` | `tables.column_validations[].allowed_values` | A value is not in the configured allow-list. |
-| `forbidden_values` | `tables.column_validations[].forbidden_values` | A value is in the configured deny-list. |
+| `forbidden_values` | `tables.column_validations[].forbidden_values` or `workbook_checks` | A value is in the configured deny-list or matches a forbidden pattern. |
 | `pandas_load` | `tables[].load_policy` | A resolved table could not be loaded into pandas. |
 | `max_length` | `tables[].dataframe_checks` | A loaded DataFrame value exceeds its configured length. |
 | `values_in_reference` | `cross_table_checks` | A source value is absent from another loaded table. |
@@ -245,6 +245,29 @@ under the configured comparison policy:
 `allowed_values` cannot be combined with either forbidden list. Pattern-based
 findings identify the matching pattern in `expected_value` and the event
 description.
+
+The same rule code can scan workbook cells directly, without defining a table.
+Workbook checks support the shared sheet scopes (`all_sheets`, `selected_sheets`,
+and `sheet_pattern`):
+
+```yaml
+workbook_checks:
+  - rule_code: forbidden_values
+    enabled: true
+    severity: error
+    scope:
+      type: sheet_pattern
+      pattern: "^Data_"
+    options:
+      forbidden_patterns:
+        - "^Test"
+        - "Deprecated$"
+```
+
+Cell values are matched as text. String values use the configured comparison
+normalization; non-string values are converted to text before matching. Each
+finding includes the worksheet, Excel cell reference, actual value, and matched
+pattern.
 
 ### Expected cells
 

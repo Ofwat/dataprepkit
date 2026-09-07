@@ -477,6 +477,7 @@ class WorkbookCheck(_PublicModel):
             "formula_difference": {"whitespace_policy"},
             "sheet_structure": {"compare_headers", "table_names"},
             "missing_reference_sheet": set(),
+            "forbidden_values": {"forbidden_patterns"},
         }
         if self.rule_code in built_in_options:
             unknown_options = set(options) - built_in_options[self.rule_code]
@@ -490,6 +491,25 @@ class WorkbookCheck(_PublicModel):
                 raise ValueError(
                     "formula_error requires error_tokens as a list"
                 )
+        if self.rule_code == "forbidden_values" and self.enabled:
+            patterns = options.get("forbidden_patterns")
+            if not isinstance(patterns, list):
+                raise ValueError(
+                    "forbidden_values requires forbidden_patterns as a list"
+                )
+            if not patterns:
+                raise ValueError("forbidden_patterns must not be empty")
+            for pattern in patterns:
+                if not isinstance(pattern, str) or not pattern:
+                    raise ValueError(
+                        "forbidden_patterns must contain non-empty strings"
+                    )
+                try:
+                    re.compile(pattern)
+                except re.error as error:
+                    raise ValueError(
+                        f"invalid forbidden pattern {pattern!r}: {error}"
+                    ) from error
         if self.rule_code == "formula_difference":
             whitespace_policy = options.get(
                 "whitespace_policy",

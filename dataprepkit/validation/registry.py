@@ -60,8 +60,8 @@ _BUILT_IN_RULES = (
     },
     {
         "rule_code": "forbidden_values",
-        "attachment": "tables.column_validations.forbidden_values",
-        "description": "Reject values that belong to a configured deny-list.",
+        "attachment": "tables.column_validations or workbook_checks",
+        "description": "Reject exact values or cell values matching configured patterns.",
     },
     {
         "rule_code": "pandas_load",

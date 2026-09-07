@@ -1156,7 +1156,7 @@ def validate_excel(
                 )
                 rule_outcomes[check.rule_code] = "not_run"
                 continue
-            if check.rule_code != "formula_error":
+            if check.rule_code not in {"formula_error", "forbidden_values"}:
                 record_processed(check.rule_code)
             custom_rule = get_registered_rule(check.rule_code)
             if custom_rule is not None:
@@ -1347,6 +1347,64 @@ def validate_excel(
                                     ),
                                 )
                             )
+                rule_outcomes[check.rule_code] = (
+                    "failed"
+                    if any(event.rule_code == check.rule_code for event in errors)
+                    else "passed"
+                )
+                continue
+            if check.rule_code == "forbidden_values":
+                processed_counts.setdefault("forbidden_values", 0)
+                patterns = (check.options or {}).get("forbidden_patterns", [])
+                severity = check.severity or resolved_config.rule_severity.get(
+                    "forbidden_values"
+                ) or "error"
+                for sheet in value_workbook.worksheets:
+                    if not _sheet_in_scope(sheet.title, check.scope):
+                        continue
+                    for cell in value_resolution.cells(sheet):
+                        if cell.value is None:
+                            continue
+                        actual_value = (
+                            _normalise_comparison_value(
+                                cell.value,
+                                resolved_config.comparison,
+                            )
+                            if isinstance(cell.value, str)
+                            else str(cell.value)
+                        )
+                        if actual_value is None:
+                            continue
+                        matched_pattern = next(
+                            (
+                                pattern
+                                for pattern in patterns
+                                if re.search(
+                                    _normalise_text(pattern, resolved_config.comparison),
+                                    actual_value,
+                                )
+                            ),
+                            None,
+                        )
+                        processed_counts["forbidden_values"] += 1
+                        if matched_pattern is None:
+                            continue
+                        errors.append(
+                            ValidationEvent(
+                                rule_code="forbidden_values",
+                                severity=severity,
+                                sheet_name=sheet.title,
+                                cell_reference=cell.coordinate,
+                                row_number=cell.row,
+                                column_number=cell.column,
+                                actual_value=cell.value,
+                                expected_value=matched_pattern,
+                                description=(
+                                    f"Cell value matches forbidden pattern: "
+                                    f"{matched_pattern}"
+                                ),
+                            )
+                        )
                 rule_outcomes[check.rule_code] = (
                     "failed"
                     if any(event.rule_code == check.rule_code for event in errors)
