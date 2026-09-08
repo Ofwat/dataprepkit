@@ -2305,6 +2305,49 @@ def test_validate_excel_runs_dataframe_max_length_check(tmp_path):
     assert result.errors[0].expected_value == 4000
 
 
+def test_unique_column_validation_runs_without_explicit_header_policy(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "O_Outputs"
+    sheet = workbook.active
+    sheet.append(["Measure_Value"])
+    sheet.append([1])
+    sheet.append([2])
+    sheet.append([1])
+    workbook.save(candidate_path)
+
+    config = make_config(required_sheet="O_Outputs").model_copy(
+        update={
+            "enabled_rules": ["duplicate_value", "pandas_load"],
+            "tables": [
+                TableConfig(
+                    name="Stuff",
+                    sheet_selector=SheetSelector(
+                        mode="exact",
+                        value="O_Outputs",
+                    ),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        columns=["Measure_Value"],
+                        infer_columns=True,
+                    ),
+                    column_definitions=[ColumnDefinition(name="Measure_Value")],
+                    column_validations=[
+                        ColumnValidation(column="Measure_Value", unique=True)
+                    ],
+                    load_policy=DataFrameLoadPolicy(enabled=True),
+                )
+            ],
+        }
+    )
+
+    result = validate_excel(candidate_path, config=config)
+
+    assert [event.rule_code for event in result.errors] == ["duplicate_value"]
+    assert result.errors[0].cell_reference == "A4"
+
+
 def test_configured_table_loads_without_optional_dataframe_checks(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()

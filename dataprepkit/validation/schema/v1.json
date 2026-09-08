@@ -565,12 +565,9 @@
           "anyOf": [
             {
               "$ref": "#/$defs/HeaderPolicy"
-            },
-            {
-              "type": "null"
             }
           ],
-          "default": null
+          "default": {}
         },
         "header_row": {
           "anyOf": [

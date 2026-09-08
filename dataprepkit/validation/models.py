@@ -440,7 +440,7 @@ class TableConfig(_PublicModel):
     data_boundary: DataBoundary | None = None
     column_definitions: list[ColumnDefinition] = Field(default_factory=list)
     column_validations: list[ColumnValidation] = Field(default_factory=list)
-    header_policy: HeaderPolicy | None = None
+    header_policy: HeaderPolicy = Field(default_factory=HeaderPolicy)
     empty_row_rules: list[EmptyRowRule] = Field(default_factory=list)
     data_presence: str = "allow_empty"
     load_policy: DataFrameLoadPolicy | None = Field(
