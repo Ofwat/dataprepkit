@@ -3011,6 +3011,52 @@ def test_last_non_empty_row_can_infer_columns_and_explicit_columns_win(tmp_path)
     assert [event.cell_reference for event in explicit_result.errors] == ["B3"]
 
 
+def test_inferred_columns_are_available_to_column_validations(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    sheet = workbook.active
+    sheet.append(["Status", "Code"])
+    sheet.append(["Open", "A"])
+    sheet.append(["Test blocked", "A"])
+    sheet.append([None, "B"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        infer_columns=True,
+                    ),
+                    header_policy=HeaderPolicy(),
+                    column_validations=[
+                        ColumnValidation(
+                            column="status",
+                            required=True,
+                            forbidden_patterns=["^Test"],
+                        ),
+                        ColumnValidation(column="code", unique=True),
+                    ],
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path, config=config)
+
+    assert [(event.rule_code, event.cell_reference) for event in result.errors] == [
+        ("forbidden_values", "A3"),
+        ("missing_value", "A4"),
+        ("duplicate_value", "B3"),
+    ]
+    assert result.not_run == []
+
+
 def test_forbidden_patterns_reject_invalid_and_empty_patterns():
     with pytest.raises(ValueError, match="invalid forbidden pattern"):
         ColumnValidation(column="status", forbidden_patterns=["["])

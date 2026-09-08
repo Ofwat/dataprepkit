@@ -572,13 +572,17 @@ def validate_excel(
                     table.data_boundary is not None
                     and table.data_boundary.infer_columns
                 ):
-                    boundary_columns.update(
-                        {
-                            str(header): index + 1
-                            for index, header in enumerate(headers)
-                            if header is not None
+                    inferred_columns = {
+                        key: index + 1
+                        for index, header in enumerate(headers)
+                        if header is not None
+                        for key in {
+                            str(header),
+                            _normalise_header(header),
                         }
-                    )
+                    }
+                    boundary_columns.update(inferred_columns)
+                    logical_columns.update(inferred_columns)
                 data_end_row = _table_data_end_row(
                     table,
                     table.header_row,
@@ -1632,13 +1636,17 @@ def _run_dataframe_checks(
             }
             boundary_columns = dict(logical_columns)
             if table.data_boundary is not None and table.data_boundary.infer_columns:
-                boundary_columns.update(
-                    {
-                        str(header): index + 1
-                        for index, header in enumerate(headers)
-                        if header is not None
+                inferred_columns = {
+                    key: index + 1
+                    for index, header in enumerate(headers)
+                    if header is not None
+                    for key in {
+                        str(header),
+                        _normalise_header(header),
                     }
-                )
+                }
+                boundary_columns.update(inferred_columns)
+                logical_columns.update(inferred_columns)
             required_columns = (
                 table.header_policy.required_columns
                 if table.header_policy is not None
