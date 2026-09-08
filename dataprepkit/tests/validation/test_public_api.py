@@ -130,8 +130,11 @@ def test_public_rule_catalogue_lists_all_builtin_checks():
         "sheet_structure",
         "formula_difference",
         "formula_error",
-        "pandas_load",
-        "max_length",
+            "pandas_load",
+            "missing_column",
+            "empty_table",
+            "data_boundary",
+            "max_length",
         "values_in_reference",
         "feature_policy",
         "feature_detection_unavailable",
@@ -2300,6 +2303,187 @@ def test_validate_excel_runs_dataframe_max_length_check(tmp_path):
     assert result.errors[0].cell_reference == "A2"
     assert result.errors[0].row_number == 2
     assert result.errors[0].expected_value == 4000
+
+
+def test_configured_table_loads_without_optional_dataframe_checks(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Reference"])
+    workbook.active.append(["A"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    header_policy=HeaderPolicy(required_columns=["reference"]),
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        columns=["reference"],
+                    ),
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path, config=config)
+
+    assert result.is_valid is True
+    assert result.processed_counts["pandas_load"] == 1
+
+
+def test_inferred_columns_drive_unique_and_null_policy(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    sheet = workbook.active
+    sheet.append(["Process_Cd"])
+    sheet.append(["NA"])
+    sheet.append([" NA "])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "comparison": ComparisonConfig(
+                case_sensitive=False,
+                accent_sensitive=True,
+                trim_whitespace=True,
+                collapse_internal_whitespace=False,
+                empty_string_is_null=True,
+                null_tokens=["NA"],
+                collation_name="mssql_case_insensitive",
+            ),
+            "tables": [
+                TableConfig(
+                    name="processes",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    header_policy=HeaderPolicy(),
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        infer_columns=True,
+                    ),
+                    column_validations=[
+                        ColumnValidation(
+                            column="Process_Cd",
+                            unique=True,
+                            null_policy="ignore",
+                        )
+                    ],
+                )
+            ],
+        }
+    )
+
+    result = validate_excel(candidate_path, config=config)
+
+    assert result.errors == []
+
+
+def test_missing_inferred_validation_column_is_reported(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Other"])
+    workbook.active.append(["value"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    header_policy=HeaderPolicy(),
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        infer_columns=True,
+                    ),
+                    column_validations=[
+                        ColumnValidation(column="Process_Cd", unique=True)
+                    ],
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path, config=config)
+
+    assert [event.rule_code for event in result.errors] == ["missing_column"]
+    assert "Process_Cd" in result.errors[0].description
+
+
+def test_empty_loaded_table_is_reported_as_warning(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Reference"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    header_policy=HeaderPolicy(required_columns=["reference"]),
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        columns=["reference"],
+                    ),
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path, config=config)
+
+    assert result.errors == []
+    assert [event.rule_code for event in result.warnings] == ["empty_table"]
+
+
+def test_pandas_load_failure_is_reported(tmp_path, monkeypatch):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Reference"])
+    workbook.active.append(["A"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    header_policy=HeaderPolicy(required_columns=["reference"]),
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        columns=["reference"],
+                    ),
+                )
+            ]
+        }
+    )
+
+    import dataprepkit.validation.workbook as workbook_validation
+
+    def fail_read_excel(*args, **kwargs):
+        raise ValueError("bad table")
+
+    monkeypatch.setattr(workbook_validation.pd, "read_excel", fail_read_excel)
+
+    result = validate_excel(candidate_path, config=config)
+
+    assert [event.rule_code for event in result.errors] == ["pandas_load"]
+    assert result.errors[0].actual_value == "bad table"
 
 
 def test_validate_excel_runs_cross_table_values_check(tmp_path):

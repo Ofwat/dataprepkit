@@ -589,7 +589,7 @@
             {"$ref": "#/$defs/DataFrameLoadPolicy"},
             {"type": "null"}
           ],
-          "default": null
+          "default": {}
         },
         "name": {
           "title": "Name",

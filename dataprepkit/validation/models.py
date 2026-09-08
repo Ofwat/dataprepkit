@@ -443,7 +443,9 @@ class TableConfig(_PublicModel):
     header_policy: HeaderPolicy | None = None
     empty_row_rules: list[EmptyRowRule] = Field(default_factory=list)
     data_presence: str = "allow_empty"
-    load_policy: DataFrameLoadPolicy | None = None
+    load_policy: DataFrameLoadPolicy | None = Field(
+        default_factory=DataFrameLoadPolicy
+    )
     dataframe_checks: list[DataFrameCheck] = Field(default_factory=list)
 
     @field_validator("data_presence")
@@ -637,6 +639,10 @@ class ValidationEvent(_PublicModel):
                 "extra_sheet": "EXTRA_SHEET_DETECTED",
                 "expected_cell": "EXPECTED_CELL_MISMATCH",
                 "table_resolution": "TABLE_RESOLUTION_FAILED",
+                "pandas_load": "PANDAS_LOAD_FAILED",
+                "missing_column": "COLUMN_MISSING",
+                "empty_table": "TABLE_EMPTY",
+                "data_boundary": "DATA_BOUNDARY_FAILED",
                 "column_header": "COLUMN_HEADER_INVALID",
                 "non_empty_data": "NO_USABLE_DATA",
                 "empty_row_pattern": "EMPTY_ROW_VIOLATION",

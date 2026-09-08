@@ -872,8 +872,24 @@ def validate_excel(
                                 validation.severity
                                 or resolved_config.rule_severity.get(rule_code),
                             )
-                    column_number = logical_columns.get(validation.column)
+                    column_number = logical_columns.get(
+                        validation.column,
+                        logical_columns.get(_normalise_header(validation.column)),
+                    )
                     if column_number is None:
+                        errors.append(
+                            ValidationEvent(
+                                rule_code="missing_column",
+                                severity=validation.severity
+                                or resolved_config.rule_severity.get("missing_column"),
+                                sheet_name=sheet_name,
+                                expected_value=validation.column,
+                                description=(
+                                    f"Column '{validation.column}' was not found "
+                                    "in the loaded table"
+                                ),
+                            )
+                        )
                         continue
                     column_definition = definitions.get(validation.column)
                     comparison = (
@@ -1084,7 +1100,13 @@ def validate_excel(
                                     ),
                                 )
                             )
-        dataframe_errors, dataframe_not_run, dataframe_counts, dataframe_cache = (
+        (
+            dataframe_errors,
+            dataframe_warnings,
+            dataframe_not_run,
+            dataframe_counts,
+            dataframe_cache,
+        ) = (
             _run_dataframe_checks(
                 candidate_path,
                 value_workbook,
@@ -1092,9 +1114,11 @@ def validate_excel(
                 resolved_config,
                 value_resolution,
                 formula_resolution,
+                ignored_sheet_names,
             )
         )
         errors.extend(dataframe_errors)
+        warnings.extend(dataframe_warnings)
         not_run.extend(dataframe_not_run)
         for rule_code, count in dataframe_counts.items():
             processed_counts[rule_code] = (
@@ -1542,8 +1566,10 @@ def _run_dataframe_checks(
     config,
     value_resolution,
     formula_resolution,
+    ignored_sheet_names=None,
 ):
     errors = []
+    warnings = []
     not_run = []
     processed_counts = {}
     dataframe_cache = {}
@@ -1569,19 +1595,7 @@ def _run_dataframe_checks(
             )
 
     for table in config.tables:
-        if table.load_policy is None or not table.load_policy.enabled:
-            continue
-        if config.enabled_rules is not None and "pandas_load" not in config.enabled_rules:
-            not_run.append(
-                ValidationEvent(
-                    rule_code="pandas_load",
-                    status="NOT_RUN",
-                    reason="RULE_DISABLED",
-                    description=f"Pandas loading for table '{table.name}' is disabled",
-                )
-            )
-            skip_dataframe_checks(table, "PANDAS_LOAD_DISABLED")
-            continue
+        load_policy = table.load_policy or DataFrameLoadPolicy()
         if table.sheet_selector is None or table.header_row is None:
             not_run.append(
                 ValidationEvent(
@@ -1597,6 +1611,11 @@ def _run_dataframe_checks(
             value_workbook.sheetnames,
             table.sheet_selector,
         )
+        sheet_matches = [
+            sheet_name
+            for sheet_name in sheet_matches
+            if sheet_name not in (ignored_sheet_names or set())
+        ]
         if not sheet_matches:
             not_run.append(
                 ValidationEvent(
@@ -1634,19 +1653,17 @@ def _run_dataframe_checks(
                 )
                 for name in definitions
             }
-            boundary_columns = dict(logical_columns)
-            if table.data_boundary is not None and table.data_boundary.infer_columns:
-                inferred_columns = {
-                    key: index + 1
-                    for index, header in enumerate(headers)
-                    if header is not None
-                    for key in {
-                        str(header),
-                        _normalise_header(header),
-                    }
+            inferred_columns = {
+                key: index + 1
+                for index, header in enumerate(headers)
+                if header is not None
+                for key in {
+                    str(header),
+                    _normalise_header(header),
                 }
-                boundary_columns.update(inferred_columns)
-                logical_columns.update(inferred_columns)
+            }
+            logical_columns.update(inferred_columns)
+            boundary_columns = dict(logical_columns)
             required_columns = (
                 table.header_policy.required_columns
                 if table.header_policy is not None
@@ -1674,6 +1691,16 @@ def _run_dataframe_checks(
                 formula_resolution,
             )
             if data_end_row is None:
+                if table.data_boundary is not None and table.data_boundary.infer_columns:
+                    errors.append(
+                        ValidationEvent(
+                            rule_code="data_boundary",
+                            sheet_name=sheet_name,
+                            description=(
+                                f"Table '{table.name}' data boundary could not be resolved"
+                            ),
+                        )
+                    )
                 not_run.append(
                     ValidationEvent(
                         rule_code="pandas_load",
@@ -1692,8 +1719,8 @@ def _run_dataframe_checks(
                     header=table.header_row - 1,
                     usecols=f"A:{get_column_letter(len(headers))}",
                     nrows=max(0, data_end_row - table.header_row),
-                    dtype=None if table.load_policy.infer_types else object,
-                    keep_default_na=not table.load_policy.preserve_empty_values,
+                    dtype=None if load_policy.infer_types else object,
+                    keep_default_na=not load_policy.preserve_empty_values,
                 )
             except Exception as error:
                 errors.append(
@@ -1706,6 +1733,15 @@ def _run_dataframe_checks(
                 )
                 continue
             processed_counts["pandas_load"] = processed_counts.get("pandas_load", 0) + 1
+            if dataframe.empty:
+                warnings.append(
+                    ValidationEvent(
+                        rule_code="empty_table",
+                        severity="warning",
+                        sheet_name=sheet_name,
+                        description=f"Table '{table.name}' contains no data rows",
+                    )
+                )
             if table.name in cached_table_names:
                 dataframe_cache.setdefault(table.name, {})[sheet_name] = {
                     "dataframe": dataframe,
@@ -1735,9 +1771,13 @@ def _run_dataframe_checks(
                 if check.column not in dataframe.columns:
                     errors.append(
                         ValidationEvent(
-                            rule_code=check.rule_code,
+                            rule_code="missing_column",
                             sheet_name=sheet_name,
-                            description=f"DataFrame column not found: {check.column}",
+                            expected_value=check.column,
+                            description=(
+                                f"Column '{check.column}' was not found in the "
+                                "loaded table"
+                            ),
                         )
                     )
                     continue
@@ -1770,7 +1810,7 @@ def _run_dataframe_checks(
                             ),
                         )
                     )
-    return errors, not_run, processed_counts, dataframe_cache
+    return errors, warnings, not_run, processed_counts, dataframe_cache
 
 
 def _run_cross_table_checks(config, dataframe_cache):

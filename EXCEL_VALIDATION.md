@@ -178,7 +178,10 @@ for rule in list_available_rules():
 | `duplicate_value` | `tables.column_validations[].unique` | A normalized column value occurs more than once. |
 | `allowed_values` | `tables.column_validations[].allowed_values` | A value is not in the configured allow-list. |
 | `forbidden_values` | `tables.column_validations[].forbidden_values` or `workbook_checks` | A value is in the configured deny-list or matches a forbidden pattern. |
-| `pandas_load` | `tables[].load_policy` | A resolved table could not be loaded into pandas. |
+| `pandas_load` | `tables` | A resolved table could not be loaded into pandas. |
+| `missing_column` | `tables.column_validations` or `tables.dataframe_checks` | A configured column is absent from the loaded table. |
+| `empty_table` | `tables` | A resolved table loaded with no data rows. |
+| `data_boundary` | `tables.data_boundary` | A configured data boundary could not be resolved. |
 | `max_length` | `tables[].dataframe_checks` | A loaded DataFrame value exceeds its configured length. |
 | `values_in_reference` | `cross_table_checks` | A source value is absent from another loaded table. |
 | `missing_reference_sheet` | `workbook_checks` | A sheet in the reference workbook is absent from the candidate. |
@@ -301,9 +304,15 @@ expected_cells:
 
 ## Excel-to-pandas validation contract
 
-Table-local pandas checks run after direct Excel checks and table resolution.
-Each configured table is loaded at most once for a validation run. A table is
-loaded only when its sheet, headers, and data boundary resolve successfully.
+Table loading is a structural phase that runs after direct Excel checks for
+every configured table whose sheet, header row, and data boundary resolve.
+Each configured table is loaded at most once for a validation run, even when
+no optional DataFrame checks are configured. Optional DataFrame checks run
+after this load phase.
+
+`load_policy` controls pandas type inference and empty-value handling; it does
+not disable table loading. A configured table is always loaded when its sheet,
+header, and boundary resolve.
 
 The initial pandas load contract is:
 
@@ -312,6 +321,10 @@ The initial pandas load contract is:
 - preserve the mapping from each DataFrame row to its original Excel row;
 - apply the existing comparison and null policies;
 - report load failures as `pandas_load` errors;
+- report missing configured columns as `missing_column` findings;
+- report unresolved inferred boundaries as `data_boundary` findings;
+- report empty loaded tables as `empty_table` findings when an empty table is
+  structurally invalid for the configured table contract;
 - mark checks that depend on a failed load as `NOT_RUN`;
 - report DataFrame rule failures using the source sheet and Excel cell;
 - retain successfully loaded tables only when a later cross-table check needs
@@ -348,6 +361,12 @@ The same pandas load can infer its boundary columns:
 `max_length` ignores configured null values. Length modes are explicit so that
 Python character length is not accidentally confused with SQL Server byte or
 UTF-16 length semantics.
+
+For uniqueness, null-like values are controlled by the comparison policy. A
+value matching `null_tokens`, or an empty value when `empty_string_is_null` is
+enabled, is treated as null. Set `null_policy: ignore` to exclude repeated
+null-like values from uniqueness checks; set `null_policy: error` or
+`required: true` when they should be reported as missing.
 
 Cross-table checks use the same table definitions and can match several sheets
 when a selector matches several sheets. Values from all reference matches are

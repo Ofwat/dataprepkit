@@ -65,8 +65,23 @@ _BUILT_IN_RULES = (
     },
     {
         "rule_code": "pandas_load",
-        "attachment": "tables.load_policy",
+        "attachment": "tables",
         "description": "Load a resolved Excel table into pandas.",
+    },
+    {
+        "rule_code": "missing_column",
+        "attachment": "tables.column_validations or tables.dataframe_checks",
+        "description": "Report a configured column missing from the loaded table.",
+    },
+    {
+        "rule_code": "empty_table",
+        "attachment": "tables",
+        "description": "Report a resolved table with no data rows.",
+    },
+    {
+        "rule_code": "data_boundary",
+        "attachment": "tables.data_boundary",
+        "description": "Report an unresolved table data boundary.",
     },
     {
         "rule_code": "max_length",
