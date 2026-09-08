@@ -174,7 +174,7 @@ for rule in list_available_rules():
 | `column_header` | `tables.header_policy` | Required, ordered, blank, duplicate, or extra headers are invalid. |
 | `non_empty_data` | `tables.data_presence: require_one_usable_row` | A required table has no usable data row. |
 | `empty_row_pattern` | `tables.empty_row_rules` | A row configured as blank contains a value. |
-| `missing_value` | `tables.column_validations[].required` | A required column value is null or blank. |
+| `missing_value` | `tables.column_validations[].null_policy: error` | A configured value is null or blank. |
 | `duplicate_value` | `tables.column_validations[].unique` | A normalized column value occurs more than once. |
 | `allowed_values` | `tables.column_validations[].allowed_values` | A value is not in the configured allow-list. |
 | `forbidden_values` | `tables.column_validations[].forbidden_values` or `workbook_checks` | A value is in the configured deny-list or matches a forbidden pattern. |
@@ -198,8 +198,8 @@ inspect formula text and cached values only.
 
 ### Common table checks
 
-This example enables header, data presence, uniqueness, allow-list, deny-list,
-and required-value checks without using physical cell coordinates:
+This example enables header, data presence, uniqueness, allow-list, and
+deny-list checks without using physical cell coordinates:
 
 ```yaml
 tables:
@@ -209,23 +209,19 @@ tables:
       mode: exact
       value: Data
     header_row: 1
-    column_definitions:
-      - name: unit
-      - name: status
     header_policy:
-      required_columns: [unit, status]
+      required_columns: [Unit, Status]
       match_mode: exact_order
       missing_column_action: error
       extra_column_action: error
     data_boundary:
       mode: last_non_empty_row
-      columns: [unit]
+      columns: [Unit]
     data_presence: require_one_usable_row
     column_validations:
-      - column: unit
-        required: true
+      - column: Unit
         allowed_values: ["£", "%", Ml, Number]
-      - column: status
+      - column: Status
         forbidden_values: [DELETE, INVALID]
         unique: true
 ```
@@ -461,15 +457,14 @@ UTF-16 length semantics.
 For uniqueness, null-like values are controlled by the comparison policy. A
 value matching `null_tokens`, or an empty value when `empty_string_is_null` is
 enabled, is treated as null. Set `null_policy: ignore` to exclude repeated
-null-like values from uniqueness checks; set `null_policy: error` or
-`required: true` when they should be reported as missing.
+null-like values from uniqueness checks; set `null_policy: error` when they
+should be reported as missing.
 
 ### Table checks
 
-Users configure checks against table columns; they do not need to know whether
-DataPrepKit evaluates a check directly from Excel or through pandas. Excel
-structure is validated first, then DataPrepKit loads the table and runs the
-configured data checks automatically. A separate pandas API is not required.
+Users configure checks against table columns. Excel structure is validated
+first, then DataPrepKit loads the table and runs the configured value checks
+against the resulting pandas data. A separate pandas API is not required.
 
 For example, these checks are configured identically regardless of their
 internal execution method:
@@ -478,8 +473,8 @@ internal execution method:
 column_validations:
   - column: Process_Cd
     unique: true
-  - column: status
-    required: true
+  - column: Status
+    null_policy: error
     forbidden_patterns:
       - "^Test"
 ```

@@ -630,9 +630,10 @@ def validate_excel(
                     and required_positions != sorted(required_positions)
                 ):
                     missing_columns.append("required columns are out of order")
-                header_resolution_failed = bool(
-                    missing_columns or physical_header_issues
-                )
+                # Missing required columns are reported structurally, but do
+                # not prevent loading the columns that are present. Physical
+                # header corruption does prevent a reliable load.
+                header_resolution_failed = bool(physical_header_issues)
                 boundary_resolution_failed = (
                     data_end_row is None
                     or (
@@ -787,8 +788,11 @@ def validate_excel(
                                 )
                             )
                 max_row = data_end_row
+                # Column values are validated after the table has loaded into
+                # pandas. Excel-side validation here is structural only.
+                legacy_column_validations = ()
                 if boundary_resolution_failed:
-                    for validation in table.column_validations:
+                    for validation in legacy_column_validations:
                         column_rule_codes = []
                         if validation.required:
                             column_rule_codes.append("missing_value")
@@ -815,7 +819,7 @@ def validate_excel(
                             )
                     continue
                 if header_resolution_failed:
-                    for validation in table.column_validations:
+                    for validation in legacy_column_validations:
                         column_rule_codes = []
                         if validation.required:
                             column_rule_codes.append("missing_value")
@@ -855,7 +859,7 @@ def validate_excel(
                                 )
                             )
                     continue
-                for validation in table.column_validations:
+                for validation in legacy_column_validations:
                     for rule_code, enabled in (
                         ("missing_value", validation.required or validation.null_policy == "error"),
                         ("duplicate_value", validation.unique),
@@ -1559,6 +1563,240 @@ def validate_excel(
             reference_formula_workbook.close()
 
 
+def _run_dataframe_column_validations(
+    dataframe,
+    table,
+    column_numbers,
+    config,
+    sheet_name,
+    processed_counts,
+):
+    errors = []
+    not_run = []
+    for validation in table.column_validations:
+        rule_codes = []
+        if validation.required or validation.null_policy == "error":
+            rule_codes.append("missing_value")
+        if validation.unique:
+            rule_codes.append("duplicate_value")
+        if validation.allowed_values is not None:
+            rule_codes.append("allowed_values")
+        if validation.forbidden_values is not None or validation.forbidden_patterns:
+            rule_codes.append("forbidden_values")
+        disabled = {
+            rule_code
+            for rule_code in rule_codes
+            if config.enabled_rules is not None
+            and rule_code not in config.enabled_rules
+        }
+        for rule_code in disabled:
+            # The public result reports disabled configured checks explicitly.
+            not_run.append(
+                ValidationEvent(
+                    rule_code=rule_code,
+                    status="NOT_RUN",
+                    reason="RULE_DISABLED",
+                    severity=validation.severity
+                    or config.rule_severity.get(rule_code),
+                    sheet_name=sheet_name,
+                    description=(
+                        f"Column rule for '{validation.column}' is disabled "
+                        "by configuration"
+                    ),
+                )
+            )
+        column_number = column_numbers.get(validation.column)
+        dataframe_column = next(
+            (
+                column
+                for column, number in column_numbers.items()
+                if number == column_number and column in dataframe.columns
+            ),
+            None,
+        )
+        if dataframe_column is None:
+            required_columns = (
+                table.header_policy.required_columns
+                if table.header_policy is not None
+                else []
+            )
+            if validation.column not in required_columns:
+                errors.append(
+                    ValidationEvent(
+                        rule_code="missing_column",
+                        sheet_name=sheet_name,
+                        expected_value=validation.column,
+                        description=(
+                            f"Column '{validation.column}' was not found in the "
+                            "loaded table"
+                        ),
+                    )
+                )
+            for rule_code in set(rule_codes) - disabled:
+                not_run.append(
+                    ValidationEvent(
+                        rule_code=rule_code,
+                        status="NOT_RUN",
+                        reason="MISSING_COLUMN",
+                        sheet_name=sheet_name,
+                        description=(
+                            f"Column rule for '{validation.column}' could not "
+                            "run because the column was not found"
+                        ),
+                    )
+                )
+            continue
+        comparison = config.comparison
+        definition = next(
+            (
+                definition
+                for definition in table.column_definitions
+                if definition.name == validation.column
+            ),
+            None,
+        )
+        if definition is not None and definition.comparison is not None:
+            comparison = definition.comparison
+        allowed = {
+            _normalise_comparison_value(value, comparison)
+            for value in validation.allowed_values or []
+        }
+        forbidden = {
+            _normalise_comparison_value(value, comparison)
+            for value in validation.forbidden_values or []
+        }
+        seen = set()
+        for row_index, value in dataframe[dataframe_column].items():
+            excel_row = table.header_row + 1 + int(row_index)
+            normalised = (
+                None
+                if value is None or pd.isna(value)
+                else _normalise_comparison_value(value, comparison)
+            )
+            cell_reference = (
+                f"{get_column_letter(column_number)}{excel_row}"
+                if column_number is not None
+                else None
+            )
+            if normalised is None:
+                if "missing_value" in rule_codes and "missing_value" not in disabled:
+                    processed_counts["missing_value"] = (
+                        processed_counts.get("missing_value", 0) + 1
+                    )
+                    errors.append(
+                        ValidationEvent(
+                            rule_code="missing_value",
+                            severity=validation.severity
+                            or config.rule_severity.get("missing_value"),
+                            sheet_name=sheet_name,
+                            cell_reference=cell_reference,
+                            row_number=excel_row,
+                            actual_value=value,
+                            expected_value="non-null value",
+                            description=(
+                                f"Required value is missing for column "
+                                f"'{validation.column}'"
+                            ),
+                        )
+                    )
+                continue
+            if validation.unique and "duplicate_value" not in disabled:
+                processed_counts["duplicate_value"] = (
+                    processed_counts.get("duplicate_value", 0) + 1
+                )
+                if normalised in seen:
+                    errors.append(
+                        ValidationEvent(
+                            rule_code="duplicate_value",
+                            severity=validation.severity
+                            or config.rule_severity.get("duplicate_value"),
+                            sheet_name=sheet_name,
+                            cell_reference=cell_reference,
+                            row_number=excel_row,
+                            actual_value=value,
+                            expected_value="unique value",
+                            description=(
+                                f"Duplicate value found for column "
+                                f"'{validation.column}'"
+                            ),
+                        )
+                    )
+                seen.add(normalised)
+            if validation.allowed_values is not None and "allowed_values" not in disabled:
+                processed_counts["allowed_values"] = (
+                    processed_counts.get("allowed_values", 0) + 1
+                )
+                if normalised not in allowed:
+                    errors.append(
+                        ValidationEvent(
+                            rule_code="allowed_values",
+                            severity=validation.severity
+                            or config.rule_severity.get("allowed_values"),
+                            sheet_name=sheet_name,
+                            cell_reference=cell_reference,
+                            row_number=excel_row,
+                            actual_value=value,
+                            expected_value=validation.allowed_values,
+                            description=(
+                                f"Value is not allowed for column "
+                                f"'{validation.column}'"
+                            ),
+                        )
+                    )
+            if (
+                (normalised in forbidden or any(
+                    re.search(
+                        _normalise_text(pattern, comparison),
+                        str(normalised),
+                    )
+                    for pattern in validation.forbidden_patterns or []
+                ))
+                and "forbidden_values" not in disabled
+            ):
+                processed_counts["forbidden_values"] = (
+                    processed_counts.get("forbidden_values", 0) + 1
+                )
+                matched_pattern = next(
+                    (
+                        pattern
+                        for pattern in validation.forbidden_patterns or []
+                        if re.search(
+                            _normalise_text(pattern, comparison),
+                            str(normalised),
+                        )
+                    ),
+                    None,
+                )
+                errors.append(
+                    ValidationEvent(
+                        rule_code="forbidden_values",
+                        severity=validation.severity
+                        or config.rule_severity.get("forbidden_values"),
+                        sheet_name=sheet_name,
+                        cell_reference=cell_reference,
+                        row_number=excel_row,
+                        actual_value=value,
+                        expected_value=matched_pattern or validation.forbidden_values,
+                        description=(
+                            f"Value matches forbidden pattern: {matched_pattern}"
+                            if matched_pattern
+                            else f"Value is forbidden for column '{validation.column}'"
+                        ),
+                    )
+                )
+    return errors, not_run
+
+
+def _dataframe_column(dataframe, column_numbers, requested):
+    column_number = column_numbers.get(requested)
+    if column_number is None:
+        return None, None
+    for column, number in column_numbers.items():
+        if number == column_number and column in dataframe.columns:
+            return column, column_number
+    return None, column_number
+
+
 def _run_dataframe_checks(
     candidate_path,
     value_workbook,
@@ -1664,23 +1902,6 @@ def _run_dataframe_checks(
             }
             logical_columns.update(inferred_columns)
             boundary_columns = dict(logical_columns)
-            required_columns = (
-                table.header_policy.required_columns
-                if table.header_policy is not None
-                else []
-            )
-            if any(column not in logical_columns for column in required_columns):
-                not_run.append(
-                    ValidationEvent(
-                        rule_code="pandas_load",
-                        status="NOT_RUN",
-                        reason="TABLE_HEADER_RESOLUTION_FAILED",
-                        sheet_name=sheet_name,
-                        description=f"Table '{table.name}' headers could not be resolved",
-                    )
-                )
-                skip_dataframe_checks(table, "TABLE_HEADER_RESOLUTION_FAILED", sheet_name)
-                continue
             data_end_row = _table_data_end_row(
                 table,
                 table.header_row,
@@ -1722,6 +1943,9 @@ def _run_dataframe_checks(
                     dtype=None if load_policy.infer_types else object,
                     keep_default_na=not load_policy.preserve_empty_values,
                 )
+                expected_rows = max(0, data_end_row - table.header_row)
+                if len(dataframe.index) < expected_rows:
+                    dataframe = dataframe.reindex(range(expected_rows))
             except Exception as error:
                 errors.append(
                     ValidationEvent(
@@ -1749,6 +1973,16 @@ def _run_dataframe_checks(
                     "header_row": table.header_row,
                     "column_number": logical_columns,
                 }
+            column_errors, column_not_run = _run_dataframe_column_validations(
+                    dataframe,
+                    table,
+                    logical_columns,
+                    config,
+                    sheet_name,
+                    processed_counts,
+                )
+            errors.extend(column_errors)
+            not_run.extend(column_not_run)
             for check in table.dataframe_checks:
                 enabled = (
                     check.enabled
@@ -1768,23 +2002,43 @@ def _run_dataframe_checks(
                         )
                     )
                     continue
-                if check.column not in dataframe.columns:
-                    errors.append(
+                dataframe_column, column_number = _dataframe_column(
+                    dataframe,
+                    logical_columns,
+                    check.column,
+                )
+                if dataframe_column is None:
+                    required_columns = (
+                        table.header_policy.required_columns
+                        if table.header_policy is not None
+                        else []
+                    )
+                    if check.column not in required_columns:
+                        errors.append(
+                            ValidationEvent(
+                                rule_code="missing_column",
+                                sheet_name=sheet_name,
+                                expected_value=check.column,
+                                description=(
+                                    f"Column '{check.column}' was not found in "
+                                    "the loaded table"
+                                ),
+                            )
+                        )
+                    not_run.append(
                         ValidationEvent(
-                            rule_code="missing_column",
+                            rule_code=check.rule_code,
+                            status="NOT_RUN",
+                            reason="MISSING_COLUMN",
                             sheet_name=sheet_name,
-                            expected_value=check.column,
                             description=(
-                                f"Column '{check.column}' was not found in the "
-                                "loaded table"
+                                f"DataFrame check for '{check.column}' could not "
+                                "run because the column was not found"
                             ),
                         )
                     )
                     continue
-                column_number = logical_columns.get(check.column)
-                if column_number is None:
-                    continue
-                for dataframe_row, value in dataframe[check.column].items():
+                for dataframe_row, value in dataframe[dataframe_column].items():
                     processed_counts[check.rule_code] = (
                         processed_counts.get(check.rule_code, 0) + 1
                     )

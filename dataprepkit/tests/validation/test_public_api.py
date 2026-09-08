@@ -2093,7 +2093,7 @@ def test_column_rules_are_not_run_when_headers_cannot_resolve(tmp_path):
     assert [event.rule_code for event in result.errors] == ["column_header"]
     assert len(result.not_run) == 1
     assert result.not_run[0].rule_code == "allowed_values"
-    assert result.not_run[0].reason == "TABLE_HEADER_RESOLUTION_FAILED"
+    assert result.not_run[0].reason == "MISSING_COLUMN"
 
 
 def test_validate_excel_reports_required_and_duplicate_column_values(tmp_path):
@@ -3282,6 +3282,46 @@ def test_inferred_columns_are_available_to_column_validations(tmp_path):
         ("duplicate_value", "B3"),
     ]
     assert result.not_run == []
+
+
+def test_missing_required_column_is_structural_but_does_not_block_load(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Present"])
+    workbook.active.append(["value"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        infer_columns=True,
+                    ),
+                    header_policy=HeaderPolicy(
+                        required_columns=["Missing"],
+                    ),
+                    column_validations=[
+                        ColumnValidation(column="Missing", unique=True),
+                    ],
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path, config=config)
+
+    assert any(event.rule_code == "column_header" for event in result.errors)
+    assert result.processed_counts["pandas_load"] == 1
+    assert any(
+        event.rule_code == "duplicate_value" and event.status == "NOT_RUN"
+        for event in result.not_run
+    )
 
 
 def test_forbidden_patterns_reject_invalid_and_empty_patterns():
