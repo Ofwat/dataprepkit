@@ -304,45 +304,98 @@ expected_cells:
 
 ## Excel-to-pandas validation contract
 
-Table loading is a structural phase that runs after direct Excel checks for
-every configured table whose sheet, header row, and data boundary resolve.
-Each configured table is loaded at most once for a validation run, even when
-no optional DataFrame checks are configured. Optional DataFrame checks run
-after this load phase.
+The implementation has one simple rule:
 
-`load_policy` controls pandas type inference and empty-value handling; it does
-not disable table loading. A configured table is always loaded when its sheet,
-header, and boundary resolve.
+```text
+Excel checks whether a table can be loaded.
+Pandas checks whether values in the loaded table are valid.
+```
 
-The initial pandas load contract is:
+The execution path is always:
 
-- load the configured Excel region into pandas with type inference disabled by
-  default;
-- preserve the mapping from each DataFrame row to its original Excel row;
-- apply the existing comparison and null policies;
-- report load failures as `pandas_load` errors;
-- report missing configured columns as `missing_column` findings;
-- report unresolved inferred boundaries as `data_boundary` findings;
-- report empty loaded tables as `empty_table` findings when an empty table is
-  structurally invalid for the configured table contract;
-- mark checks that depend on a failed load as `NOT_RUN`;
-- report DataFrame rule failures using the source sheet and Excel cell;
-- retain successfully loaded tables only when a later cross-table check needs
-  them.
+```text
+resolve sheet and table
+→ validate Excel table structure
+→ load the table
+→ run value checks
+→ return one result
+```
 
-Table-local checks are configured under their table. For example:
+Excel is responsible for table and column structure:
+
+- the configured sheet exists;
+- the header row exists;
+- headers are present and non-blank;
+- headers are unique according to the configured comparison policy;
+- ambiguous or duplicate headers are errors;
+- any explicitly required columns exist;
+- the data boundary resolves.
+
+Pandas is responsible only for values inside resolved columns:
+
+- the table is empty or contains usable rows;
+- null values according to the configured null policy;
+- uniqueness;
+- allowed and forbidden values;
+- forbidden patterns;
+- lengths and future DataFrame rules;
+- cross-table checks.
+
+Users configure one table and its checks. They do not configure pandas or
+choose an execution engine. Column names must match the Excel headers exactly;
+DataPrepKit does not rename or silently alias them. Structural column errors
+are reported before loading. Value findings retain the original worksheet and
+Excel cell location.
+
+Header matching is exact, including case and whitespace. The comparison policy
+controls values inside the loaded table; it does not change Excel header
+identity.
+
+Required columns are an optional structural check. They are checked against the
+Excel header before loading and a missing required column produces a structural
+finding. The validator still loads the table when the remaining headers and
+data boundary are sufficient; checks for the missing column are marked
+`NOT_RUN`. Loading is blocked only when the sheet, headers, or data boundary
+cannot be resolved. Required columns do not limit automatic table scanning:
+`infer_columns: true` still uses all headers that are present, including columns
+that are not required. Extra columns are allowed unless the header policy
+explicitly rejects them.
+
+Loading is mandatory after successful structural validation. A structural
+failure prevents loading and marks all value checks for that table `NOT_RUN`. A
+pandas load failure produces a `pandas_load` finding and also marks all value
+checks for that table `NOT_RUN`.
+
+An empty table is still loaded when its headers and boundary resolve. The
+`data_presence` setting then determines whether the result is valid:
+`allow_empty` accepts zero data rows, while `require_one_usable_row` reports a
+`non_empty_data` finding. A missing sheet, invalid header, duplicate header,
+missing explicit boundary column, or unresolved boundary prevents loading and
+marks every value check for that table `NOT_RUN`.
+
+The table configuration uses generic names and does not require physical cell
+coordinates or separate column definitions:
 
 ```yaml
 tables:
   - name: measurements
-    sheet_selector: {mode: exact, value: Measurements}
+    sheet_selector:
+      mode: exact
+      value: Measurements
     header_row: 1
     data_boundary:
       mode: last_non_empty_row
-      columns: [Measure_Value]
-    load_policy:
-      enabled: true
-      infer_types: false
+      infer_columns: true
+    header_policy:
+      required_columns: [Measure_Value, Process_Cd]
+    column_validations:
+      - column: Process_Cd
+        unique: true
+      - column: status
+        forbidden_values: [Closed]
+        forbidden_patterns:
+          - "^Test"
+          - "Deprecated$"
     dataframe_checks:
       - rule_code: max_length
         column: Measure_Value
@@ -350,13 +403,56 @@ tables:
         length_mode: characters
 ```
 
-The same pandas load can infer its boundary columns:
+The public API has one validation entry point and one result object. Users do
+not call pandas directly or select a validation engine; pandas loading,
+conversion, caching, and value-check execution are internal implementation
+details.
+
+For `last_non_empty_row`, explicit boundary columns may be used instead:
 
 ```yaml
     data_boundary:
       mode: last_non_empty_row
-      infer_columns: true
+      columns: [Measure_Value]
 ```
+
+Explicit `columns` take precedence over inferred boundary columns. The same
+Excel header names are used when value checks run after loading.
+
+Required columns are configured under `header_policy.required_columns`. A
+missing required column produces an Excel structural finding, but does not
+prevent loading when the remaining headers and data boundary are sufficient.
+Checks for the missing column are marked `NOT_RUN`. A missing sheet, invalid
+header row, missing explicit boundary column, or otherwise unresolved boundary
+prevents loading and marks all dependent value checks `NOT_RUN`.
+
+`required_columns` is the only required-column concept. Value nullability is a
+value check and is controlled by the null policy; it is not used to decide
+whether an Excel column exists.
+
+For `last_non_empty_row`:
+
+- the header row is excluded from data;
+- data starts at `header_row + 1`;
+- `infer_columns: true` scans every present header column;
+- explicit `columns` scans only those columns;
+- missing explicit boundary columns prevent boundary resolution;
+- values outside the selected columns do not affect the boundary;
+- the final row is the greatest row containing a usable value;
+- boundaries are resolved independently for each sheet selected.
+
+A formula is loaded into pandas as its cached cell result, not as formula text.
+Formula calculation is outside this contract.
+
+Usable values are determined by the existing comparison policy. With
+`trim_whitespace: true`, whitespace-only strings are treated as empty when
+`empty_string_is_null: true`; values matching `null_tokens` are also treated
+as null.
+
+`data_presence` controls empty tables. Use `allow_empty` when a header-only
+table is valid, or `require_one_usable_row` when at least one usable data row
+is required. Usability is evaluated from the resolved table columns using the
+configured comparison and null policies; values outside the table do not count.
 
 `max_length` ignores configured null values. Length modes are explicit so that
 Python character length is not accidentally confused with SQL Server byte or
@@ -367,6 +463,35 @@ value matching `null_tokens`, or an empty value when `empty_string_is_null` is
 enabled, is treated as null. Set `null_policy: ignore` to exclude repeated
 null-like values from uniqueness checks; set `null_policy: error` or
 `required: true` when they should be reported as missing.
+
+### Table checks
+
+Users configure checks against table columns; they do not need to know whether
+DataPrepKit evaluates a check directly from Excel or through pandas. Excel
+structure is validated first, then DataPrepKit loads the table and runs the
+configured data checks automatically. A separate pandas API is not required.
+
+For example, these checks are configured identically regardless of their
+internal execution method:
+
+```yaml
+column_validations:
+  - column: Process_Cd
+    unique: true
+  - column: status
+    required: true
+    forbidden_patterns:
+      - "^Test"
+```
+
+If the Excel structure or table load fails, the configured data checks are not
+executed and receive `NOT_RUN` results with the structural or load failure as
+their reason.
+
+Regex pattern checks operate on non-null values converted to text. Strings are
+matched after comparison-policy normalization; numbers and dates use their
+pandas string representation. Null-like values do not match patterns.
+Patterns are compiled and validated during configuration loading.
 
 Cross-table checks use the same table definitions and can match several sheets
 when a selector matches several sheets. Values from all reference matches are
