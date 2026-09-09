@@ -530,6 +530,7 @@ class WorkbookCheck(_PublicModel):
             "sheet_structure": {"compare_headers", "table_names"},
             "missing_reference_sheet": set(),
             "forbidden_values": {"forbidden_patterns"},
+            "required_filled_cells": {"fill_colors", "tolerance_percent"},
         }
         if self.rule_code in built_in_options:
             unknown_options = set(options) - built_in_options[self.rule_code]
@@ -572,6 +573,20 @@ class WorkbookCheck(_PublicModel):
                     "formula_difference whitespace_policy must be "
                     "exact or normalised"
                 )
+        if self.rule_code == "required_filled_cells" and self.enabled:
+            colors = options.get("fill_colors")
+            if not isinstance(colors, list) or not colors:
+                raise ValueError("required_filled_cells requires fill_colors as a non-empty list")
+            for color in colors:
+                if not isinstance(color, str) or not re.fullmatch(
+                    r"#?(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})", color
+                ):
+                    raise ValueError(
+                        "fill_colors must contain RGB or ARGB hexadecimal colors"
+                    )
+            tolerance = options.get("tolerance_percent", 0)
+            if not isinstance(tolerance, (int, float)) or not 0 <= tolerance <= 100:
+                raise ValueError("tolerance_percent must be between 0 and 100")
         if self.rule_code == "sheet_structure":
             if "compare_headers" in options and not isinstance(
                 options["compare_headers"],

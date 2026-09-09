@@ -1392,6 +1392,50 @@ def validate_excel(
                     else "passed"
                 )
                 continue
+            if check.rule_code == "required_filled_cells":
+                options = check.options or {}
+                colors = [_hex_rgb(color) for color in options["fill_colors"]]
+                tolerance = options.get("tolerance_percent", 0) / 100 * 255
+                severity = check.severity or resolved_config.rule_severity.get(
+                    check.rule_code
+                ) or "error"
+                for sheet in value_workbook.worksheets:
+                    if not _sheet_in_scope(sheet.title, check.scope):
+                        continue
+                    for cell in value_resolution.cells(sheet):
+                        actual_color = _cell_fill_rgb(cell)
+                        if actual_color is None or not any(
+                            _color_within_tolerance(actual_color, expected, tolerance)
+                            for expected in colors
+                        ):
+                            continue
+                        record_processed(check.rule_code)
+                        if _normalise_comparison_value(
+                            cell.value,
+                            resolved_config.comparison,
+                        ) is not None:
+                            continue
+                        errors.append(
+                            ValidationEvent(
+                                rule_code=check.rule_code,
+                                severity=severity,
+                                sheet_name=sheet.title,
+                                cell_reference=cell.coordinate,
+                                row_number=cell.row,
+                                column_number=cell.column,
+                                actual_value=cell.value,
+                                expected_value="non-empty value",
+                                description=(
+                                    "Configured filled cell must contain a value"
+                                ),
+                            )
+                        )
+                rule_outcomes[check.rule_code] = (
+                    "failed"
+                    if any(event.rule_code == check.rule_code for event in errors)
+                    else "passed"
+                )
+                continue
             if check.rule_code == "forbidden_values":
                 processed_counts.setdefault("forbidden_values", 0)
                 patterns = (check.options or {}).get("forbidden_patterns", [])
@@ -2431,6 +2475,24 @@ def _run_cross_table_checks(config, dataframe_cache):
                     )
                 )
     return errors, not_run, processed_counts, processed_severities
+
+
+def _hex_rgb(value):
+    digits = value.lstrip("#")[-6:]
+    return tuple(int(digits[index:index + 2], 16) for index in (0, 2, 4))
+
+
+def _cell_fill_rgb(cell):
+    fill = cell.fill
+    color = fill.fgColor
+    if fill.fill_type != "solid" or color.type != "rgb" or not color.rgb:
+        return None
+    digits = color.rgb[-6:]
+    return tuple(int(digits[index:index + 2], 16) for index in (0, 2, 4))
+
+
+def _color_within_tolerance(actual, expected, tolerance):
+    return all(abs(left - right) <= tolerance for left, right in zip(actual, expected))
 
 
 def _match_sheets(sheet_names, selector):

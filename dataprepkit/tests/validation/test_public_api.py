@@ -138,6 +138,7 @@ def test_public_rule_catalogue_lists_all_builtin_checks():
             "max_length",
             "value_type",
             "conflicting_duplicate",
+            "required_filled_cells",
             "values_in_reference",
         "feature_policy",
         "feature_detection_unavailable",
@@ -1117,6 +1118,12 @@ def test_workbook_forbidden_values_scans_scoped_cells(
 
     config = make_config(required_sheet="Data_2026").model_copy(
         update={
+            "sheet_policy": SheetPolicy(
+                required_selectors=[],
+                ignored_selectors=[],
+                extra_sheet_action="ignore",
+                selector_match_action="all",
+            ),
             "workbook_checks": [
                 WorkbookCheck(
                     rule_code="forbidden_values",
@@ -3376,6 +3383,63 @@ def test_conflicting_duplicate_table_validation_reports_different_values(tmp_pat
     assert [(event.rule_code, event.cell_reference) for event in result.errors] == [
         ("conflicting_duplicate", "C3"),
     ]
+
+
+def test_required_filled_cells_reports_blank_matching_fill(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Inputs"
+    sheet["A1"] = "Provided"
+    sheet["A1"].fill = PatternFill(fill_type="solid", fgColor="FFFFFF00")
+    sheet["A2"].fill = PatternFill(fill_type="solid", fgColor="FFFFFF00")
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "sheet_policy": SheetPolicy(
+                required_selectors=[],
+                ignored_selectors=[],
+                extra_sheet_action="ignore",
+                selector_match_action="all",
+            ),
+            "workbook_checks": [
+                WorkbookCheck(
+                    rule_code="required_filled_cells",
+                    enabled=True,
+                    scope="all_sheets",
+                    options={
+                        "fill_colors": ["#FFFF00"],
+                        "tolerance_percent": 0,
+                    },
+                )
+            ],
+            "enabled_rules": None,
+        }
+    )
+
+    result = validate_excel(candidate_path, config=config)
+
+    assert [(event.rule_code, event.cell_reference) for event in result.errors] == [
+        ("required_filled_cells", "A2"),
+    ]
+
+
+def test_required_filled_cells_validates_hex_and_tolerance_options():
+    with pytest.raises(ValueError, match="hexadecimal colors"):
+        WorkbookCheck(
+            rule_code="required_filled_cells",
+            enabled=True,
+            scope="all_sheets",
+            options={"fill_colors": ["yellow"]},
+        )
+    with pytest.raises(ValueError, match="between 0 and 100"):
+        WorkbookCheck(
+            rule_code="required_filled_cells",
+            enabled=True,
+            scope="all_sheets",
+            options={"fill_colors": ["#FFFF00"], "tolerance_percent": 101},
+        )
 
 
 def test_missing_required_column_is_structural_but_does_not_block_load(tmp_path):

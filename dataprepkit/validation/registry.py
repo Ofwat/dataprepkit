@@ -99,6 +99,11 @@ _BUILT_IN_RULES = (
         "description": "Reject repeated identities with conflicting values.",
     },
     {
+        "rule_code": "required_filled_cells",
+        "attachment": "workbook_checks",
+        "description": "Require cells with configured fill colours to be populated.",
+    },
+    {
         "rule_code": "values_in_reference",
         "attachment": "cross_table_checks",
         "description": "Require source values to exist in another loaded table.",

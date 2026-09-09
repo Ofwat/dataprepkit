@@ -185,6 +185,7 @@ for rule in list_available_rules():
 | `max_length` | `tables[].column_validations[].max_length` | A loaded table value exceeds its configured length. |
 | `value_type` | `tables[].column_validations[].value_type` | A value is not text or numeric as configured, optionally under a condition. |
 | `conflicting_duplicate` | `tables[].table_validations` | Repeated identity columns have conflicting value columns. |
+| `required_filled_cells` | `workbook_checks` | Cells with configured solid fill colours must be populated. |
 | `values_in_reference` | `cross_table_checks` | A source value is absent from another loaded table. |
 | `missing_reference_sheet` | `workbook_checks` | A sheet in the reference workbook is absent from the candidate. |
 | `sheet_structure` | `workbook_checks` | Candidate and reference content-based used areas differ. |
