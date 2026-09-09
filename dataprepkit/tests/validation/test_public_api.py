@@ -134,7 +134,8 @@ def test_public_rule_catalogue_lists_all_builtin_checks():
             "empty_table",
             "data_boundary",
             "max_length",
-        "values_in_reference",
+            "value_type",
+            "values_in_reference",
         "feature_policy",
         "feature_detection_unavailable",
     }
@@ -3280,6 +3281,54 @@ def test_inferred_columns_are_available_to_column_validations(tmp_path):
         ("duplicate_value", "B3"),
     ]
     assert result.not_run == []
+
+
+def test_conditional_value_types_validate_text_and_numeric_inputs(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    sheet = workbook.active
+    sheet.append(["Unit", "Measure_Value"])
+    sheet.append(["Text", "hello"])
+    sheet.append(["Text", 125])
+    sheet.append(["Number", 125])
+    sheet.append(["Number", "TBC"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="measurements",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        infer_columns=True,
+                    ),
+                    column_validations=[
+                        ColumnValidation(
+                            column="Measure_Value",
+                            value_type="text",
+                            when={"column": "Unit", "equals": "Text"},
+                        ),
+                        ColumnValidation(
+                            column="Measure_Value",
+                            value_type="numeric",
+                            when={"column": "Unit", "not_equals": "Text"},
+                        ),
+                    ],
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path, config=config)
+
+    assert [(event.rule_code, event.cell_reference) for event in result.errors] == [
+        ("value_type", "B3"),
+        ("value_type", "B5"),
+    ]
 
 
 def test_missing_required_column_is_structural_but_does_not_block_load(tmp_path):

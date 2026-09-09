@@ -89,6 +89,11 @@ _BUILT_IN_RULES = (
         "description": "Reject DataFrame values exceeding a configured length.",
     },
     {
+        "rule_code": "value_type",
+        "attachment": "tables.column_validations.value_type",
+        "description": "Require text or numeric values, optionally by condition.",
+    },
+    {
         "rule_code": "values_in_reference",
         "attachment": "cross_table_checks",
         "description": "Require source values to exist in another loaded table.",

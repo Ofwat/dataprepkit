@@ -173,8 +173,22 @@ class RuntimePolicy(_PublicModel):
         return self
 
 
+class ColumnCondition(_PublicModel):
+    column: str
+    equals: Any | None = None
+    not_equals: Any | None = None
+
+    @model_validator(mode="after")
+    def validate_operator(self):
+        if (self.equals is None) == (self.not_equals is None):
+            raise ValueError("condition requires exactly one of equals or not_equals")
+        return self
+
+
 class ColumnValidation(_PublicModel):
     column: str
+    value_type: str | None = None
+    when: ColumnCondition | None = None
     required: bool = False
     unique: bool = False
     max_length: int | None = None
@@ -187,6 +201,8 @@ class ColumnValidation(_PublicModel):
 
     @model_validator(mode="after")
     def validate_value_lists(self):
+        if self.value_type not in {None, "text", "numeric"}:
+            raise ValueError("value_type must be text or numeric")
         if self.max_length is not None and self.max_length < 0:
             raise ValueError("max_length must be a non-negative integer")
         if self.length_mode != "characters":

@@ -183,6 +183,7 @@ for rule in list_available_rules():
 | `empty_table` | `tables` | A resolved table loaded with no data rows. |
 | `data_boundary` | `tables.data_boundary` | A configured data boundary could not be resolved. |
 | `max_length` | `tables[].column_validations[].max_length` | A loaded table value exceeds its configured length. |
+| `value_type` | `tables[].column_validations[].value_type` | A value is not text or numeric as configured, optionally under a condition. |
 | `values_in_reference` | `cross_table_checks` | A source value is absent from another loaded table. |
 | `missing_reference_sheet` | `workbook_checks` | A sheet in the reference workbook is absent from the candidate. |
 | `sheet_structure` | `workbook_checks` | Candidate and reference content-based used areas differ. |
@@ -451,6 +452,27 @@ configured comparison and null policies; values outside the table do not count.
 `max_length` ignores configured null values. Length modes are explicit so that
 Python character length is not accidentally confused with SQL Server byte or
 UTF-16 length semantics.
+
+Use `value_type` for conditional text or numeric requirements. The condition
+uses another column and exactly one comparison operator:
+
+```yaml
+column_validations:
+  - column: Measure_Value
+    value_type: text
+    when:
+      column: Unit
+      equals: Text
+  - column: Measure_Value
+    value_type: numeric
+    when:
+      column: Unit
+      not_equals: Text
+```
+
+`text` accepts strings. `numeric` accepts numeric values, but not booleans or
+numeric-looking strings. If the condition column is missing, the check is
+`NOT_RUN`; if the condition value is null, the condition does not match.
 
 For uniqueness, null-like values are controlled by the comparison policy. A
 value matching `null_tokens`, or an empty value when `empty_string_is_null` is

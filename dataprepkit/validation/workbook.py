@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass, field
+from numbers import Number
 import re
 import unicodedata
 from pathlib import Path
@@ -1575,6 +1576,8 @@ def _run_dataframe_column_validations(
             rule_codes.append("duplicate_value")
         if validation.max_length is not None:
             rule_codes.append("max_length")
+        if validation.value_type is not None:
+            rule_codes.append("value_type")
         if validation.allowed_values is not None:
             rule_codes.append("allowed_values")
         if validation.forbidden_values is not None or validation.forbidden_patterns:
@@ -1642,6 +1645,28 @@ def _run_dataframe_column_validations(
                     )
                 )
             continue
+        condition_column = None
+        if validation.when is not None:
+            condition_column, _ = _dataframe_column(
+                dataframe,
+                column_numbers,
+                validation.when.column,
+            )
+            if condition_column is None:
+                not_run.append(
+                    ValidationEvent(
+                        rule_code="value_type",
+                        status="NOT_RUN",
+                        reason="MISSING_COLUMN",
+                        sheet_name=sheet_name,
+                        description=(
+                            f"Value type check for '{validation.column}' could not "
+                            f"run because condition column '{validation.when.column}' "
+                            "was not found"
+                        ),
+                    )
+                )
+                continue
         comparison = config.comparison
         definition = next(
             (
@@ -1696,6 +1721,57 @@ def _run_dataframe_column_validations(
                         )
                     )
                 continue
+            if validation.when is not None:
+                condition_value = dataframe.loc[row_index, condition_column]
+                condition_value = (
+                    None
+                    if condition_value is None or pd.isna(condition_value)
+                    else _normalise_comparison_value(condition_value, comparison)
+                )
+                expected_condition = _normalise_comparison_value(
+                    validation.when.equals
+                    if validation.when.equals is not None
+                    else validation.when.not_equals,
+                    comparison,
+                )
+                condition_matches = (
+                    condition_value is not None
+                    and (
+                        condition_value == expected_condition
+                        if validation.when.equals is not None
+                        else condition_value != expected_condition
+                    )
+                )
+                if not condition_matches:
+                    continue
+            if validation.value_type is not None:
+                is_valid_type = (
+                    isinstance(value, str)
+                    if validation.value_type == "text"
+                    else isinstance(value, Number) and not isinstance(value, bool)
+                )
+                if "value_type" not in disabled:
+                    processed_counts["value_type"] = (
+                        processed_counts.get("value_type", 0) + 1
+                    )
+                    if not is_valid_type:
+                        errors.append(
+                            ValidationEvent(
+                                rule_code="value_type",
+                                severity=validation.severity
+                                or config.rule_severity.get("value_type"),
+                                sheet_name=sheet_name,
+                                cell_reference=cell_reference,
+                                row_number=excel_row,
+                                column_number=column_number,
+                                actual_value=value,
+                                expected_value=validation.value_type,
+                                description=(
+                                    f"Value in column '{validation.column}' "
+                                    f"must be {validation.value_type}"
+                                ),
+                            )
+                        )
             if validation.unique and "duplicate_value" not in disabled:
                 processed_counts["duplicate_value"] = (
                     processed_counts.get("duplicate_value", 0) + 1

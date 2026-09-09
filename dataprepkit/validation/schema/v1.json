@@ -1,6 +1,17 @@
 {
   "": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
+    "ColumnCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "column": {"title": "Column", "type": "string"},
+        "equals": {},
+        "not_equals": {}
+      },
+      "required": ["column"],
+      "title": "ColumnCondition",
+      "type": "object"
+    },
     "CellComparison": {
       "additionalProperties": false,
       "properties": {
@@ -122,6 +133,21 @@
           ],
           "default": null,
           "title": "Max Length"
+        },
+        "value_type": {
+          "anyOf": [
+            {"enum": ["text", "numeric"]},
+            {"type": "null"}
+          ],
+          "default": null,
+          "title": "Value Type"
+        },
+        "when": {
+          "anyOf": [
+            {"$ref": "#/$defs/ColumnCondition"},
+            {"type": "null"}
+          ],
+          "default": null
         },
         "null_policy": {
           "anyOf": [
