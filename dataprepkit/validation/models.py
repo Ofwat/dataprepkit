@@ -177,6 +177,8 @@ class ColumnValidation(_PublicModel):
     column: str
     required: bool = False
     unique: bool = False
+    max_length: int | None = None
+    length_mode: str = "characters"
     allowed_values: list[Any] | None = None
     forbidden_values: list[Any] | None = None
     forbidden_patterns: list[str] | None = None
@@ -185,6 +187,10 @@ class ColumnValidation(_PublicModel):
 
     @model_validator(mode="after")
     def validate_value_lists(self):
+        if self.max_length is not None and self.max_length < 0:
+            raise ValueError("max_length must be a non-negative integer")
+        if self.length_mode != "characters":
+            raise ValueError("length_mode must be characters")
         if self.allowed_values is not None and (
             self.forbidden_values is not None
             or self.forbidden_patterns is not None
@@ -384,28 +390,6 @@ class DataFrameLoadPolicy(_PublicModel):
     preserve_empty_values: bool = True
 
 
-class DataFrameCheck(_PublicModel):
-    rule_code: str
-    column: str
-    max_length: int | None = None
-    min_length: int | None = None
-    length_mode: str = "characters"
-    enabled: bool = True
-    severity: str | None = None
-
-    @model_validator(mode="after")
-    def validate_options(self):
-        if self.rule_code != "max_length":
-            raise ValueError("unsupported DataFrame rule")
-        if self.max_length is None or self.max_length < 0:
-            raise ValueError("max_length must be a non-negative integer")
-        if self.min_length is not None and self.min_length < 0:
-            raise ValueError("min_length must be a non-negative integer")
-        if self.length_mode != "characters":
-            raise ValueError("length_mode must be characters")
-        return self
-
-
 class CrossTableCheck(_PublicModel):
     name: str
     rule_code: str = "values_in_reference"
@@ -446,7 +430,6 @@ class TableConfig(_PublicModel):
     load_policy: DataFrameLoadPolicy | None = Field(
         default_factory=DataFrameLoadPolicy
     )
-    dataframe_checks: list[DataFrameCheck] = Field(default_factory=list)
 
     @field_validator("data_presence")
     @classmethod

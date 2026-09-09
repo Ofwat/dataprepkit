@@ -179,10 +179,10 @@ for rule in list_available_rules():
 | `allowed_values` | `tables.column_validations[].allowed_values` | A value is not in the configured allow-list. |
 | `forbidden_values` | `tables.column_validations[].forbidden_values` or `workbook_checks` | A value is in the configured deny-list or matches a forbidden pattern. |
 | `pandas_load` | `tables` | A resolved table could not be loaded into pandas. |
-| `missing_column` | `tables.column_validations` or `tables.dataframe_checks` | A configured column is absent from the loaded table. |
+| `missing_column` | `tables.column_validations` | A configured column is absent from the loaded table. |
 | `empty_table` | `tables` | A resolved table loaded with no data rows. |
 | `data_boundary` | `tables.data_boundary` | A configured data boundary could not be resolved. |
-| `max_length` | `tables[].dataframe_checks` | A loaded DataFrame value exceeds its configured length. |
+| `max_length` | `tables[].column_validations[].max_length` | A loaded table value exceeds its configured length. |
 | `values_in_reference` | `cross_table_checks` | A source value is absent from another loaded table. |
 | `missing_reference_sheet` | `workbook_checks` | A sheet in the reference workbook is absent from the candidate. |
 | `sheet_structure` | `workbook_checks` | Candidate and reference content-based used areas differ. |
@@ -392,9 +392,7 @@ tables:
         forbidden_patterns:
           - "^Test"
           - "Deprecated$"
-    dataframe_checks:
-      - rule_code: max_length
-        column: Measure_Value
+      - column: Measure_Value
         max_length: 4000
         length_mode: characters
 ```

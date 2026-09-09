@@ -70,7 +70,7 @@ _BUILT_IN_RULES = (
     },
     {
         "rule_code": "missing_column",
-        "attachment": "tables.column_validations or tables.dataframe_checks",
+        "attachment": "tables.column_validations",
         "description": "Report a configured column missing from the loaded table.",
     },
     {
@@ -85,7 +85,7 @@ _BUILT_IN_RULES = (
     },
     {
         "rule_code": "max_length",
-        "attachment": "tables.dataframe_checks",
+        "attachment": "tables.column_validations.max_length",
         "description": "Reject DataFrame values exceeding a configured length.",
     },
     {

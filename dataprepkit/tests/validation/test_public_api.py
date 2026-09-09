@@ -23,7 +23,6 @@ from dataprepkit.validation import (
     EmptyRowRule,
     ExpectedCellCheck,
     HeaderPolicy,
-    DataFrameCheck,
     DataFrameLoadPolicy,
     CrossTableCheck,
     RuntimePolicy,
@@ -2283,9 +2282,8 @@ def test_validate_excel_runs_dataframe_max_length_check(tmp_path):
                         columns=["Measure_Value"],
                     ),
                     load_policy=DataFrameLoadPolicy(enabled=True),
-                    dataframe_checks=[
-                        DataFrameCheck(
-                            rule_code="max_length",
+                    column_validations=[
+                        ColumnValidation(
                             column="Measure_Value",
                             max_length=4000,
                         )

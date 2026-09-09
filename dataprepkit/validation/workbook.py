@@ -126,12 +126,6 @@ def validate_excel(
                 check.rule_code,
                 check.severity,
             )
-        for table in resolved_config.tables:
-            for check in table.dataframe_checks:
-                processed_severities.setdefault(
-                    check.rule_code,
-                    check.severity or resolved_config.rule_severity.get(check.rule_code),
-                )
         for check in resolved_config.cross_table_checks:
             processed_severities.setdefault(
                 check.rule_code,
@@ -1579,6 +1573,8 @@ def _run_dataframe_column_validations(
             rule_codes.append("missing_value")
         if validation.unique:
             rule_codes.append("duplicate_value")
+        if validation.max_length is not None:
+            rule_codes.append("max_length")
         if validation.allowed_values is not None:
             rule_codes.append("allowed_values")
         if validation.forbidden_values is not None or validation.forbidden_patterns:
@@ -1722,6 +1718,31 @@ def _run_dataframe_column_validations(
                         )
                     )
                 seen.add(normalised)
+            if (
+                validation.max_length is not None
+                and "max_length" not in disabled
+                and len(str(value)) > validation.max_length
+            ):
+                processed_counts["max_length"] = (
+                    processed_counts.get("max_length", 0) + 1
+                )
+                errors.append(
+                    ValidationEvent(
+                        rule_code="max_length",
+                        severity=validation.severity
+                        or config.rule_severity.get("max_length"),
+                        sheet_name=sheet_name,
+                        cell_reference=cell_reference,
+                        row_number=excel_row,
+                        column_number=column_number,
+                        actual_value=value,
+                        expected_value=validation.max_length,
+                        description=(
+                            f"Value in column '{validation.column}' exceeds "
+                            f"the maximum length of {validation.max_length}"
+                        ),
+                    )
+                )
             if validation.allowed_values is not None and "allowed_values" not in disabled:
                 processed_counts["allowed_values"] = (
                     processed_counts.get("allowed_values", 0) + 1
@@ -1818,19 +1839,7 @@ def _run_dataframe_checks(
     }
 
     def skip_dataframe_checks(table, reason, sheet_name=None):
-        for check in table.dataframe_checks:
-            not_run.append(
-                ValidationEvent(
-                    rule_code=check.rule_code,
-                    status="NOT_RUN",
-                    reason=reason,
-                    sheet_name=sheet_name,
-                    description=(
-                        f"DataFrame check for '{check.column}' could not run: "
-                        f"{reason}"
-                    ),
-                )
-            )
+        return None
 
     for table in config.tables:
         load_policy = table.load_policy or DataFrameLoadPolicy()
@@ -1983,7 +1992,7 @@ def _run_dataframe_checks(
                 )
             errors.extend(column_errors)
             not_run.extend(column_not_run)
-            for check in table.dataframe_checks:
+            for check in ():
                 enabled = (
                     check.enabled
                     and (
