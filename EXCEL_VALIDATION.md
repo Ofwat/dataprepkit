@@ -184,6 +184,7 @@ for rule in list_available_rules():
 | `data_boundary` | `tables.data_boundary` | A configured data boundary could not be resolved. |
 | `max_length` | `tables[].column_validations[].max_length` | A loaded table value exceeds its configured length. |
 | `value_type` | `tables[].column_validations[].value_type` | A value is not text or numeric as configured, optionally under a condition. |
+| `conflicting_duplicate` | `tables[].table_validations` | Repeated identity columns have conflicting value columns. |
 | `values_in_reference` | `cross_table_checks` | A source value is absent from another loaded table. |
 | `missing_reference_sheet` | `workbook_checks` | A sheet in the reference workbook is absent from the candidate. |
 | `sheet_structure` | `workbook_checks` | Candidate and reference content-based used areas differ. |
@@ -529,6 +530,24 @@ cross_table_checks:
 The check counts every source row it evaluates in the result summary. A failed
 or unresolved pandas load produces `NOT_RUN` events for dependent checks rather
 than attempting to read an unbounded worksheet region.
+
+For duplicate identities within one table, use a table validation. Repeated
+identities with the same values are allowed; only conflicting values fail:
+
+```yaml
+table_validations:
+  - rule_code: conflicting_duplicate
+    key_columns:
+      mode: pattern
+      pattern: ".*_Cd$"
+    value_columns:
+      - Measure_Value
+```
+
+`key_columns.mode` may be `explicit`, `all`, or `pattern`. Value columns are
+always explicit so that they cannot accidentally become part of the identity.
+Missing columns or a selector matching no columns produce a finding and mark
+the table validation `NOT_RUN`.
 
 ### Reference comparison
 

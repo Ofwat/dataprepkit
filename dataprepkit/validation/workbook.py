@@ -1894,6 +1894,128 @@ def _dataframe_column(dataframe, column_numbers, requested):
     return None, column_number
 
 
+def _run_table_validations(
+    dataframe,
+    table,
+    column_numbers,
+    config,
+    sheet_name,
+    processed_counts,
+):
+    errors = []
+    not_run = []
+    for validation in table.table_validations:
+        selector = validation.key_columns
+        if selector.mode == "all":
+            key_columns = list(dataframe.columns)
+        elif selector.mode == "pattern":
+            pattern = re.compile(selector.pattern)
+            key_columns = [
+                column for column in dataframe.columns if pattern.search(str(column))
+            ]
+        else:
+            key_columns = []
+            for requested in selector.columns or []:
+                dataframe_column, _ = _dataframe_column(
+                    dataframe,
+                    column_numbers,
+                    requested,
+                )
+                if dataframe_column is None:
+                    key_columns.append(requested)
+                else:
+                    key_columns.append(dataframe_column)
+        value_columns = []
+        missing_columns = []
+        for requested in validation.value_columns:
+            dataframe_column, _ = _dataframe_column(
+                dataframe,
+                column_numbers,
+                requested,
+            )
+            if dataframe_column is None:
+                missing_columns.append(requested)
+            else:
+                value_columns.append(dataframe_column)
+        missing_keys = [column for column in key_columns if column not in dataframe.columns]
+        if missing_keys or missing_columns or not key_columns:
+            for column in [*missing_keys, *missing_columns]:
+                errors.append(
+                    ValidationEvent(
+                        rule_code="missing_column",
+                        severity=validation.severity
+                        or config.rule_severity.get("missing_column"),
+                        sheet_name=sheet_name,
+                        expected_value=column,
+                        description=f"Column '{column}' was not found in the loaded table",
+                    )
+                )
+            not_run.append(
+                ValidationEvent(
+                    rule_code=validation.rule_code,
+                    status="NOT_RUN",
+                    reason="COLUMN_SELECTION_FAILED",
+                    sheet_name=sheet_name,
+                    description=(
+                        f"Table validation '{validation.rule_code}' could not run "
+                        "because its columns could not be resolved"
+                    ),
+                )
+            )
+            continue
+        groups = {}
+        for row_index, row in dataframe.iterrows():
+            key = tuple(
+                _normalise_comparison_value(value, config.comparison)
+                if value is not None and not pd.isna(value)
+                else None
+                for value in (row[column] for column in key_columns)
+            )
+            values = tuple(
+                _normalise_comparison_value(value, config.comparison)
+                if value is not None and not pd.isna(value)
+                else None
+                for value in (row[column] for column in value_columns)
+            )
+            groups.setdefault(key, []).append((row_index, values, row))
+        for key, rows in groups.items():
+            distinct_values = {values for _row, values, _data in rows}
+            if len(distinct_values) <= 1:
+                continue
+            baseline = rows[0][1]
+            rendered_values = sorted({repr(values) for values in distinct_values})
+            for row_index, values, row in rows[1:]:
+                if values == baseline:
+                    continue
+                processed_counts[validation.rule_code] = (
+                    processed_counts.get(validation.rule_code, 0) + 1
+                )
+                value_column = value_columns[0]
+                column_number = column_numbers.get(value_column)
+                excel_row = table.header_row + 1 + int(row_index)
+                errors.append(
+                    ValidationEvent(
+                        rule_code=validation.rule_code,
+                        severity=validation.severity
+                        or config.rule_severity.get(validation.rule_code),
+                        sheet_name=sheet_name,
+                        cell_reference=(
+                            f"{get_column_letter(column_number)}{excel_row}"
+                            if column_number is not None else None
+                        ),
+                        row_number=excel_row,
+                        column_number=column_number,
+                        actual_value=row[value_column],
+                        expected_value=rendered_values,
+                        description=(
+                            "Duplicate identity has conflicting values: "
+                            + ", ".join(rendered_values)
+                        ),
+                    )
+                )
+    return errors, not_run
+
+
 def _run_dataframe_checks(
     candidate_path,
     value_workbook,
@@ -2068,6 +2190,16 @@ def _run_dataframe_checks(
                 )
             errors.extend(column_errors)
             not_run.extend(column_not_run)
+            table_errors, table_not_run = _run_table_validations(
+                dataframe,
+                table,
+                logical_columns,
+                config,
+                sheet_name,
+                processed_counts,
+            )
+            errors.extend(table_errors)
+            not_run.extend(table_not_run)
             for check in ():
                 enabled = (
                     check.enabled

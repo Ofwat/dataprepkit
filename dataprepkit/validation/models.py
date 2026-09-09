@@ -231,6 +231,44 @@ class ColumnValidation(_PublicModel):
         return self
 
 
+class ColumnSelector(_PublicModel):
+    mode: str
+    columns: list[str] | None = None
+    pattern: str | None = None
+
+    @model_validator(mode="after")
+    def validate_selector(self):
+        if self.mode not in {"explicit", "all", "pattern"}:
+            raise ValueError("column selector mode must be explicit, all, or pattern")
+        if self.mode == "explicit" and not self.columns:
+            raise ValueError("columns are required for an explicit column selector")
+        if self.mode == "all" and (self.columns or self.pattern):
+            raise ValueError("all column selector cannot define columns or pattern")
+        if self.mode == "pattern":
+            if not self.pattern:
+                raise ValueError("pattern is required for a pattern column selector")
+            try:
+                re.compile(self.pattern)
+            except re.error as error:
+                raise ValueError(f"invalid column selector regex: {error}") from error
+        return self
+
+
+class TableValidation(_PublicModel):
+    rule_code: str
+    key_columns: ColumnSelector
+    value_columns: list[str]
+    severity: str | None = None
+
+    @model_validator(mode="after")
+    def validate_rule(self):
+        if self.rule_code != "conflicting_duplicate":
+            raise ValueError("unsupported table validation rule")
+        if not self.value_columns:
+            raise ValueError("value_columns must not be empty")
+        return self
+
+
 class CellLocation(_PublicModel):
     sheet_selector: SheetSelector
     cell_reference: str
@@ -440,6 +478,7 @@ class TableConfig(_PublicModel):
     data_boundary: DataBoundary | None = None
     column_definitions: list[ColumnDefinition] = Field(default_factory=list)
     column_validations: list[ColumnValidation] = Field(default_factory=list)
+    table_validations: list[TableValidation] = Field(default_factory=list)
     header_policy: HeaderPolicy = Field(default_factory=HeaderPolicy)
     empty_row_rules: list[EmptyRowRule] = Field(default_factory=list)
     data_presence: str = "allow_empty"

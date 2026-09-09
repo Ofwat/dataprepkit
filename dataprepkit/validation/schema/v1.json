@@ -190,6 +190,35 @@
       "title": "ColumnValidation",
       "type": "object"
     },
+    "ColumnSelector": {
+      "additionalProperties": false,
+      "properties": {
+        "columns": {
+          "anyOf": [
+            {"items": {"type": "string"}, "type": "array"},
+            {"type": "null"}
+          ],
+          "default": null
+        },
+        "mode": {"type": "string"},
+        "pattern": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null}
+      },
+      "required": ["mode"],
+      "title": "ColumnSelector",
+      "type": "object"
+    },
+    "TableValidation": {
+      "additionalProperties": false,
+      "properties": {
+        "key_columns": {"$ref": "#/$defs/ColumnSelector"},
+        "rule_code": {"const": "conflicting_duplicate"},
+        "severity": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null},
+        "value_columns": {"items": {"type": "string"}, "type": "array"}
+      },
+      "required": ["rule_code", "key_columns", "value_columns"],
+      "title": "TableValidation",
+      "type": "object"
+    },
     "ComparisonConfig": {
       "additionalProperties": false,
       "properties": {
@@ -555,6 +584,11 @@
             "$ref": "#/$defs/ColumnValidation"
           },
           "title": "Column Validations",
+          "type": "array"
+        },
+        "table_validations": {
+          "items": {"$ref": "#/$defs/TableValidation"},
+          "title": "Table Validations",
           "type": "array"
         },
         "data_boundary": {

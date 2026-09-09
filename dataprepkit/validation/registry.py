@@ -94,6 +94,11 @@ _BUILT_IN_RULES = (
         "description": "Require text or numeric values, optionally by condition.",
     },
     {
+        "rule_code": "conflicting_duplicate",
+        "attachment": "tables.table_validations",
+        "description": "Reject repeated identities with conflicting values.",
+    },
+    {
         "rule_code": "values_in_reference",
         "attachment": "cross_table_checks",
         "description": "Require source values to exist in another loaded table.",

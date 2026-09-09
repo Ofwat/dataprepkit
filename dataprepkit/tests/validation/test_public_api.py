@@ -19,6 +19,7 @@ from dataprepkit.validation import (
     CellLocation,
     ColumnDefinition,
     ColumnValidation,
+    ColumnSelector,
     DataBoundary,
     EmptyRowRule,
     ExpectedCellCheck,
@@ -30,6 +31,7 @@ from dataprepkit.validation import (
     SheetPolicy,
     SheetSelector,
     TableConfig,
+    TableValidation,
     ValidationEvent,
     ValidationResult,
     validation_result_to_dataframe,
@@ -135,6 +137,7 @@ def test_public_rule_catalogue_lists_all_builtin_checks():
             "data_boundary",
             "max_length",
             "value_type",
+            "conflicting_duplicate",
             "values_in_reference",
         "feature_policy",
         "feature_detection_unavailable",
@@ -3328,6 +3331,50 @@ def test_conditional_value_types_validate_text_and_numeric_inputs(tmp_path):
     assert [(event.rule_code, event.cell_reference) for event in result.errors] == [
         ("value_type", "B3"),
         ("value_type", "B5"),
+    ]
+
+
+def test_conflicting_duplicate_table_validation_reports_different_values(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    sheet = workbook.active
+    sheet.append(["Measure_Cd", "Organisation_Cd", "Measure_Value"])
+    sheet.append(["INN001", "AFW", 100])
+    sheet.append(["INN001", "AFW", 125])
+    sheet.append(["INN001", "AFW", 100])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="measurements",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        infer_columns=True,
+                    ),
+                    table_validations=[
+                        TableValidation(
+                            rule_code="conflicting_duplicate",
+                            key_columns=ColumnSelector(
+                                mode="pattern",
+                                pattern=r".*_Cd$",
+                            ),
+                            value_columns=["Measure_Value"],
+                        )
+                    ],
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path, config=config)
+
+    assert [(event.rule_code, event.cell_reference) for event in result.errors] == [
+        ("conflicting_duplicate", "C3"),
     ]
 
 
