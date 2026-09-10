@@ -139,6 +139,7 @@ def test_public_rule_catalogue_lists_all_builtin_checks():
             "value_type",
             "conflicting_duplicate",
             "required_filled_cells",
+            "unexpected_formula",
             "values_in_reference",
         "feature_policy",
         "feature_detection_unavailable",
@@ -1406,6 +1407,85 @@ def test_validate_excel_reports_formula_differences(tmp_path):
     assert result.errors[0].cell_reference == "B1"
     assert result.errors[0].actual_value == "=SUM(A1)"
     assert result.errors[0].expected_value == "=SUM(A2)"
+    assert result.errors[0].reason == "FORMULA_CHANGED"
+
+
+@pytest.mark.parametrize(
+    ("reference_value", "candidate_value", "reason"),
+    [
+        ("literal", "=SUM(A1)", "FORMULA_ADDED"),
+        ("=SUM(A1)", "literal", "FORMULA_REMOVED"),
+    ],
+)
+def test_formula_difference_classifies_formula_transitions(
+    tmp_path,
+    reference_value,
+    candidate_value,
+    reason,
+):
+    candidate_path = tmp_path / "candidate.xlsx"
+    reference_path = tmp_path / "reference.xlsx"
+    for path, value in (
+        (candidate_path, candidate_value),
+        (reference_path, reference_value),
+    ):
+        workbook = openpyxl.Workbook()
+        workbook.active.title = "Data"
+        workbook.active["B1"] = value
+        workbook.save(path)
+
+    config = make_config(
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="formula_difference",
+                enabled=True,
+                scope="overlapping_sheets",
+            )
+        ]
+    )
+    result = validate_excel(candidate_path, config, reference_path)
+
+    assert result.errors[0].reason == reason
+
+
+def test_unexpected_formula_reports_formula_in_filled_input_cell(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Inputs"
+    workbook.active["A1"] = "=SUM(B1:B2)"
+    workbook.active["A1"].fill = PatternFill(
+        fill_type="solid",
+        fgColor="FFFFFF00",
+    )
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "sheet_policy": SheetPolicy(
+                required_selectors=[],
+                ignored_selectors=[],
+                extra_sheet_action="ignore",
+                selector_match_action="all",
+            ),
+            "workbook_checks": [
+                WorkbookCheck(
+                    rule_code="unexpected_formula",
+                    enabled=True,
+                    scope="all_sheets",
+                    options={
+                        "fill_colors": ["#FFFF00"],
+                        "tolerance_percent": 0,
+                    },
+                )
+            ],
+        }
+    )
+
+    result = validate_excel(candidate_path, config)
+
+    assert [(event.rule_code, event.cell_reference) for event in result.errors] == [
+        ("unexpected_formula", "A1"),
+    ]
 
 
 def test_reference_formula_check_is_not_run_without_reference_workbook(tmp_path):
@@ -3439,6 +3519,16 @@ def test_required_filled_cells_validates_hex_and_tolerance_options():
             enabled=True,
             scope="all_sheets",
             options={"fill_colors": ["#FFFF00"], "tolerance_percent": 101},
+        )
+
+
+def test_unexpected_formula_validates_fill_options():
+    with pytest.raises(ValueError, match="fill_colors"):
+        WorkbookCheck(
+            rule_code="unexpected_formula",
+            enabled=True,
+            scope="all_sheets",
+            options={},
         )
 
 

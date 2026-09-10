@@ -1374,15 +1374,23 @@ def validate_excel(
                             )
                             if candidate_formula == reference_formula:
                                 continue
+                            transition = (
+                                "FORMULA_CHANGED"
+                                if candidate_is_formula and reference_is_formula
+                                else "FORMULA_ADDED"
+                                if candidate_is_formula
+                                else "FORMULA_REMOVED"
+                            )
                             errors.append(
                                 ValidationEvent(
                                     rule_code="formula_difference",
+                                    reason=transition,
                                     sheet_name=candidate_sheet.title,
                                     cell_reference=candidate_cell.coordinate,
                                     actual_value=candidate_formula,
                                     expected_value=reference_formula,
                                     description=(
-                                        "Candidate formula differs from reference"
+                                        f"Formula transition detected: {transition}"
                                     ),
                                 )
                             )
@@ -1391,6 +1399,50 @@ def validate_excel(
                     if any(event.rule_code == check.rule_code for event in errors)
                     else "passed"
                 )
+                continue
+            if check.rule_code == "unexpected_formula":
+                options = check.options or {}
+                colors = [_hex_rgb(color) for color in options["fill_colors"]]
+                tolerance = options.get("tolerance_percent", 0) / 100 * 255
+                severity = check.severity or resolved_config.rule_severity.get(
+                    check.rule_code
+                ) or "error"
+                for sheet in formula_workbook.worksheets:
+                    if not _sheet_in_scope(sheet.title, check.scope):
+                        continue
+                    for cell in formula_resolution.cells(sheet):
+                        if (
+                            cell.data_type != "f"
+                            or not any(
+                                _color_within_tolerance(
+                                    _cell_fill_rgb(cell),
+                                    expected,
+                                    tolerance,
+                                )
+                                for expected in colors
+                            )
+                        ):
+                            continue
+                        record_processed(check.rule_code)
+                        errors.append(
+                            ValidationEvent(
+                                rule_code=check.rule_code,
+                                reason="UNEXPECTED_FORMULA",
+                                severity=severity,
+                                sheet_name=sheet.title,
+                                cell_reference=cell.coordinate,
+                                row_number=cell.row,
+                                column_number=cell.column,
+                                actual_value=cell.value,
+                                expected_value="user-entered value",
+                                description=(
+                                    "Formula found in configured input cell"
+                                ),
+                            )
+                        )
+                rule_outcomes[check.rule_code] = "failed" if any(
+                    event.rule_code == check.rule_code for event in errors
+                ) else "passed"
                 continue
             if check.rule_code == "required_filled_cells":
                 options = check.options or {}
@@ -2492,7 +2544,10 @@ def _cell_fill_rgb(cell):
 
 
 def _color_within_tolerance(actual, expected, tolerance):
-    return all(abs(left - right) <= tolerance for left, right in zip(actual, expected))
+    return actual is not None and all(
+        abs(left - right) <= tolerance
+        for left, right in zip(actual, expected)
+    )
 
 
 def _match_sheets(sheet_names, selector):

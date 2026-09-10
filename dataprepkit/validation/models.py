@@ -531,6 +531,7 @@ class WorkbookCheck(_PublicModel):
             "missing_reference_sheet": set(),
             "forbidden_values": {"forbidden_patterns"},
             "required_filled_cells": {"fill_colors", "tolerance_percent"},
+            "unexpected_formula": {"fill_colors", "tolerance_percent"},
         }
         if self.rule_code in built_in_options:
             unknown_options = set(options) - built_in_options[self.rule_code]
@@ -573,10 +574,15 @@ class WorkbookCheck(_PublicModel):
                     "formula_difference whitespace_policy must be "
                     "exact or normalised"
                 )
-        if self.rule_code == "required_filled_cells" and self.enabled:
+        if (
+            self.rule_code in {"required_filled_cells", "unexpected_formula"}
+            and self.enabled
+        ):
             colors = options.get("fill_colors")
             if not isinstance(colors, list) or not colors:
-                raise ValueError("required_filled_cells requires fill_colors as a non-empty list")
+                raise ValueError(
+                    f"{self.rule_code} requires fill_colors as a non-empty list"
+                )
             for color in colors:
                 if not isinstance(color, str) or not re.fullmatch(
                     r"#?(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})", color

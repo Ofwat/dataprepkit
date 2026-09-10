@@ -104,6 +104,11 @@ _BUILT_IN_RULES = (
         "description": "Require cells with configured fill colours to be populated.",
     },
     {
+        "rule_code": "unexpected_formula",
+        "attachment": "workbook_checks",
+        "description": "Reject formulas in configured filled input cells.",
+    },
+    {
         "rule_code": "values_in_reference",
         "attachment": "cross_table_checks",
         "description": "Require source values to exist in another loaded table.",

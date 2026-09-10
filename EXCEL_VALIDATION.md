@@ -165,34 +165,160 @@ for rule in list_available_rules():
 
 ### Complete check catalogue
 
+The checks are grouped by what they inspect. In normal use, configure the
+workbook checks first. Configure a table when you need headers, boundaries,
+or checks on values within a tab.
+
+#### Workbook and sheet checks
+
+These checks inspect workbook structure and individual cells without loading a
+table into pandas.
+
 | Check | Configure it with | What it reports |
 | --- | --- | --- |
 | `required_sheet` | `sheet_policy.required_selectors` | A required sheet selector matched no sheet. |
 | `extra_sheet` | `sheet_policy.extra_sheet_action` | A candidate sheet was not selected or ignored. |
 | `expected_cell` | `expected_cells` | A resolved cell differs from its expected value. |
-| `table_resolution` | `tables` and `data_boundary` | A required table or data boundary cannot be resolved. |
-| `column_header` | `tables.header_policy` | Required, ordered, blank, duplicate, or extra headers are invalid. |
-| `non_empty_data` | `tables.data_presence: require_one_usable_row` | A required table has no usable data row. |
-| `empty_row_pattern` | `tables.empty_row_rules` | A row configured as blank contains a value. |
-| `missing_value` | `tables.column_validations[].null_policy: error` | A configured value is null or blank. |
-| `duplicate_value` | `tables.column_validations[].unique` | A normalized column value occurs more than once. |
-| `allowed_values` | `tables.column_validations[].allowed_values` | A value is not in the configured allow-list. |
-| `forbidden_values` | `tables.column_validations[].forbidden_values` or `workbook_checks` | A value is in the configured deny-list or matches a forbidden pattern. |
-| `pandas_load` | `tables` | A resolved table could not be loaded into pandas. |
-| `missing_column` | `tables.column_validations` | A configured column is absent from the loaded table. |
-| `empty_table` | `tables` | A resolved table loaded with no data rows. |
-| `data_boundary` | `tables.data_boundary` | A configured data boundary could not be resolved. |
-| `max_length` | `tables[].column_validations[].max_length` | A loaded table value exceeds its configured length. |
-| `value_type` | `tables[].column_validations[].value_type` | A value is not text or numeric as configured, optionally under a condition. |
-| `conflicting_duplicate` | `tables[].table_validations` | Repeated identity columns have conflicting value columns. |
-| `required_filled_cells` | `workbook_checks` | Cells with configured solid fill colours must be populated. |
-| `values_in_reference` | `cross_table_checks` | A source value is absent from another loaded table. |
-| `missing_reference_sheet` | `workbook_checks` | A sheet in the reference workbook is absent from the candidate. |
+| `required_filled_cells` | `workbook_checks` | A cell with a configured fill colour is blank. |
+| `unexpected_formula` | `workbook_checks` | A formula appears in a filled input cell. |
+| `formula_error` | `workbook_checks` | A cached cell contains a configured Excel error token. |
+
+Example: require a sheet and reject Excel errors:
+
+```yaml
+sheet_policy:
+  required_selectors:
+    - mode: exact
+      value: Data
+
+workbook_checks:
+  - rule_code: formula_error
+    enabled: true
+    scope: all_sheets
+    options:
+      error_tokens: ["#REF!", "#VALUE!"]
+```
+
+#### Reference comparison checks
+
+These checks require `reference_path` when calling `validate_excel`.
+
+| Check | Configure it with | What it reports |
+| --- | --- | --- |
+| `missing_reference_sheet` | `workbook_checks` | A reference sheet is absent from the candidate. |
 | `sheet_structure` | `workbook_checks` | Candidate and reference content-based used areas differ. |
-| `formula_difference` | `workbook_checks` | Candidate and reference formula text differs at a cell. |
-| `formula_error` | `workbook_checks` | A cached cell contains one of the configured Excel error tokens. |
+| `formula_difference` | `workbook_checks` | Formula state or formula text differs at a corresponding cell. |
+
+Example:
+
+```yaml
+workbook_checks:
+  - rule_code: sheet_structure
+    enabled: true
+    scope: overlapping_sheets
+  - rule_code: formula_difference
+    enabled: true
+    scope: overlapping_sheets
+    options:
+      whitespace_policy: normalised
+```
+
+#### Table resolution and structure checks
+
+These checks establish whether a sheet can be treated as a table. They run
+before value checks and produce `NOT_RUN` for dependent checks when the table
+cannot be resolved.
+
+| Check | Configure it with | What it reports |
+| --- | --- | --- |
+| `table_resolution` | `tables` and `data_boundary` | A required sheet, table, or boundary cannot be resolved. |
+| `column_header` | `tables.header_policy` | Required, ordered, blank, duplicate, or extra headers are invalid. |
+| `data_boundary` | `tables.data_boundary` | The configured data boundary cannot be resolved. |
+| `pandas_load` | `tables` | A resolved table cannot be loaded into pandas. |
+| `missing_column` | `tables.column_validations` | A configured column is absent from the loaded table. |
+| `empty_table` | `tables` | A resolved table has no data rows. |
+| `non_empty_data` | `tables.data_presence` | A required table has no usable data row. |
+| `empty_row_pattern` | `tables.empty_row_rules` | A row configured as blank contains a value. |
+
+Example:
+
+```yaml
+tables:
+  - name: outputs
+    required: true
+    sheet_selector: {mode: exact, value: Data}
+    header_row: 1
+    header_policy:
+      required_columns: [Measure_Cd, Measure_Value]
+    data_boundary:
+      mode: last_non_empty_row
+      infer_columns: true
+    data_presence: require_one_usable_row
+```
+
+#### Column value checks
+
+These checks inspect values in resolved table columns. They do not define the
+table; missing columns are reported by the structural checks above.
+
+| Check | Configure it with | What it reports |
+| --- | --- | --- |
+| `missing_value` | `column_validations[].null_policy: error` | A configured value is null or blank. |
+| `duplicate_value` | `column_validations[].unique` | A normalized column value occurs more than once. |
+| `allowed_values` | `column_validations[].allowed_values` | A value is not in the allow-list. |
+| `forbidden_values` | `column_validations[].forbidden_values` or `workbook_checks` | A value is denied or matches a forbidden pattern. |
+| `max_length` | `column_validations[].max_length` | Text exceeds the configured length. |
+| `value_type` | `column_validations[].value_type` | A value is not text or numeric as configured. |
+
+Example:
+
+```yaml
+column_validations:
+  - column: Measure_Cd
+    unique: true
+  - column: Measure_Value
+    max_length: 4000
+    forbidden_patterns: ["¬¬"]
+    value_type: numeric
+```
+
+#### Table and cross-table checks
+
+| Check | Configure it with | What it reports |
+| --- | --- | --- |
+| `conflicting_duplicate` | `tables[].table_validations` | The same identity combination has conflicting values. |
+| `values_in_reference` | `cross_table_checks` | A source value is absent from another loaded table. |
+
+Example:
+
+```yaml
+table_validations:
+  - rule_code: conflicting_duplicate
+    key_columns: {mode: pattern, pattern: ".*_Cd$"}
+    value_columns: [Measure_Value]
+```
+
+#### Workbook feature policies
+
+Feature policies report the concrete feature name when a workbook contains it.
+Supported features are `macros`, `external_links`, `charts`, `pivot_tables`,
+`named_ranges`, and `merged_cells`. The corresponding
+`<feature>_detection_unavailable` event is reported when inspection is not
+possible.
+
+| Event | Configure it with | What it reports |
+| --- | --- | --- |
 | `<feature_name>` | `runtime.feature_policy.<feature_name>` | The named workbook feature was detected. |
 | `<feature_name>_detection_unavailable` | `runtime.feature_policy.unavailable_action` | The named feature could not be inspected. |
+
+Example:
+
+```yaml
+runtime:
+  feature_policy:
+    merged_cells: {action: warning, scope: {type: all_sheets}}
+    external_links: warning
+    macros: error
 
 Feature events use the concrete feature name: `macros`, `external_links`,
 `charts`, `pivot_tables`, `named_ranges`, or `merged_cells`. Formula evaluation
@@ -441,6 +567,50 @@ For `last_non_empty_row`:
 A formula is loaded into pandas as its cached cell result, not as formula text.
 Formula calculation is outside this contract.
 
+### Formula checks
+
+Formula checks inspect the workbook directly. They do not calculate formulas.
+
+| Check | Requires reference workbook | Behaviour |
+| --- | --- | --- |
+| `formula_difference` | Yes | Compares formula text at corresponding cells. |
+| `unexpected_formula` | No | Finds formulas in cells whose fill colour identifies user input. |
+| `formula_error` | No | Finds cached Excel error values matching `error_tokens`. |
+
+`formula_difference` reports a finding whenever the formula state or formula
+text differs between candidate and reference. The `reason` identifies the
+transition:
+
+- `FORMULA_ADDED`: the reference contains a value and the candidate contains a formula;
+- `FORMULA_REMOVED`: the reference contains a formula and the candidate contains a value;
+- `FORMULA_CHANGED`: both contain formulas, but their formula text differs.
+
+For example, a candidate changing `=SUM(A1)` to `=SUM(A2)` produces
+`FORMULA_CHANGED`. A formula replaced with a typed value produces
+`FORMULA_REMOVED`; a typed value replaced with a formula produces
+`FORMULA_ADDED`.
+
+Use `unexpected_formula` when a standalone workbook must reject formulas in
+input cells. The fill colour is configured as an RGB or ARGB hexadecimal
+value; ARGB values use their final six digits as the RGB colour. A tolerance
+of `0` requires an exact match. A non-zero `tolerance_percent` allows each
+RGB channel to differ by the corresponding percentage of the 0–255 range.
+
+```yaml
+workbook_checks:
+  - rule_code: unexpected_formula
+    enabled: true
+    scope: all_sheets
+    options:
+      fill_colors:
+        - "#FFFF00"       # yellow input cells
+      tolerance_percent: 0
+```
+
+Each finding includes the worksheet and Excel cell reference, for example
+`Inputs!A1`. A formula in an unfilled cell, or in a cell whose fill does not
+match the configured colours, is not reported by `unexpected_formula`.
+
 Usable values are determined by the existing comparison policy. With
 `trim_whitespace: true`, whitespace-only strings are treated as empty when
 `empty_string_is_null: true`; values matching `null_tokens` are also treated
@@ -586,6 +756,21 @@ workbook_checks:
 
 `rule_severity` may set a default severity per rule, while individual checks
 and table validations can override it.
+
+`formula_difference` reports formula changes between candidate and reference
+workbooks with these reasons: `FORMULA_ADDED`, `FORMULA_REMOVED`, and
+`FORMULA_CHANGED`. To reject formulas in coloured input cells without needing
+a reference workbook, use `unexpected_formula`:
+
+```yaml
+workbook_checks:
+  - rule_code: unexpected_formula
+    enabled: true
+    scope: all_sheets
+    options:
+      fill_colors: ["#FFFF00"]
+      tolerance_percent: 0
+```
 
 ## Custom rules
 
