@@ -241,6 +241,11 @@ def _validate_staging_columns(
             )
             continue
         if fallback_value is not None:
+            print(
+                f"Warning: lookup staging column '{column_name}' is missing in "
+                f"'{location}'; using column_missing_in_staging fallback "
+                f"'{fallback_value}'."
+            )
             param_name = f"lookup_fallback_{len(active_lookups)}"
             active_lookups.append(
                 {
@@ -1231,6 +1236,11 @@ def load_fact_from_maps(
                 column_key = column_name.casefold()
                 if column_key not in data_column_backfills:
                     continue
+                print(
+                    f"Warning: backfilling existing fact rows for data column "
+                    f"'{column_name}' with backfill_existing_rows value "
+                    f"'{data_column_backfills[column_key]}'."
+                )
                 conn.execute(
                     text(
                         f"""
@@ -1259,6 +1269,11 @@ def load_fact_from_maps(
                 ).get("backfill_existing_rows")
                 if backfill_value is None:
                     continue
+                print(
+                    f"Warning: backfilling existing fact rows for lookup target "
+                    f"column '{target_column}' (lookup '{active_lookup['staging_column']}') "
+                    f"with backfill_existing_rows value '{backfill_value}'."
+                )
                 source = active_lookup["config"]["source"]
                 resolved_value = _resolve_lookup_value(
                     conn,
