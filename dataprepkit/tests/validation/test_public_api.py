@@ -96,6 +96,46 @@ def make_config(
     )
 
 
+def make_database_type_config():
+    return make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="process_data",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        columns=["Measure_Cd", "Measure_Value"],
+                    ),
+                )
+            ],
+            "database_lookups": [
+                DatabaseLookup(
+                    name="measure_dimension",
+                    table="dim_measure",
+                    key_columns={"Measure_Cd": "Measure_Cd"},
+                    value_columns=["Expected_Value_Type"],
+                )
+            ],
+            "database_checks": [
+                DatabaseCheck(
+                    name="measure_value_type",
+                    rule_code="measure_value_type",
+                    source_table="process_data",
+                    lookup="measure_dimension",
+                    column_validations=[
+                        {
+                            "column": "Measure_Value",
+                            "value_type_from": "Expected_Value_Type",
+                        }
+                    ],
+                )
+            ],
+        }
+    )
+
+
 def write_workbook(path: Path, sheet_name: str):
     workbook = openpyxl.Workbook()
     workbook.active.title = sheet_name
@@ -548,6 +588,43 @@ def test_database_check_does_not_accept_conflicting_lookup_rows(tmp_path):
     assert [event.reason for event in result.not_run] == [
         "DATABASE_DUPLICATE_LOOKUP"
     ]
+
+
+@pytest.mark.parametrize(
+    ("setup_sql", "expected_reason"),
+    [
+        (None, "LOOKUP_TABLE_MISSING"),
+        (
+            "CREATE TABLE dim_measure (Measure_Cd TEXT)",
+            "LOOKUP_COLUMN_MISSING",
+        ),
+    ],
+)
+def test_database_check_reports_lookup_structure_errors(
+    tmp_path,
+    setup_sql,
+    expected_reason,
+):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Measure_Cd", "Measure_Value"])
+    workbook.active.append(["INN001", 125])
+    workbook.save(candidate_path)
+
+    engine = create_engine("sqlite:///:memory:")
+    if setup_sql is not None:
+        with engine.begin() as connection:
+            connection.execute(text(setup_sql))
+
+    result = validate_excel(
+        candidate_path,
+        make_database_type_config(),
+        engine=engine,
+    )
+
+    assert result.complete is False
+    assert [event.reason for event in result.not_run] == [expected_reason]
 
 
 def test_public_rule_catalogue_lists_all_builtin_checks():
