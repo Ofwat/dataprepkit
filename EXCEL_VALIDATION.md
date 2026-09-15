@@ -298,6 +298,322 @@ table_validations:
     value_columns: [Measure_Value]
 ```
 
+#### Proposed database-backed checks
+
+Database-backed checks are an optional second-stage validation. They use the
+tables already resolved and loaded from Excel, then enrich or validate those
+values against a relational table.
+
+The SQLAlchemy engine is runtime input, not configuration data:
+
+```python
+result = validate_excel(
+    candidate_path=candidate_path,
+    reference_path=None,
+    config=config,
+    engine=engine,  # optional
+)
+```
+
+The intended execution order is:
+
+```text
+Excel structural checks
+→ load resolved Excel tables
+→ run Excel/table value checks
+→ load configured lookup rows through engine
+→ join lookup data in memory
+→ run database-backed checks
+```
+
+The proposed configuration keeps database checks separate from ordinary
+column checks, while using the same naming conventions as the rest of the
+API: named objects, `rule_code`, `enabled`, `severity`, and `depends_on`.
+Lookup definitions are reusable so several checks share one query and cache:
+
+```yaml
+database_lookups:
+  - name: measure_dimension
+    schema: Dimensions
+    table: dim_measure
+    key_columns:
+      Measure_Cd: Measure_Cd
+    value_columns:
+      - Expected_Value_Type
+    batch_size: 500
+
+database_checks:
+  - rule_code: measure_value_type
+    enabled: true
+    severity: error
+    depends_on:
+      - pandas_load
+    source_table: process_data
+    lookup: measure_dimension
+    column_validations:
+      - column: Measure_Value
+        value_type_from: Expected_Value_Type
+```
+
+`source_table` refers to the configured `tables[].name`; `lookup` refers to a
+named `database_lookups[].name`. A table selected from multiple sheets is
+validated independently per sheet, preserving normal table provenance. There
+is no implicit combination of sheets.
+
+For example, a lookup row could declare `Expected_Value_Type: text` for
+`Measure_Cd = INN001`. A numeric value in `Measure_Value` would then fail;
+when the lookup says `numeric`, a value such as `TBC` would fail.
+
+The database-check contract is:
+
+| Situation | Result |
+| --- | --- |
+| No engine is supplied | The database check is `NOT_RUN` with reason `DATABASE_ENGINE_REQUIRED`. |
+| Excel table did not resolve or load | The database check is `NOT_RUN` with reason `PANDAS_LOAD_FAILED`. |
+| Lookup table or schema is absent | The database check is `NOT_RUN` with reason `LOOKUP_TABLE_MISSING`; `complete=False`. |
+| Database user lacks `SELECT` permission | The database check is `NOT_RUN` with reason `DATABASE_PERMISSION_DENIED`; `complete=False`. |
+| Lookup query times out | The database check is `NOT_RUN` with reason `DATABASE_TIMEOUT`; `complete=False`. |
+| Lookup query fails for another reason | The database check is `NOT_RUN` with reason `DATABASE_LOOKUP_FAILED`; `complete=False`. |
+| A configured lookup column is absent from the database table | The database check is `NOT_RUN` with reason `LOOKUP_COLUMN_MISSING`; `complete=False`. |
+| A source key has no lookup row | A validation error identifies the Excel row and key. |
+| Lookup keys are duplicated | A validation error reports the ambiguous lookup; no row is selected. |
+| Source key is null-like | The database check skips that row; Excel null checks remain responsible for reporting it. |
+| Lookup returns a null canonical or expected value | A validation error reports the incomplete lookup data. |
+| Lookup values cannot be converted to the configured type | The database check is `NOT_RUN` with reason `LOOKUP_TYPE_CONVERSION_FAILED`; `complete=False`. |
+| Lookup succeeds but returns no rows | Source rows requiring a lookup produce `database_missing_lookup`; an empty source table remains valid for this check. |
+
+Additional rules keep the boundary predictable:
+
+- Database checks run only after Excel structural checks and pandas loading
+  succeed. They do not replace header, boundary, or table checks.
+- They operate on the resolved pandas table, not by independently rereading
+  worksheet cells.
+- They use the same `enabled`, `severity`, and `depends_on` concepts as other
+  configured checks. A disabled or blocked prerequisite produces `NOT_RUN`.
+- Distinct non-null source keys are queried in parameterized batches; the
+  lookup `batch_size` is configurable with a safe default and a validated
+  upper bound.
+- Key matching uses the configured comparison policy for case, accents,
+  whitespace, and null tokens. Database collation is not assumed to match
+  automatically.
+- Table and column identifiers are validated and safely quoted for the target
+  SQL dialect. Values are always bound parameters.
+- The supplied engine is used for reads only. Validation generates and
+  executes `SELECT` statements; it never issues `INSERT`, `UPDATE`,
+  `DELETE`, DDL, or stored-procedure calls, and never commits database
+  changes. It does not manage the caller's engine lifecycle.
+- Findings retain the Excel table name, sheet name, row number, cell reference,
+  source key, lookup table, and lookup key where applicable.
+- Lookup results are cached for the duration of one validation run so multiple
+  checks do not repeat the same query.
+- Lookup definitions are read-only and declarative: they contain schema,
+  table, key mapping, selected value columns, and batching only. They cannot
+  contain arbitrary SQL.
+
+The implementation contract is deliberately narrow:
+
+```text
+DatabaseLookup
+  name: str
+  schema: str | null
+  table: str
+  key_columns: mapping[str, str]
+  value_columns: list[str]
+  batch_size: int = 500
+  max_distinct_keys: int = 100000
+  timeout_seconds: int = 30
+  collation_name: str | null
+  isolation_level: snapshot | read_committed = snapshot
+  retry_count: int = 0
+  persist_lookup_keys: bool = true
+
+DatabaseCheck
+  rule_code: str
+  enabled: bool = true
+  severity: error | warning | ignore
+  source_table: str
+  lookup: str
+  column_validations: list[LookupColumnValidation]
+  depends_on: list[str] = []
+
+LookupColumnValidation
+  column: str
+  value_type_from: str
+```
+
+`value_type_from` currently accepts only `text` and `numeric` values from the
+named lookup column. Additional lookup-backed validations will add explicit
+typed fields rather than accepting arbitrary rule dictionaries.
+
+The following decisions apply:
+
+- The first public API accepts a synchronous SQLAlchemy `Engine` through the
+  keyword-only `engine` argument. The caller owns its lifecycle; DataPrepKit
+  does not close or dispose it.
+- A database check is automatically gated on successful resolution and pandas
+  loading of its `source_table`. Its explicit `depends_on` entries may name
+  other database checks; workbook/table loading is an implicit prerequisite.
+- A missing source column in the Excel table is handled by the existing table
+  and pandas structural checks. It prevents the dependent database check from
+  running; it is not treated as a missing database lookup row.
+- A missing engine or database failure produces `complete=False` and a
+  `NOT_RUN` event. It does not silently produce a valid result.
+- `batch_size` defaults to `500` and may not exceed `5000`. More than
+  `100000` distinct source keys produces a configuration/runtime finding
+  rather than an unbounded query.
+- The lookup cache is scoped to one validation run. Its key includes the
+  engine database identity, schema, table, key mapping, selected value
+  columns, comparison policy, and batch settings.
+- Source keys are deduplicated after applying the configured null and text
+  normalization policy. Null-like keys are excluded from lookup queries.
+  Returned keys and source keys are compared again using that same policy.
+- Composite keys use the declared `key_columns` mapping as one tuple. A
+  finding reports every source and lookup key column/value, preserving the
+  declared mapping order.
+- Lookup value columns must not collide with source column names after the
+  configured comparison normalization. Such a collision is a configuration
+  error; implicit overwriting or suffix generation is not allowed.
+- Duplicate lookup rows with identical selected values are collapsed. Rows
+  with conflicting selected values produce an error and are not used.
+- Missing lookup key or value columns are schema/configuration failures. They
+  produce `database_lookup` with reason `LOOKUP_COLUMN_MISSING`; they do not
+  produce misleading row-level duplicate or missing-key findings.
+- A missing lookup table or schema produces `database_lookup` with reason
+  `LOOKUP_TABLE_MISSING`. Permission failures use
+  `DATABASE_PERMISSION_DENIED`; timeouts use `DATABASE_TIMEOUT`.
+- A lookup row with a null canonical key or required expected value produces a
+  row-level `database_lookup` finding with reason `LOOKUP_VALUE_NULL` and is
+  excluded from dependent checks.
+- Lookup type-conversion failures use
+  `LOOKUP_TYPE_CONVERSION_FAILED`; the validator never silently coerces an
+  invalid database value.
+- Text-key lookups use the configured SQL Server collation when one is
+  supplied. If the database collation cannot provide the requested case or
+  accent behavior, the lookup is `NOT_RUN` with reason
+  `DATABASE_COLLATION_INCOMPATIBLE`; it is never silently treated as an exact
+  comparison.
+- A single read-only transaction is used for all batches of one lookup when
+  the SQLAlchemy dialect supports it. DataPrepKit never commits or rolls back
+  a transaction it did not create.
+- Each lookup has a default `timeout_seconds: 30`; timeout and cancellation
+  are reported as `DATABASE_LOOKUP_FAILED` and do not leave a background query
+  running.
+- Caches are local to one `validate_excel` call and are not shared between
+  threads or processes. Concurrent validations therefore cannot observe or
+  mutate each other's lookup state.
+- The initial implementation supports SQLAlchemy `Engine`, SQL Server, and
+  SQLite test coverage. Other dialects require verified identifier quoting,
+  parameter limits, and type behavior before being supported.
+- Database findings include `source_table`, lookup name, lookup key, Excel
+  table name, sheet name, row number, and cell reference where available.
+
+Stable database event codes are:
+
+| Code | Meaning |
+| --- | --- |
+| `database_lookup` | The lookup could not be loaded or used. |
+| `database_missing_lookup` | A source key has no matching lookup row. |
+| `database_duplicate_lookup` | Lookup rows are ambiguous or conflicting. |
+| The configured `rule_code` | A loaded lookup value failed the requested validation. |
+
+Database `NOT_RUN` events are included in the normal `not_run` result
+collection and summary counts. They do not disappear when the database phase
+is unavailable or incomplete.
+
+The public test contract must cover missing engines, lookup failures and
+timeouts, single and composite keys, missing and duplicate lookups, null keys,
+batch limits, cache reuse, column collisions, collation incompatibility, and
+finding provenance.
+
+SQL Server integration tests must additionally verify snapshot-isolation
+behavior, permission mapping, timeout mapping, rollback, SELECT-only
+execution, cache limits, retry count zero, and lookup-key redaction.
+
+##### Final implementation decisions
+
+The first implementation uses these decisions to keep the feature predictable:
+
+- Accept a SQLAlchemy synchronous `Engine` only. Existing `Connection` objects,
+  async engines, and connection factories are out of scope for version one.
+- During the database phase, DataPrepKit obtains and owns one connection per
+  validation run. It may use a transaction for a consistent read and rolls
+  back that transaction before releasing the connection; it never disposes
+  the caller's engine. The no-write guarantee comes from the generated
+  `SELECT`-only SQL, not from a database-specific read-only transaction flag.
+- A driver timeout of 30 seconds applies to each lookup batch. SQL Server
+  `pyodbc` is the supported production path; unsupported drivers produce
+  `DATABASE_LOOKUP_FAILED` rather than pretending the timeout was enforced.
+- Text key lookups use the lookup's optional `collation_name`, which is the
+  actual SQL Server collation name. The identifier is validated against a safe
+  identifier pattern and applied to both sides of the key comparison. The
+  general `comparison.collation_name` remains a policy label. A missing or
+  incompatible database collation for a text key produces
+  `DATABASE_COLLATION_INCOMPATIBLE`.
+- Connection and permission errors use `database_lookup` with reason
+  `DATABASE_LOOKUP_FAILED`. They set `complete=False` and do not expose raw
+  credentials or provider-specific connection details in the result.
+- Numeric validation accepts integers, finite decimals, finite floats, and
+  trimmed numeric strings. Booleans, empty strings, dates, `NaN`, and infinity
+  are not numeric. Text validation accepts strings only; numbers are not
+  coerced to text.
+- Each database check has a required unique `name` and a stable `rule_code`.
+  Dependencies target check names, while result events use `rule_code`.
+  Dependency cycles and unknown names are configuration errors.
+- Database findings carry structured `metadata` containing lookup name,
+  source table, lookup table, source key, lookup key, and Excel provenance.
+  The metadata is included in result serialization and the validation result
+  DataFrame as JSON-compatible data.
+- `persist_lookup_keys` defaults to `true` for useful diagnostics. When false,
+  persisted result metadata redacts source and lookup key values while keeping
+  column names, sheet, row, and cell reference.
+- `retry_count` defaults to zero. Validation does not retry database reads
+  automatically; callers can rerun the complete validation explicitly.
+- SQL Server uses `SNAPSHOT` isolation by default so all lookup batches see one
+  consistent dimension view. If snapshot isolation is unavailable, the check
+  is `NOT_RUN` with reason `DATABASE_ISOLATION_UNAVAILABLE`.
+  `read_committed` is an explicit opt-in when snapshot isolation cannot be
+  enabled.
+- Driver exceptions are mapped to stable reasons without persisting provider
+  messages or credentials: missing objects, permission denied, timeout,
+  conversion failure, isolation unavailable, and generic lookup failure.
+- Lookup results are bounded by both `max_distinct_keys` and a cache-row limit
+  of `250000`. Exceeding either limit produces `DATABASE_LOOKUP_LIMIT` and
+  `complete=False`.
+- Identifier names are limited to configured schema/table/column identifiers
+  and validated before SQL generation. Lookup values are always bound
+  parameters. Arbitrary SQL is not supported.
+- Schema, table, and column identifiers must match
+  `[A-Za-z_][A-Za-z0-9_]*`. Names containing spaces, dots, brackets, quotes,
+  SQL expressions, or other punctuation are rejected during configuration
+  loading rather than dynamically interpreted.
+- Production deployments should use a database principal with `SELECT`-only
+  permissions. This is defence in depth; validation must remain non-writing
+  even when given a more privileged engine.
+- `database_lookups`, `database_checks`, and their options must be included in
+  the versioned JSON Schema and at least one starter profile before release.
+
+Non-write enforcement is part of the implementation acceptance criteria:
+
+- Database configuration has no raw SQL, SQL fragments, expressions, or
+  stored-procedure fields.
+- Schema, table, and column names are validated before being passed to the
+  dialect-aware SQL builder.
+- Lookup values are supplied only as bound parameters; they are never joined
+  into SQL text.
+- The database executor exposes only a read operation to database checks.
+  There is no validation code path for DML, DDL, or procedure invocation.
+- Lookup failure has no write fallback and is reported as `NOT_RUN`.
+- Tests use a recording SQLAlchemy engine to assert that every generated
+  statement is a `SELECT`, no commit is issued, and no DML/DDL text is sent.
+- Tests also run against a `SELECT`-only database principal where available.
+
+These guarantees apply to DataPrepKit's generated database operations. A
+caller-controlled SQLAlchemy event hook or intentionally malicious custom
+engine is outside the validator's control and should not be supplied.
+
+This feature is a proposal and is not part of the current public configuration
+contract until its rule models and result semantics are implemented.
+
 #### Workbook feature policies
 
 Feature policies report the concrete feature name when a workbook contains it.
