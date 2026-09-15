@@ -361,6 +361,106 @@ def test_database_check_uses_lookup_to_validate_loaded_excel_values(tmp_path):
     )
 
 
+def test_database_checks_reuse_lookup_results(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(
+        ["Measure_Cd", "Measure_Value", "Other_Value"]
+    )
+    workbook.active.append(["INN001", "TBC", "also text"])
+    workbook.save(candidate_path)
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE dim_measure "
+                "(Measure_Cd TEXT, Expected_Value_Type TEXT)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO dim_measure VALUES ('INN001', 'numeric')"
+            )
+        )
+    statements = []
+    event.listen(
+        engine,
+        "before_cursor_execute",
+        lambda _connection, _cursor, statement, *_args: statements.append(
+            statement
+        ),
+    )
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="process_data",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        columns=[
+                            "Measure_Cd",
+                            "Measure_Value",
+                            "Other_Value",
+                        ],
+                    ),
+                )
+            ],
+            "database_lookups": [
+                DatabaseLookup(
+                    name="measure_dimension",
+                    table="dim_measure",
+                    key_columns={"Measure_Cd": "Measure_Cd"},
+                    value_columns=["Expected_Value_Type"],
+                )
+            ],
+            "database_checks": [
+                DatabaseCheck(
+                    name="measure_value_type",
+                    rule_code="measure_value_type",
+                    source_table="process_data",
+                    lookup="measure_dimension",
+                    column_validations=[
+                        {
+                            "column": "Measure_Value",
+                            "value_type_from": "Expected_Value_Type",
+                        }
+                    ],
+                ),
+                DatabaseCheck(
+                    name="other_value_type",
+                    rule_code="other_value_type",
+                    source_table="process_data",
+                    lookup="measure_dimension",
+                    column_validations=[
+                        {
+                            "column": "Other_Value",
+                            "value_type_from": "Expected_Value_Type",
+                        }
+                    ],
+                ),
+            ],
+        }
+    )
+
+    result = validate_excel(candidate_path, config, engine=engine)
+
+    assert {event.rule_code for event in result.errors} == {
+        "measure_value_type",
+        "other_value_type",
+    }
+    lookup_selects = [
+        statement
+        for statement in statements
+        if "FROM \"dim_measure\"" in statement
+    ]
+    assert len(lookup_selects) == 1
+
+
 def test_database_duplicate_check_uses_mapped_dimension_columns(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()
