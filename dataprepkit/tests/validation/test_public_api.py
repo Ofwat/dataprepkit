@@ -461,6 +461,70 @@ def test_database_checks_reuse_lookup_results(tmp_path):
     assert len(lookup_selects) == 1
 
 
+def test_database_check_can_report_a_warning_severity(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Measure_Cd", "Measure_Value"])
+    workbook.active.append(["INN001", "TBC"])
+    workbook.save(candidate_path)
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE dim_measure "
+                "(Measure_Cd TEXT, Expected_Value_Type TEXT)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO dim_measure VALUES ('INN001', 'numeric')"
+            )
+        )
+
+    base_config = make_database_type_config()
+    config = base_config.model_copy(
+        update={
+            "database_checks": [
+                base_config.database_checks[0].model_copy(
+                    update={"severity": "warning"}
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path, config, engine=engine)
+
+    assert not result.errors
+    assert [event.rule_code for event in result.warnings] == [
+        "measure_value_type"
+    ]
+    assert result.is_valid is True
+
+
+def test_database_check_respects_enabled_rules(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Measure_Cd", "Measure_Value"])
+    workbook.active.append(["INN001", "TBC"])
+    workbook.save(candidate_path)
+
+    base_config = make_database_type_config()
+    config = base_config.model_copy(update={"enabled_rules": []})
+
+    result = validate_excel(candidate_path, config)
+
+    assert result.complete is True
+    assert (
+        "measure_value_type",
+        "RULE_DISABLED",
+    ) in [
+        (event.rule_code, event.reason) for event in result.not_run
+    ]
+
+
 def test_database_duplicate_check_uses_mapped_dimension_columns(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()
