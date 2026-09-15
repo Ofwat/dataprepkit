@@ -525,6 +525,54 @@ def test_database_check_respects_enabled_rules(tmp_path):
     ]
 
 
+def test_database_check_dependency_is_not_run_after_failed_prerequisite(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Measure_Cd", "Measure_Value"])
+    workbook.active.append(["INN001", "TBC"])
+    workbook.save(candidate_path)
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE dim_measure "
+                "(Measure_Cd TEXT, Expected_Value_Type TEXT)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO dim_measure VALUES ('INN001', 'numeric')"
+            )
+        )
+
+    base_config = make_database_type_config()
+    first_check = base_config.database_checks[0].model_copy(
+        update={"name": "base_type_check"}
+    )
+    dependent_check = base_config.database_checks[0].model_copy(
+        update={
+            "name": "dependent_check",
+            "depends_on": ["base_type_check"],
+        }
+    )
+    config = base_config.model_copy(
+        update={"database_checks": [first_check, dependent_check]}
+    )
+
+    result = validate_excel(candidate_path, config, engine=engine)
+
+    assert [event.rule_code for event in result.errors] == [
+        "measure_value_type"
+    ]
+    assert (
+        result.not_run[0].rule_code,
+        result.not_run[0].reason,
+    ) == ("measure_value_type", "DEPENDENCY_NOT_RUN")
+    assert "dependent_check" in result.not_run[0].description
+
+
 def test_database_duplicate_check_uses_mapped_dimension_columns(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()
