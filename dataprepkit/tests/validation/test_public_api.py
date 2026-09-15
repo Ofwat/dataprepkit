@@ -215,6 +215,24 @@ def test_database_check_requires_engine_and_marks_result_incomplete(tmp_path):
     ]
 
 
+def test_validate_excel_requires_engine_as_keyword_only_argument(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.save(candidate_path)
+
+    with pytest.raises(TypeError, match="positional"):
+        validate_excel(
+            candidate_path,
+            make_config(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            object(),
+        )
+
+
 def test_database_check_uses_lookup_to_validate_loaded_excel_values(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()

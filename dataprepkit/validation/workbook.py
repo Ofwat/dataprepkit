@@ -2601,13 +2601,41 @@ def _run_cross_table_checks(config, dataframe_cache):
 
 
 def _run_database_checks(config, dataframe_cache, engine):
+    try:
+        with engine.connect() as connection:
+            return _run_database_checks_on_connection(
+                config,
+                dataframe_cache,
+                connection,
+            )
+    except Exception as error:
+        reason, description = _database_error_details(error, "database checks")
+        severity = config.rule_severity.get("database_lookup")
+        return (
+            [],
+            [],
+            [
+                ValidationEvent(
+                    rule_code="database_lookup",
+                    status="NOT_RUN",
+                    reason=reason,
+                    severity=severity,
+                    description=description,
+                )
+            ],
+            {},
+            {"database_lookup": severity},
+            False,
+        )
+
+
+def _run_database_checks_on_connection(config, dataframe_cache, connection):
     errors = []
     not_run = []
     processed_counts = {}
     processed_severities = {}
     lookup_cache = {}
     complete = True
-    checks = {check.name: check for check in config.database_checks}
     outcomes = {}
 
     for check in config.database_checks:
@@ -2684,7 +2712,7 @@ def _run_database_checks(config, dataframe_cache, engine):
                 rows, error = _database_lookup_rows(
                     dimension_lookup,
                     source_entries,
-                    engine,
+                    connection,
                     lookup_cache,
                 )
                 if error is not None:
@@ -2699,7 +2727,7 @@ def _run_database_checks(config, dataframe_cache, engine):
             lookup_rows, lookup_error = _database_lookup_rows(
                 lookup,
                 source_entries,
-                engine,
+                connection,
                 lookup_cache,
             )
         if lookup_error is not None:
@@ -2753,7 +2781,7 @@ def _run_database_checks(config, dataframe_cache, engine):
     )
 
 
-def _database_lookup_rows(lookup, source_entries, engine, cache):
+def _database_lookup_rows(lookup, source_entries, connection, cache):
     source_keys = set()
     source_columns = list(lookup.key_columns)
     for entry in source_entries.values():
@@ -2781,7 +2809,7 @@ def _database_lookup_rows(lookup, source_entries, engine, cache):
     try:
         from sqlalchemy import inspect, text
 
-        inspector = inspect(engine)
+        inspector = inspect(connection)
         columns = {
             column["name"]
             for column in inspector.get_columns(
@@ -2798,12 +2826,12 @@ def _database_lookup_rows(lookup, source_entries, engine, cache):
             )
         select_columns = [*lookup.key_columns.values(), *lookup.value_columns]
         rendered_columns = ", ".join(
-            _quote_sql_identifier(engine, column) for column in select_columns
+            _quote_sql_identifier(connection, column) for column in select_columns
         )
-        rendered_table = _quote_sql_identifier(engine, lookup.table)
+        rendered_table = _quote_sql_identifier(connection, lookup.table)
         if lookup.schema_name:
             rendered_table = (
-                f"{_quote_sql_identifier(engine, lookup.schema_name)}."
+                f"{_quote_sql_identifier(connection, lookup.schema_name)}."
                 f"{rendered_table}"
             )
         predicates = []
@@ -2816,7 +2844,7 @@ def _database_lookup_rows(lookup, source_entries, engine, cache):
             ):
                 parameter = f"key_{index}_{column_index}"
                 parts.append(
-                    f"{_quote_sql_identifier(engine, column)} = :{parameter}"
+                    f"{_quote_sql_identifier(connection, column)} = :{parameter}"
                 )
                 parameters[parameter] = value
             predicates.append("(" + " AND ".join(parts) + ")")
@@ -2824,8 +2852,7 @@ def _database_lookup_rows(lookup, source_entries, engine, cache):
             f"SELECT {rendered_columns} FROM {rendered_table} "
             f"WHERE {' OR '.join(predicates)}"
         )
-        with engine.connect() as connection:
-            rows = connection.execute(statement, parameters).mappings().all()
+        rows = connection.execute(statement, parameters).mappings().all()
     except Exception as error:
         message = str(error)
         lowered = message.casefold()
@@ -2863,6 +2890,18 @@ def _quote_sql_identifier(engine, value):
     if engine.dialect.name == "mssql":
         return f"[{value}]"
     return '"' + value.replace('"', '""') + '"'
+
+
+def _database_error_details(error, name):
+    message = str(error)
+    lowered = message.casefold()
+    if "permission" in lowered or "not authorized" in lowered:
+        reason = "DATABASE_PERMISSION_DENIED"
+    elif "timeout" in lowered or "timed out" in lowered:
+        reason = "DATABASE_TIMEOUT"
+    else:
+        reason = "DATABASE_LOOKUP_FAILED"
+    return reason, f"{name.capitalize()} could not be executed"
 
 
 def _is_null_value(value):
