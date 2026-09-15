@@ -359,6 +359,65 @@
       "title": "CrossTableCheck",
       "type": "object"
     },
+    "DatabaseLookup": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "schema": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null},
+        "table": {"type": "string"},
+        "key_columns": {"additionalProperties": {"type": "string"}, "minProperties": 1, "type": "object"},
+        "value_columns": {"items": {"type": "string"}, "minItems": 1, "type": "array"},
+        "batch_size": {"default": 500, "maximum": 5000, "minimum": 1, "type": "integer"},
+        "max_distinct_keys": {"default": 100000, "maximum": 100000, "minimum": 1, "type": "integer"},
+        "timeout_seconds": {"default": 30, "minimum": 1, "type": "integer"},
+        "collation_name": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null},
+        "isolation_level": {"default": "snapshot", "enum": ["snapshot", "read_committed"], "type": "string"},
+        "retry_count": {"default": 0, "minimum": 0, "type": "integer"},
+        "persist_lookup_keys": {"default": true, "type": "boolean"}
+      },
+      "required": ["name", "table", "key_columns", "value_columns"],
+      "title": "DatabaseLookup",
+      "type": "object"
+    },
+    "LookupColumnValidation": {
+      "additionalProperties": false,
+      "properties": {
+        "column": {"type": "string"},
+        "value_type_from": {"type": "string"}
+      },
+      "required": ["column", "value_type_from"],
+      "title": "LookupColumnValidation",
+      "type": "object"
+    },
+    "DatabaseDimension": {
+      "additionalProperties": false,
+      "properties": {
+        "source_column": {"type": "string"},
+        "lookup": {"type": "string"},
+        "canonical_column": {"type": "string"}
+      },
+      "required": ["source_column", "lookup", "canonical_column"],
+      "title": "DatabaseDimension",
+      "type": "object"
+    },
+    "DatabaseCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "rule_code": {"type": "string"},
+        "source_table": {"type": "string"},
+        "lookup": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null},
+        "column_validations": {"items": {"$ref": "#/$defs/LookupColumnValidation"}, "type": "array"},
+        "dimensions": {"items": {"$ref": "#/$defs/DatabaseDimension"}, "type": "array"},
+        "value_columns": {"items": {"type": "string"}, "type": "array"},
+        "enabled": {"default": true, "type": "boolean"},
+        "severity": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null},
+        "depends_on": {"items": {"type": "string"}, "type": "array"}
+      },
+      "required": ["name", "rule_code", "source_table"],
+      "title": "DatabaseCheck",
+      "type": "object"
+    },
     "EmptyRowRule": {
       "additionalProperties": false,
       "properties": {
@@ -802,6 +861,16 @@
     "cross_table_checks": {
       "items": {"$ref": "#/$defs/CrossTableCheck"},
       "title": "Cross Table Checks",
+      "type": "array"
+    },
+    "database_lookups": {
+      "items": {"$ref": "#/$defs/DatabaseLookup"},
+      "title": "Database Lookups",
+      "type": "array"
+    },
+    "database_checks": {
+      "items": {"$ref": "#/$defs/DatabaseCheck"},
+      "title": "Database Checks",
       "type": "array"
     },
     "compatibility": {

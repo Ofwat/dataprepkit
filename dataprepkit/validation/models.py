@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -470,6 +471,138 @@ class CrossTableCheck(_PublicModel):
         return self
 
 
+_SQL_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_SQL_RESERVED_WORDS = {
+    "add", "alter", "and", "as", "by", "create", "delete", "drop",
+    "from", "grant", "group", "insert", "join", "merge", "select",
+    "table", "update", "user", "where",
+}
+
+
+def _validate_sql_identifier(value: str, field_name: str) -> str:
+    if (
+        len(value) > 128
+        or not _SQL_IDENTIFIER.fullmatch(value)
+        or value.casefold() in _SQL_RESERVED_WORDS
+    ):
+        raise ValueError(
+            f"{field_name} must be a non-reserved SQL identifier matching "
+            r"[A-Za-z_][A-Za-z0-9_]* and no longer than 128 characters"
+        )
+    return value
+
+
+class DatabaseLookup(_PublicModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+        serialize_by_alias=True,
+    )
+    name: str
+    schema_name: str | None = Field(default=None, alias="schema")
+    table: str
+    key_columns: dict[str, str] = Field(min_length=1)
+    value_columns: list[str] = Field(min_length=1)
+    batch_size: int = 500
+    max_distinct_keys: int = 100_000
+    timeout_seconds: int = 30
+    collation_name: str | None = None
+    isolation_level: str = "snapshot"
+    retry_count: int = 0
+    persist_lookup_keys: bool = True
+
+    @model_validator(mode="after")
+    def validate_lookup(self):
+        _validate_sql_identifier(self.name, "name")
+        if self.schema_name is not None:
+            _validate_sql_identifier(self.schema_name, "schema")
+        _validate_sql_identifier(self.table, "table")
+        for source_column, lookup_column in self.key_columns.items():
+            _validate_sql_identifier(source_column, "key column")
+            _validate_sql_identifier(lookup_column, "lookup key column")
+        for column in self.value_columns:
+            _validate_sql_identifier(column, "value column")
+        if self.batch_size < 1 or self.batch_size > 5000:
+            raise ValueError("batch_size must be between 1 and 5000")
+        if self.max_distinct_keys < 1 or self.max_distinct_keys > 100_000:
+            raise ValueError(
+                "max_distinct_keys must be between 1 and 100000"
+            )
+        if self.timeout_seconds < 1:
+            raise ValueError("timeout_seconds must be positive")
+        if self.isolation_level not in {"snapshot", "read_committed"}:
+            raise ValueError(
+                "isolation_level must be snapshot or read_committed"
+            )
+        if self.retry_count < 0:
+            raise ValueError("retry_count must not be negative")
+        if self.collation_name is not None:
+            _validate_sql_identifier(self.collation_name, "collation_name")
+        selected = set(self.value_columns) | set(self.key_columns.values())
+        if len(selected) != len(self.value_columns) + len(self.key_columns):
+            raise ValueError(
+                "value_columns must not duplicate lookup key columns"
+            )
+        return self
+
+
+class LookupColumnValidation(_PublicModel):
+    column: str
+    value_type_from: str
+
+
+class DatabaseDimension(_PublicModel):
+    source_column: str
+    lookup: str
+    canonical_column: str
+
+    @field_validator("canonical_column")
+    @classmethod
+    def validate_canonical_column(cls, value):
+        return _validate_sql_identifier(value, "canonical_column")
+
+
+class DatabaseCheck(_PublicModel):
+    name: str
+    rule_code: str
+    source_table: str
+    lookup: str | None = None
+    column_validations: list[LookupColumnValidation] = Field(
+        default_factory=list
+    )
+    dimensions: list[DatabaseDimension] = Field(default_factory=list)
+    value_columns: list[str] = Field(default_factory=list)
+    enabled: bool = True
+    severity: str | None = None
+    depends_on: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_check(self):
+        _validate_sql_identifier(self.name, "name")
+        if not self.rule_code:
+            raise ValueError("rule_code must not be empty")
+        if not self.source_table:
+            raise ValueError("source_table is required")
+        if self.rule_code == "conflicting_duplicate":
+            if not self.dimensions or not self.value_columns:
+                raise ValueError(
+                    "conflicting_duplicate requires dimensions and value_columns"
+                )
+        elif not self.lookup or not self.column_validations:
+            raise ValueError(
+                "database value checks require lookup and column_validations"
+            )
+        for dimension in self.dimensions:
+            if not dimension.source_column or not dimension.canonical_column:
+                raise ValueError(
+                    "database dimensions require source_column and "
+                    "canonical_column"
+                )
+        if len(self.depends_on) != len(set(self.depends_on)):
+            raise ValueError("depends_on must not contain duplicates")
+        return self
+
+
 class TableConfig(_PublicModel):
     name: str
     sheet_selector: SheetSelector | None = None
@@ -618,6 +751,8 @@ class WorkbookValidationConfig(_PublicModel):
     sheet_policy: SheetPolicy
     tables: list[TableConfig] = Field(default_factory=list)
     cross_table_checks: list[CrossTableCheck] = Field(default_factory=list)
+    database_lookups: list[DatabaseLookup] = Field(default_factory=list)
+    database_checks: list[DatabaseCheck] = Field(default_factory=list)
     expected_cells: list[ExpectedCellCheck] = Field(default_factory=list)
     workbook_checks: list[WorkbookCheck] = Field(default_factory=list)
     enabled_rules: list[str] | None = None
@@ -630,6 +765,84 @@ class WorkbookValidationConfig(_PublicModel):
         table_names = {table.name for table in self.tables}
         if len(table_names) != len(self.tables):
             raise ValueError("tables must not contain duplicate names")
+        lookup_names = {lookup.name for lookup in self.database_lookups}
+        if len(lookup_names) != len(self.database_lookups):
+            raise ValueError("database_lookups must not contain duplicate names")
+        database_check_names = {
+            check.name for check in self.database_checks
+        }
+        if len(database_check_names) != len(self.database_checks):
+            raise ValueError("database_checks must not contain duplicate names")
+        for check in self.database_checks:
+            if check.source_table not in table_names:
+                raise ValueError(
+                    f"database check source table is not configured: "
+                    f"{check.source_table}"
+                )
+            if check.lookup not in lookup_names:
+                if check.lookup is not None:
+                    raise ValueError(
+                        f"database check lookup is not configured: {check.lookup}"
+                    )
+            dimension_lookups = {
+                dimension.lookup for dimension in check.dimensions
+            }
+            missing_dimension_lookups = dimension_lookups - lookup_names
+            if missing_dimension_lookups:
+                raise ValueError(
+                    "database check dimension lookups are not configured: "
+                    f"{sorted(missing_dimension_lookups)}"
+                )
+            lookups_by_name = {
+                lookup.name: lookup for lookup in self.database_lookups
+            }
+            if check.lookup is not None:
+                lookup = lookups_by_name[check.lookup]
+                for validation in check.column_validations:
+                    if validation.value_type_from not in lookup.value_columns:
+                        raise ValueError(
+                            "database value type column is not selected by "
+                            f"lookup: {validation.value_type_from}"
+                        )
+            for dimension in check.dimensions:
+                lookup = lookups_by_name[dimension.lookup]
+                if lookup.key_columns.keys() != {dimension.source_column}:
+                    raise ValueError(
+                        "each database dimension lookup must map exactly its "
+                        "source_column"
+                    )
+                if dimension.canonical_column not in lookup.value_columns:
+                    raise ValueError(
+                        f"canonical column is not selected by lookup: "
+                        f"{dimension.canonical_column}"
+                    )
+            missing = set(check.depends_on) - database_check_names
+            if missing:
+                raise ValueError(
+                    f"dependencies for database check {check.name} are not "
+                    f"configured: {sorted(missing)}"
+                )
+        database_checks_by_name = {
+            check.name: check for check in self.database_checks
+        }
+        visiting_database = set()
+        visited_database = set()
+
+        def visit_database(name):
+            if name in visiting_database:
+                raise ValueError(
+                    "database check dependencies must not contain cycles"
+                )
+            if name in visited_database:
+                return
+            visiting_database.add(name)
+            for dependency in database_checks_by_name[name].depends_on:
+                visit_database(dependency)
+            visiting_database.remove(name)
+            visited_database.add(name)
+
+        for check in self.database_checks:
+            visit_database(check.name)
         for check in self.cross_table_checks:
             missing_tables = {
                 check.source_table,
@@ -686,6 +899,7 @@ class ValidationEvent(_PublicModel):
     description: str = ""
     actual_value: Any = None
     expected_value: Any = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
     cell_reference: str | None = None
     row_number: int | None = None
     column_number: int | None = None
@@ -712,6 +926,9 @@ class ValidationEvent(_PublicModel):
                 "missing_reference_sheet": "REFERENCE_SHEET_MISSING",
                 "sheet_structure": "SHEET_STRUCTURE_MISMATCH",
                 "formula_difference": "FORMULA_DIFFERENCE",
+                "database_lookup": "DATABASE_LOOKUP_FAILED",
+                "database_missing_lookup": "LOOKUP_ROW_MISSING",
+                "database_duplicate_lookup": "DUPLICATE_LOOKUP",
                 "sheet_selector": "SHEET_SELECTOR_MULTIPLE_MATCHES",
                 "WORKBOOK_LIMIT_ERROR": "WORKBOOK_CELL_LIMIT_EXCEEDED",
             }
@@ -809,6 +1026,7 @@ VALIDATION_RESULT_DATAFRAME_COLUMNS = [
     "description",
     "actual_value",
     "expected_value",
+    "metadata",
 ]
 
 
@@ -876,6 +1094,10 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                     "description": event.description,
                     "actual_value": event.actual_value,
                     "expected_value": event.expected_value,
+                    "metadata": (
+                        json.dumps(event.metadata, sort_keys=True)
+                        if event.metadata else None
+                    ),
                     "cell_reference": event.cell_reference,
                     "row_number": event.row_number,
                     "column_number": event.column_number,
@@ -892,6 +1114,7 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                     "issue_count": None,
                     "code": diagnostic.code,
                     "description": diagnostic.description,
+                    "metadata": None,
                 }
             )
     for key, processed_count in result.processed_counts.items():

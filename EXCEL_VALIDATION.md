@@ -286,7 +286,7 @@ column_validations:
 
 | Check | Configure it with | What it reports |
 | --- | --- | --- |
-| `conflicting_duplicate` | `tables[].table_validations` | The same identity combination has conflicting values. |
+| `conflicting_duplicate` | `tables[].table_validations` or `database_checks` | The same identity combination has conflicting values, optionally after database dimension resolution. |
 | `values_in_reference` | `cross_table_checks` | A source value is absent from another loaded table. |
 
 Example:
@@ -298,7 +298,7 @@ table_validations:
     value_columns: [Measure_Value]
 ```
 
-#### Proposed database-backed checks
+#### Database-backed checks
 
 Database-backed checks are an optional second-stage validation. They use the
 tables already resolved and loaded from Excel, then enrich or validate those
@@ -346,13 +346,42 @@ database_checks:
   - rule_code: measure_value_type
     enabled: true
     severity: error
-    depends_on:
-      - pandas_load
     source_table: process_data
     lookup: measure_dimension
     column_validations:
       - column: Measure_Value
         value_type_from: Expected_Value_Type
+```
+
+For duplicate detection where Excel column names differ from database
+dimension keys, configure one lookup per dimension and compare the canonical
+dimension values:
+
+```yaml
+database_lookups:
+  - name: measure_dimension
+    schema: Dimensions
+    table: dim_measure
+    key_columns: {Measure_Cd: measure_code}
+    value_columns: [measure_id]
+  - name: organisation_dimension
+    schema: Dimensions
+    table: dim_organisation
+    key_columns: {Organisation_Cd: organisation_code}
+    value_columns: [organisation_id]
+
+database_checks:
+  - name: conflicting_measure_records
+    rule_code: conflicting_duplicate
+    source_table: process_data
+    dimensions:
+      - source_column: Measure_Cd
+        lookup: measure_dimension
+        canonical_column: measure_id
+      - source_column: Organisation_Cd
+        lookup: organisation_dimension
+        canonical_column: organisation_id
+    value_columns: [Measure_Value]
 ```
 
 `source_table` refers to the configured `tables[].name`; `lookup` refers to a
@@ -432,13 +461,20 @@ DatabaseCheck
   enabled: bool = true
   severity: error | warning | ignore
   source_table: str
-  lookup: str
+  lookup: str | null
   column_validations: list[LookupColumnValidation]
+  dimensions: list[DatabaseDimension]
+  value_columns: list[str]
   depends_on: list[str] = []
 
 LookupColumnValidation
   column: str
   value_type_from: str
+
+DatabaseDimension
+  source_column: str
+  lookup: str
+  canonical_column: str
 ```
 
 `value_type_from` currently accepts only `text` and `numeric` values from the
@@ -562,7 +598,7 @@ The first implementation uses these decisions to keep the feature predictable:
 - Database findings carry structured `metadata` containing lookup name,
   source table, lookup table, source key, lookup key, and Excel provenance.
   The metadata is included in result serialization and the validation result
-  DataFrame as JSON-compatible data.
+  DataFrame as a JSON string suitable for warehouse staging.
 - `persist_lookup_keys` defaults to `true` for useful diagnostics. When false,
   persisted result metadata redacts source and lookup key values while keeping
   column names, sheet, row, and cell reference.
@@ -611,8 +647,9 @@ These guarantees apply to DataPrepKit's generated database operations. A
 caller-controlled SQLAlchemy event hook or intentionally malicious custom
 engine is outside the validator's control and should not be supplied.
 
-This feature is a proposal and is not part of the current public configuration
-contract until its rule models and result semantics are implemented.
+Database-backed checks are part of the versioned configuration contract. The
+SQLAlchemy engine is optional; configured database checks become `NOT_RUN` and
+make the result incomplete when no engine is supplied.
 
 #### Workbook feature policies
 

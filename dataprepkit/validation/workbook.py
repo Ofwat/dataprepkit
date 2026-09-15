@@ -60,6 +60,8 @@ def validate_excel(
     reference_version=None,
     run_id=None,
     profile=None,
+    *,
+    engine=None,
 ):
     resolved_config = validate_config(config)
     candidate_path = Path(candidate_path)
@@ -120,6 +122,7 @@ def validate_excel(
         warnings = []
         not_run = []
         diagnostics = []
+        complete = True
         processed_counts = {}
         processed_severities = dict(resolved_config.rule_severity)
         for check in resolved_config.workbook_checks:
@@ -1136,6 +1139,70 @@ def validate_excel(
                 processed_counts.get(rule_code, 0) + count
             )
         processed_severities.update(cross_severities)
+        if engine is not None and resolved_config.database_checks:
+            (
+                database_errors,
+                database_warnings,
+                database_not_run,
+                database_counts,
+                database_severities,
+                database_complete,
+            ) = _run_database_checks(
+                resolved_config,
+                dataframe_cache,
+                engine,
+            )
+            errors.extend(database_errors)
+            warnings.extend(database_warnings)
+            not_run.extend(database_not_run)
+            processed_severities.update(database_severities)
+            for rule_code, count in database_counts.items():
+                processed_counts[rule_code] = (
+                    processed_counts.get(rule_code, 0) + count
+                )
+            complete = complete and database_complete
+        for check in resolved_config.database_checks:
+            if engine is not None:
+                continue
+            processed_severities.setdefault(
+                check.rule_code,
+                check.severity or resolved_config.rule_severity.get(check.rule_code),
+            )
+            if (
+                not check.enabled
+                or (
+                    resolved_config.enabled_rules is not None
+                    and check.rule_code not in resolved_config.enabled_rules
+                )
+            ):
+                record_processed(check.rule_code, 0)
+                not_run.append(
+                    ValidationEvent(
+                        rule_code=check.rule_code,
+                        status="NOT_RUN",
+                        reason="RULE_DISABLED",
+                        severity=check.severity
+                        or resolved_config.rule_severity.get(check.rule_code),
+                        description="Database check is disabled by configuration",
+                    )
+                )
+                continue
+            if engine is None:
+                record_processed(check.rule_code, 0)
+                not_run.append(
+                    ValidationEvent(
+                        rule_code=check.rule_code,
+                        status="NOT_RUN",
+                        reason="DATABASE_ENGINE_REQUIRED",
+                        severity=check.severity
+                        or resolved_config.rule_severity.get(check.rule_code),
+                        description=(
+                            f"Database check '{check.name}' requires a "
+                            "SQLAlchemy engine"
+                        ),
+                    )
+                )
+                complete = False
         rule_outcomes = {}
         workbook_checks = _ordered_workbook_checks(
             resolved_config.workbook_checks
@@ -1638,6 +1705,7 @@ def validate_excel(
         finalize_processed_counts()
         return ValidationResult(
             **result_metadata,
+            complete=complete,
             processed_counts=processed_counts,
             processed_severities=processed_severities,
             errors=errors,
@@ -2131,6 +2199,9 @@ def _run_dataframe_checks(
         for check in config.cross_table_checks
         for table_name in (check.source_table, check.reference_table)
     }
+    cached_table_names.update(
+        check.source_table for check in config.database_checks
+    )
 
     def skip_dataframe_checks(table, reason, sheet_name=None):
         return None
@@ -2527,6 +2598,598 @@ def _run_cross_table_checks(config, dataframe_cache):
                     )
                 )
     return errors, not_run, processed_counts, processed_severities
+
+
+def _run_database_checks(config, dataframe_cache, engine):
+    errors = []
+    not_run = []
+    processed_counts = {}
+    processed_severities = {}
+    lookup_cache = {}
+    complete = True
+    checks = {check.name: check for check in config.database_checks}
+    outcomes = {}
+
+    for check in config.database_checks:
+        severity = check.severity or config.rule_severity.get(check.rule_code)
+        processed_severities.setdefault(check.rule_code, severity)
+        if (
+            not check.enabled
+            or (
+                config.enabled_rules is not None
+                and check.rule_code not in config.enabled_rules
+            )
+        ):
+            not_run.append(
+                ValidationEvent(
+                    rule_code=check.rule_code,
+                    status="NOT_RUN",
+                    reason="RULE_DISABLED",
+                    severity=severity,
+                    description="Database check is disabled by configuration",
+                )
+            )
+            outcomes[check.name] = "not_run"
+            continue
+        if any(outcomes.get(name) != "passed" for name in check.depends_on):
+            not_run.append(
+                ValidationEvent(
+                    rule_code=check.rule_code,
+                    status="NOT_RUN",
+                    reason="DEPENDENCY_NOT_RUN",
+                    severity=severity,
+                    description=(
+                        f"Database check '{check.name}' depends on a check "
+                        "that did not pass"
+                    ),
+                )
+            )
+            outcomes[check.name] = "not_run"
+            continue
+        source_entries = dataframe_cache.get(check.source_table, {})
+        if not source_entries:
+            not_run.append(
+                ValidationEvent(
+                    rule_code=check.rule_code,
+                    status="NOT_RUN",
+                    reason="PANDAS_LOAD_FAILED",
+                    severity=severity,
+                    description=(
+                        f"Database check '{check.name}' requires loaded table "
+                        f"'{check.source_table}'"
+                    ),
+                )
+            )
+            complete = False
+            outcomes[check.name] = "not_run"
+            continue
+        lookup = next(
+            (
+                lookup
+                for lookup in config.database_lookups
+                if lookup.name == check.lookup
+            ),
+            None,
+        ) if check.lookup else None
+        lookup_rows = {}
+        lookup_error = None
+        dimension_rows = {}
+        if check.rule_code == "conflicting_duplicate":
+            for dimension in check.dimensions:
+                dimension_lookup = next(
+                    lookup
+                    for lookup in config.database_lookups
+                    if lookup.name == dimension.lookup
+                )
+                rows, error = _database_lookup_rows(
+                    dimension_lookup,
+                    source_entries,
+                    engine,
+                    lookup_cache,
+                )
+                if error is not None:
+                    lookup_error = error
+                    break
+                dimension_rows[dimension.source_column] = (
+                    dimension,
+                    dimension_lookup,
+                    rows,
+                )
+        elif lookup is not None:
+            lookup_rows, lookup_error = _database_lookup_rows(
+                lookup,
+                source_entries,
+                engine,
+                lookup_cache,
+            )
+        if lookup_error is not None:
+            not_run.append(
+                ValidationEvent(
+                    rule_code=check.rule_code,
+                    status="NOT_RUN",
+                    reason=lookup_error[0],
+                    severity=severity,
+                    description=lookup_error[1],
+                )
+            )
+            complete = False
+            outcomes[check.name] = "not_run"
+            continue
+        check_failed = False
+        for entry in source_entries.values():
+            dataframe = entry["dataframe"]
+            if check.rule_code == "conflicting_duplicate":
+                check_errors, check_failed = _database_conflicting_duplicates(
+                    check,
+                    dataframe,
+                    entry,
+                    config.comparison,
+                    severity,
+                    dimension_rows,
+                    processed_counts,
+                )
+            else:
+                check_errors, check_failed = _database_value_type_check(
+                    check,
+                    dataframe,
+                    entry,
+                    config.comparison,
+                    severity,
+                    lookup,
+                    lookup_rows,
+                    processed_counts,
+                )
+            errors.extend(check_errors)
+        outcomes[check.name] = "failed" if check_failed else "passed"
+    warnings = [event for event in errors if event.severity == "warning"]
+    errors = [event for event in errors if event.severity != "warning"]
+    return (
+        errors,
+        warnings,
+        not_run,
+        processed_counts,
+        processed_severities,
+        complete,
+    )
+
+
+def _database_lookup_rows(lookup, source_entries, engine, cache):
+    source_keys = set()
+    source_columns = list(lookup.key_columns)
+    for entry in source_entries.values():
+        dataframe = entry["dataframe"]
+        if any(column not in dataframe.columns for column in source_columns):
+            return {}, (
+                "LOOKUP_SOURCE_COLUMN_MISSING",
+                f"Source table is missing a lookup key column for '{lookup.name}'",
+            )
+        for values in dataframe[source_columns].itertuples(index=False, name=None):
+            if any(_is_null_value(value) for value in values):
+                continue
+            source_keys.add(tuple(values))
+    if len(source_keys) > lookup.max_distinct_keys:
+        return {}, (
+            "DATABASE_LOOKUP_LIMIT",
+            f"Lookup '{lookup.name}' exceeded its distinct key limit",
+        )
+    cache_key = (lookup.name, tuple(sorted(map(repr, source_keys))))
+    if cache_key in cache:
+        return cache[cache_key], None
+    if not source_keys:
+        cache[cache_key] = {}
+        return {}, None
+    try:
+        from sqlalchemy import inspect, text
+
+        inspector = inspect(engine)
+        columns = {
+            column["name"]
+            for column in inspector.get_columns(
+                lookup.table,
+                schema=lookup.schema_name,
+            )
+        }
+        required_columns = set(lookup.key_columns.values()) | set(lookup.value_columns)
+        missing = required_columns - columns
+        if missing:
+            return {}, (
+                "LOOKUP_COLUMN_MISSING",
+                f"Lookup '{lookup.name}' is missing columns: {sorted(missing)}",
+            )
+        select_columns = [*lookup.key_columns.values(), *lookup.value_columns]
+        rendered_columns = ", ".join(
+            _quote_sql_identifier(engine, column) for column in select_columns
+        )
+        rendered_table = _quote_sql_identifier(engine, lookup.table)
+        if lookup.schema_name:
+            rendered_table = (
+                f"{_quote_sql_identifier(engine, lookup.schema_name)}."
+                f"{rendered_table}"
+            )
+        predicates = []
+        parameters = {}
+        lookup_columns = list(lookup.key_columns.values())
+        for index, key in enumerate(source_keys):
+            parts = []
+            for column_index, (column, value) in enumerate(
+                zip(lookup_columns, key)
+            ):
+                parameter = f"key_{index}_{column_index}"
+                parts.append(
+                    f"{_quote_sql_identifier(engine, column)} = :{parameter}"
+                )
+                parameters[parameter] = value
+            predicates.append("(" + " AND ".join(parts) + ")")
+        statement = text(
+            f"SELECT {rendered_columns} FROM {rendered_table} "
+            f"WHERE {' OR '.join(predicates)}"
+        )
+        with engine.connect() as connection:
+            rows = connection.execute(statement, parameters).mappings().all()
+    except Exception as error:
+        message = str(error)
+        lowered = message.casefold()
+        if (
+            error.__class__.__name__ == "NoSuchTableError"
+            or "no such table" in lowered
+            or "invalid object name" in lowered
+        ):
+            reason = "LOOKUP_TABLE_MISSING"
+        elif "permission" in lowered or "not authorized" in lowered:
+            reason = "DATABASE_PERMISSION_DENIED"
+        elif "timeout" in lowered or "timed out" in lowered:
+            reason = "DATABASE_TIMEOUT"
+        else:
+            reason = "DATABASE_LOOKUP_FAILED"
+        return {}, (
+            reason,
+            f"Lookup '{lookup.name}' could not be loaded",
+        )
+    result = {}
+    for row in rows:
+        key = tuple(row[column] for column in lookup_columns)
+        value = tuple(row[column] for column in lookup.value_columns)
+        if key in result and result[key] != value:
+            return {}, (
+                "DATABASE_DUPLICATE_LOOKUP",
+                f"Lookup '{lookup.name}' returned conflicting rows",
+            )
+        result[key] = value
+    cache[cache_key] = result
+    return result, None
+
+
+def _quote_sql_identifier(engine, value):
+    if engine.dialect.name == "mssql":
+        return f"[{value}]"
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _is_null_value(value):
+    if value is None or isinstance(value, (list, tuple, dict)):
+        return value is None
+    try:
+        result = pd.isna(value)
+        return bool(result) if not hasattr(result, "__len__") else False
+    except (TypeError, ValueError):
+        return False
+
+
+def _database_value_type_check(
+    check,
+    dataframe,
+    entry,
+    comparison,
+    severity,
+    lookup_definition,
+    lookup_rows,
+    processed_counts,
+):
+    errors = []
+    failed = False
+    del comparison
+    source_key_columns = list(lookup_definition.key_columns)
+    missing_source = [
+        column for column in source_key_columns if column not in dataframe.columns
+    ]
+    missing_values = [
+        validation.column
+        for validation in check.column_validations
+        if validation.column not in dataframe.columns
+    ]
+    if missing_source or missing_values:
+        errors.append(
+            ValidationEvent(
+                rule_code="missing_column",
+                severity=severity,
+                sheet_name=entry["sheet_name"],
+                expected_value=[*missing_source, *missing_values],
+                description=(
+                    "Database check columns were not found in the loaded table: "
+                    + ", ".join([*missing_source, *missing_values])
+                ),
+            )
+        )
+        return errors, True
+    for row_index, row in dataframe.iterrows():
+        source_key = tuple(row[column] for column in source_key_columns)
+        if any(_is_null_value(value) for value in source_key):
+            continue
+        lookup_value = lookup_rows.get(source_key)
+        if lookup_value is None:
+            failed = True
+            column = source_key_columns[0]
+            column_number = entry["column_number"].get(column)
+            excel_row = entry["header_row"] + 1 + int(row_index)
+            errors.append(
+                ValidationEvent(
+                    rule_code="database_missing_lookup",
+                    severity=severity,
+                    sheet_name=entry["sheet_name"],
+                    cell_reference=(
+                        f"{get_column_letter(column_number)}{excel_row}"
+                        if column_number is not None else None
+                    ),
+                    row_number=excel_row,
+                    column_number=column_number,
+                    actual_value=source_key,
+                    expected_value=lookup_definition.table,
+                    metadata={
+                        "source_table": check.source_table,
+                        "lookup_name": check.lookup,
+                        "lookup_table": lookup_definition.table,
+                        "source_key": (
+                            dict(zip(source_key_columns, source_key))
+                            if lookup_definition.persist_lookup_keys else None
+                        ),
+                    },
+                    description=(
+                        f"Value for '{column}' was not found in "
+                        f"lookup '{lookup_definition.name}'"
+                    ),
+                )
+            )
+            continue
+        for validation in check.column_validations:
+            expected_index = lookup_definition.value_columns.index(
+                validation.value_type_from
+            )
+            expected_type = lookup_value[expected_index]
+            if _is_null_value(expected_type):
+                failed = True
+                errors.append(
+                    ValidationEvent(
+                        rule_code="database_lookup",
+                        reason="LOOKUP_VALUE_NULL",
+                        severity=severity,
+                        sheet_name=entry["sheet_name"],
+                        row_number=entry["header_row"] + 1 + int(row_index),
+                        actual_value=source_key,
+                        expected_value=validation.value_type_from,
+                        metadata={
+                            "source_table": check.source_table,
+                            "lookup_name": check.lookup,
+                            "lookup_table": lookup_definition.table,
+                        },
+                        description=(
+                            f"Lookup value '{validation.value_type_from}' is "
+                            "null"
+                        ),
+                    )
+                )
+                continue
+            value = row[validation.column]
+            processed_counts[check.rule_code] = processed_counts.get(
+                check.rule_code, 0
+            ) + 1
+            valid = (
+                isinstance(value, str)
+                if str(expected_type).casefold() == "text"
+                else _is_numeric_value(value)
+            )
+            if valid:
+                continue
+            failed = True
+            column_number = entry["column_number"].get(validation.column)
+            excel_row = entry["header_row"] + 1 + int(row_index)
+            errors.append(
+                ValidationEvent(
+                    rule_code=check.rule_code,
+                    severity=severity,
+                    sheet_name=entry["sheet_name"],
+                    cell_reference=(
+                        f"{get_column_letter(column_number)}{excel_row}"
+                        if column_number is not None else None
+                    ),
+                    row_number=excel_row,
+                    column_number=column_number,
+                    actual_value=value,
+                    expected_value=expected_type,
+                    metadata={
+                        "source_table": check.source_table,
+                        "lookup_name": check.lookup,
+                        "lookup_table": lookup_definition.table,
+                        "source_key": (
+                            dict(zip(source_key_columns, source_key))
+                            if lookup_definition.persist_lookup_keys else None
+                        ),
+                    },
+                    description=(
+                        f"Column '{validation.column}' must contain "
+                        f"{expected_type} values"
+                    ),
+                )
+            )
+    return errors, failed
+
+
+def _database_conflicting_duplicates(
+    check,
+    dataframe,
+    entry,
+    comparison,
+    severity,
+    dimension_rows,
+    processed_counts,
+):
+    errors = []
+    failed = False
+    groups = {}
+    for row_index, row in dataframe.iterrows():
+        canonical_key = []
+        missing_lookup = False
+        for source_column, (dimension, lookup, rows) in dimension_rows.items():
+            if source_column not in dataframe.columns:
+                errors.append(
+                    ValidationEvent(
+                        rule_code="missing_column",
+                        severity=severity,
+                        sheet_name=entry["sheet_name"],
+                        expected_value=source_column,
+                        description=(
+                            f"Column '{source_column}' was not found in the "
+                            "loaded table"
+                        ),
+                    )
+                )
+                return errors, True
+            source_value = row[source_column]
+            if _is_null_value(source_value):
+                missing_lookup = True
+                break
+            lookup_key = (source_value,)
+            lookup_value = rows.get(lookup_key)
+            if lookup_value is None:
+                missing_lookup = True
+                column_number = entry["column_number"].get(source_column)
+                excel_row = entry["header_row"] + 1 + int(row_index)
+                errors.append(
+                    ValidationEvent(
+                        rule_code="database_missing_lookup",
+                        severity=severity,
+                        sheet_name=entry["sheet_name"],
+                        cell_reference=(
+                            f"{get_column_letter(column_number)}{excel_row}"
+                            if column_number is not None else None
+                        ),
+                        row_number=excel_row,
+                        column_number=column_number,
+                        actual_value=source_value,
+                        expected_value=lookup.table,
+                        metadata={
+                            "source_table": check.source_table,
+                            "lookup_name": dimension.lookup,
+                            "lookup_table": lookup.table,
+                            "source_key": (
+                                {source_column: source_value}
+                                if lookup.persist_lookup_keys else None
+                            ),
+                        },
+                        description=(
+                            f"Value for '{source_column}' was not found in "
+                            f"lookup '{lookup.name}'"
+                        ),
+                    )
+                )
+                failed = True
+                break
+            value_index = lookup.value_columns.index(dimension.canonical_column)
+            canonical_value = lookup_value[value_index]
+            if _is_null_value(canonical_value):
+                missing_lookup = True
+                errors.append(
+                    ValidationEvent(
+                        rule_code="database_lookup",
+                        reason="LOOKUP_VALUE_NULL",
+                        severity=severity,
+                        sheet_name=entry["sheet_name"],
+                        row_number=entry["header_row"] + 1 + int(row_index),
+                        actual_value=source_value,
+                        expected_value=dimension.canonical_column,
+                        metadata={
+                            "source_table": check.source_table,
+                            "lookup_name": dimension.lookup,
+                            "lookup_table": lookup.table,
+                        },
+                        description=(
+                            f"Lookup canonical value '{dimension.canonical_column}' "
+                            "is null"
+                        ),
+                    )
+                )
+                failed = True
+                break
+            canonical_key.append(
+                _normalise_comparison_value(canonical_value, comparison)
+            )
+        if missing_lookup:
+            continue
+        values = tuple(
+            _normalise_comparison_value(row[column], comparison)
+            if not _is_null_value(row[column])
+            else None
+            for column in check.value_columns
+        )
+        groups.setdefault(tuple(canonical_key), []).append(
+            (row_index, values, row)
+        )
+    for key, rows in groups.items():
+        distinct_values = {values for _row, values, _data in rows}
+        if len(distinct_values) <= 1:
+            continue
+        rendered_values = sorted({repr(values) for values in distinct_values})
+        for row_index, values, row in rows[1:]:
+            if values == rows[0][1]:
+                continue
+            value_column = check.value_columns[0]
+            column_number = entry["column_number"].get(value_column)
+            excel_row = entry["header_row"] + 1 + int(row_index)
+            processed_counts[check.rule_code] = processed_counts.get(
+                check.rule_code, 0
+            ) + 1
+            errors.append(
+                ValidationEvent(
+                    rule_code=check.rule_code,
+                    severity=severity,
+                    sheet_name=entry["sheet_name"],
+                    cell_reference=(
+                        f"{get_column_letter(column_number)}{excel_row}"
+                        if column_number is not None else None
+                    ),
+                    row_number=excel_row,
+                    column_number=column_number,
+                    actual_value=row[value_column],
+                    expected_value=rendered_values,
+                    metadata={
+                        "source_table": check.source_table,
+                        "lookup_tables": sorted({
+                            lookup.table
+                            for _dimension, lookup, _rows
+                            in dimension_rows.values()
+                        }),
+                    },
+                    description=(
+                        "Duplicate dimension combination has conflicting "
+                        "values: " + ", ".join(rendered_values)
+                    ),
+                )
+            )
+            failed = True
+    return errors, failed
+
+
+def _is_numeric_value(value):
+    if isinstance(value, bool) or value is None or _is_null_value(value):
+        return False
+    if isinstance(value, Number):
+        return pd.notna(value) and value not in {float("inf"), float("-inf")}
+    if isinstance(value, str):
+        try:
+            parsed = Decimal(value.strip())
+        except (InvalidOperation, ValueError):
+            return False
+        return parsed.is_finite() and bool(value.strip())
+    return False
 
 
 def _hex_rgb(value):

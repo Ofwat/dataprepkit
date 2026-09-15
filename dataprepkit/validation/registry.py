@@ -95,8 +95,11 @@ _BUILT_IN_RULES = (
     },
     {
         "rule_code": "conflicting_duplicate",
-        "attachment": "tables.table_validations",
-        "description": "Reject repeated identities with conflicting values.",
+        "attachment": "tables.table_validations, database_checks",
+        "description": (
+            "Reject repeated identities with conflicting values, optionally "
+            "after database dimension resolution."
+        ),
     },
     {
         "rule_code": "required_filled_cells",
