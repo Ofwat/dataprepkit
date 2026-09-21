@@ -643,6 +643,28 @@ def test_database_check_dependency_runs_after_passing_prerequisite(tmp_path):
     assert result.errors[0].cell_reference == "C2"
 
 
+def test_database_check_rejects_unknown_dependency():
+    data = make_database_type_config().model_dump()
+    data["database_checks"][0]["depends_on"] = ["missing_check"]
+
+    with pytest.raises(ConfigurationError, match="not configured"):
+        validate_config(data)
+
+
+def test_database_check_rejects_dependency_cycle():
+    data = make_database_type_config().model_dump()
+    first = data["database_checks"][0]
+    second = dict(first)
+    first["name"] = "first_check"
+    first["depends_on"] = ["second_check"]
+    second["name"] = "second_check"
+    second["depends_on"] = ["first_check"]
+    data["database_checks"] = [first, second]
+
+    with pytest.raises(ConfigurationError, match="cycles"):
+        validate_config(data)
+
+
 def test_database_duplicate_check_uses_mapped_dimension_columns(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()
