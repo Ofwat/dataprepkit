@@ -25,11 +25,11 @@ def add_data_sheet(workbook, candidate):
         ]
     )
     rows = [
-        ["INN001", "Number", 100, "Good", "AFW", "WATER", "2025-26", "Open"],
-        ["INN001", "Number", 125, "Conflicting duplicate", "AFW", "WATER", "2025-26", "Open"],
-        ["INN002", "Text", 125 if candidate else "confirmed", "Value ¬¬ confirmed", "AFW", "WATER", "2025-26", "Unknown"],
-        ["INN003", "Number", "TBC", "FORBIDDEN", "AFW", "WATER", "2025-26", "Closed"],
-        ["INN004", "Number", None, "", "AFW", "WATER", "2025-26", "Open"],
+        ["APR3F_06", "Number", 100, "Good", "AFW", "AddCtrl", "1980", "Open"],
+        ["APR3F_06", "Number", 125, "Conflicting duplicate", "AFW", "AddCtrl", "1980", "Open"],
+        ["APR3G_11", "Text", 125 if candidate else "confirmed", "Value ¬¬ confirmed", "AFW", "Bio", "1980 APR", "Unknown"],
+        ["B0407HP_NRP", "Number", "TBC", "FORBIDDEN", "AFW", "Bio", "1980", "Closed"],
+        ["B0407HP_RP", "Number", None, "", "AFW", "Bio", "1980", "Open"],
     ]
     for row in rows:
         sheet.append(row)
@@ -49,10 +49,13 @@ def add_data_sheet(workbook, candidate):
 def add_codes_sheet(workbook, candidate):
     sheet = workbook.create_sheet("Codes")
     sheet.append(["Code"])
-    sheet.append(["INN001"])
-    sheet.append(["INN002"])
-    if not candidate:
-        sheet.append(["INN003"])
+    for code in [
+        "APR3F_06",
+        "APR3G_11",
+        "B0407HP_NRP",
+        "B0407HP_RP",
+    ]:
+        sheet.append([code])
     return sheet
 
 
