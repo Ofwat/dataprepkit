@@ -13,12 +13,15 @@ comparison:
 sheet_policy:
   required_selectors: []
   ignored_selectors: []
-  extra_sheet_action: error
   selector_match_action: all
 
 tables: []
 expected_cells: []
 workbook_checks:
+  - rule_code: extra_sheet
+    enabled: true
+    scope: all_sheets
+    severity: error
   - rule_code: missing_reference_sheet
     enabled: true
     scope: all_sheets

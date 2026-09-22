@@ -73,7 +73,6 @@ config = WorkbookValidationConfig(
             SheetSelector(mode="exact", value="Quarterly_Data"),
         ],
         ignored_selectors=[],
-        extra_sheet_action="ignore",
         selector_match_action="all",
     ),
     workbook_checks=[
@@ -299,7 +298,8 @@ The fields have these responsibilities:
 - `config_version`: version of the configuration schema;
 - `profile_name`: optional human-readable compatibility/profile name;
 - `comparison`: case, accent, whitespace, blank, and null comparison policy;
-- `sheet_policy`: required sheets, ignored sheets, extra-sheet handling, and
+- `sheet_policy`: required sheets and ignored sheets, with sheet comparison
+  handled by workbook checks, and
   selector matching rules;
 - `tables`: table selectors, boundaries, headers, aliases, and column rules;
 - `expected_cells`: named cell checks and fallback strategies;
@@ -313,8 +313,9 @@ The fields have these responsibilities:
 `trim_whitespace`, `collapse_internal_whitespace`, `empty_string_is_null`,
 `null_tokens`, and the target collation name.
 
-`SheetPolicy` should define `required_selectors`, `ignored_selectors`,
-`extra_sheet_action`, and `selector_match_action`.
+`SheetPolicy` should define `required_selectors`, `ignored_selectors`, and
+`selector_match_action`. Candidate/reference sheet comparison belongs to the
+explicit `extra_sheet` and `missing_reference_sheet` workbook checks.
 
 `TableConfig` should define `name`, `sheet_selector`, `required`,
 `header_row`, `data_boundary`, `column_definitions`, `column_validations`,
@@ -438,8 +439,8 @@ Nested configuration fields should be defined as follows:
 - `ComparisonConfig`: `case_sensitive`, `accent_sensitive`,
   `trim_whitespace`, `collapse_internal_whitespace`, `empty_string_is_null`,
   `null_tokens`, and `collation_name`;
-- `SheetPolicy`: `required_selectors`, `ignored_selectors`,
-  `extra_sheet_action`, and `selector_match_action`;
+- `SheetPolicy`: `required_selectors`, `ignored_selectors`, and
+  `selector_match_action`;
 - `SheetSelector`: `mode`, `value`, `case_sensitive`, and
   `expected_match_count`;
 - `ColumnDefinition`: logical `name`, physical `aliases`, and optional
@@ -473,7 +474,6 @@ rejected.
 
 The accepted policy values are:
 
-- `extra_sheet_action`: `ignore`, `warning`, or `error`;
 - `selector_match_action`: `all`, `first`, or `error_on_multiple`;
 - `fallback_strategy`: `ordered_first`, `exactly_one`, or `all_must_agree`;
 - `data_boundary.mode`: `last_non_empty_row`, `fixed_end_row`, or
@@ -1434,8 +1434,8 @@ Resolution behaviour must be explicit:
 - overlapping table selectors are rejected during configuration validation;
 - a missing header row, duplicate header, or ambiguous alias is a resolution
   error;
-- extra-sheet handling must be explicitly configured as `ignore`, `warning`, or
-  `error`.
+- candidate/reference sheet comparison must be explicitly configured through
+  the `extra_sheet` and `missing_reference_sheet` workbook checks.
 
 The `dqchecks` ignored-sheet patterns (`Dict_`, `CLEAR_SHEET`, and `Changes
 Log`) may be supplied by a compatibility configuration, but must not be

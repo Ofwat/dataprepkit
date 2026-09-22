@@ -135,11 +135,6 @@ def validate_excel(
                 check.rule_code,
                 check.severity or resolved_config.rule_severity.get(check.rule_code),
             )
-        processed_severities.setdefault(
-            "extra_sheet",
-            resolved_config.sheet_policy.extra_sheet_action,
-        )
-
         def record_processed(rule_code=None, count=1, code=None):
             key = f"code:{code}" if code is not None else rule_code
             if key is not None:
@@ -248,7 +243,6 @@ def validate_excel(
                     )
                 )
         sheet_names = set(formula_workbook.sheetnames)
-        selected_sheet_names = set()
         for selector in resolved_config.sheet_policy.required_selectors:
             record_processed("required_sheet")
             record_processed("sheet_selector")
@@ -258,7 +252,6 @@ def validate_excel(
                 selector,
                 errors,
             )
-            selected_sheet_names.update(matches)
             if not matches:
                 errors.append(
                     ValidationEvent(
@@ -272,40 +265,17 @@ def validate_excel(
                 )
         for selector in resolved_config.sheet_policy.ignored_selectors:
             record_processed("sheet_selector")
-            selected_sheet_names.update(
-                _select_sheet_matches(
-                    _match_sheets(sheet_names, selector),
-                    resolved_config.sheet_policy.selector_match_action,
-                    selector,
-                    errors,
-                )
+            _select_sheet_matches(
+                _match_sheets(sheet_names, selector),
+                resolved_config.sheet_policy.selector_match_action,
+                selector,
+                errors,
             )
         ignored_sheet_names = set()
         for selector in resolved_config.sheet_policy.ignored_selectors:
             ignored_sheet_names.update(
                 _match_sheets(sheet_names, selector)
             )
-        if (
-            not resolved_config.sheet_policy.required_selectors
-            and reference_workbook is not None
-        ):
-            selected_sheet_names.update(reference_workbook.sheetnames)
-        extra_sheets = sheet_names - selected_sheet_names
-        action = resolved_config.sheet_policy.extra_sheet_action
-        for sheet_name in formula_workbook.sheetnames:
-            record_processed("extra_sheet")
-            if sheet_name not in extra_sheets or action == "ignore":
-                continue
-            event = ValidationEvent(
-                rule_code="extra_sheet",
-                severity=action,
-                sheet_name=sheet_name,
-                description=f"Extra sheet found: {sheet_name}",
-            )
-            if action == "warning":
-                warnings.append(event)
-            elif action == "error":
-                errors.append(event)
         value_resolution = _WorkbookResolution(value_workbook)
         formula_resolution = _WorkbookResolution(formula_workbook)
         reference_value_resolution = (
@@ -1290,6 +1260,51 @@ def validate_excel(
                     rule_outcomes[check.rule_code] = "not_run"
                 else:
                     rule_outcomes[check.rule_code] = "passed"
+                continue
+            if check.rule_code == "extra_sheet":
+                if reference_workbook is None:
+                    not_run.append(
+                        ValidationEvent(
+                            rule_code="extra_sheet",
+                            status="NOT_RUN",
+                            reason="REFERENCE_WORKBOOK_REQUIRED",
+                            severity=(
+                                check.severity
+                                or resolved_config.rule_severity.get(
+                                    check.rule_code
+                                )
+                            ),
+                            description=(
+                                "Reference workbook is required for this check"
+                            ),
+                        )
+                    )
+                    rule_outcomes[check.rule_code] = "not_run"
+                    continue
+                reference_names = set(reference_workbook.sheetnames)
+                severity = (
+                    check.severity
+                    or resolved_config.rule_severity.get(check.rule_code)
+                    or "error"
+                )
+                for sheet_name in (
+                    set(formula_workbook.sheetnames) - reference_names
+                ):
+                    event = ValidationEvent(
+                        rule_code="extra_sheet",
+                        severity=severity,
+                        sheet_name=sheet_name,
+                        description=f"Extra sheet found: {sheet_name}",
+                    )
+                    if severity == "warning":
+                        warnings.append(event)
+                    else:
+                        errors.append(event)
+                rule_outcomes[check.rule_code] = (
+                    "failed"
+                    if any(event.rule_code == check.rule_code for event in errors)
+                    else "passed"
+                )
                 continue
             if check.rule_code == "missing_reference_sheet":
                 if reference_workbook is None:

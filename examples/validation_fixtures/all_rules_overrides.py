@@ -8,7 +8,6 @@ overrides = {
             {"mode": "exact", "value": "Codes"},
         ],
         "ignored_selectors": [],
-        "extra_sheet_action": "error",
         "selector_match_action": "all",
     },
     "tables": [
@@ -149,6 +148,12 @@ overrides = {
         },
     ],
     "workbook_checks": [
+        {
+            "rule_code": "extra_sheet",
+            "enabled": True,
+            "scope": "all_sheets",
+            "severity": "error",
+        },
         {
             "rule_code": "missing_reference_sheet",
             "enabled": True,

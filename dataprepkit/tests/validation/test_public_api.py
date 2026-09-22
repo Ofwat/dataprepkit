@@ -63,6 +63,17 @@ def make_config(
     extra_sheet_action="ignore",
     ignored_selectors=None,
 ):
+    configured_checks = list(workbook_checks or [])
+    if extra_sheet_action != "ignore":
+        configured_checks.insert(
+            0,
+            WorkbookCheck(
+                rule_code="extra_sheet",
+                enabled=True,
+                scope="all_sheets",
+                severity=extra_sheet_action,
+            ),
+        )
     return WorkbookValidationConfig(
         config_version="1",
         comparison=ComparisonConfig(
@@ -79,12 +90,11 @@ def make_config(
                 SheetSelector(mode="exact", value=required_sheet)
             ],
             ignored_selectors=ignored_selectors or [],
-            extra_sheet_action=extra_sheet_action,
             selector_match_action="all",
         ),
         tables=[],
         expected_cells=[],
-        workbook_checks=workbook_checks or [],
+        workbook_checks=configured_checks,
         enabled_rules=None,
         rule_severity={},
         runtime=RuntimePolicy(
@@ -1175,9 +1185,6 @@ def test_validation_config_merges_caller_overrides_over_profile():
         ],
     )
     overrides = {
-        "sheet_policy": {
-            "extra_sheet_action": "warning",
-        },
         "workbook_checks": [],
     }
 
@@ -1186,7 +1193,6 @@ def test_validation_config_merges_caller_overrides_over_profile():
         compatibility_profile=profile,
     )
 
-    assert resolved.sheet_policy.extra_sheet_action == "warning"
     assert resolved.workbook_checks == []
     assert resolved.sheet_policy.required_selectors == (
         profile.sheet_policy.required_selectors
@@ -1706,25 +1712,81 @@ def test_validate_excel_standalone_accepts_required_sheet(tmp_path):
 
 def test_validate_excel_reports_extra_sheets_as_errors(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
+    reference_path = tmp_path / "reference.xlsx"
     write_workbook_with_sheets(candidate_path, ["Data", "Unexpected"])
+    write_workbook_with_sheets(reference_path, ["Data"])
 
     result = validate_excel(
         candidate_path=candidate_path,
         config=make_config(extra_sheet_action="error"),
+        reference_path=reference_path,
     )
 
     assert result.is_valid is False
     assert [event.rule_code for event in result.errors] == ["extra_sheet"]
-    assert result.errors[0].sheet_name == "Unexpected"
+
+
+def test_extra_and_missing_reference_sheets_are_explicit_workbook_checks(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    reference_path = tmp_path / "reference.xlsx"
+    candidate = openpyxl.Workbook()
+    candidate.active.title = "Data"
+    candidate.create_sheet("Additional")
+    candidate.save(candidate_path)
+    reference = openpyxl.Workbook()
+    reference.active.title = "Data"
+    reference.create_sheet("ReferenceOnly")
+    reference.save(reference_path)
+
+    config = make_config().model_copy(
+        update={
+            "workbook_checks": [
+                WorkbookCheck(
+                    rule_code="extra_sheet",
+                    enabled=True,
+                    scope="all_sheets",
+                    severity="error",
+                ),
+                WorkbookCheck(
+                    rule_code="missing_reference_sheet",
+                    enabled=True,
+                    scope="all_sheets",
+                    severity="error",
+                ),
+            ]
+        }
+    )
+
+    result = validate_excel(
+        candidate_path,
+        config,
+        reference_path=reference_path,
+    )
+
+    assert {(event.rule_code, event.sheet_name) for event in result.errors} == {
+        ("extra_sheet", "Additional"),
+        ("missing_reference_sheet", "ReferenceOnly"),
+    }
+
+
+def test_sheet_policy_rejects_extra_sheet_action():
+    data = make_config().model_dump()
+    data["sheet_policy"]["extra_sheet_action"] = "error"
+
+    with pytest.raises(ConfigurationError, match="extra_sheet_action"):
+        validate_config(data)
 
 
 def test_validate_excel_reports_extra_sheets_as_warnings(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
+    reference_path = tmp_path / "reference.xlsx"
     write_workbook_with_sheets(candidate_path, ["Data", "Unexpected"])
+    write_workbook_with_sheets(reference_path, ["Data"])
 
     result = validate_excel(
         candidate_path=candidate_path,
         config=make_config(extra_sheet_action="warning"),
+        reference_path=reference_path,
     )
 
     assert result.is_valid is True
@@ -1743,7 +1805,6 @@ def test_reference_validation_uses_reference_sheets_when_selectors_are_empty(
             "sheet_policy": SheetPolicy(
                 required_selectors=[],
                 ignored_selectors=[],
-                extra_sheet_action="error",
                 selector_match_action="all",
             )
         }
@@ -1770,7 +1831,6 @@ def test_reference_validation_accepts_matching_sheets_with_empty_selectors(
             "sheet_policy": SheetPolicy(
                 required_selectors=[],
                 ignored_selectors=[],
-                extra_sheet_action="error",
                 selector_match_action="all",
             )
         }
@@ -1945,7 +2005,6 @@ def test_workbook_forbidden_values_scans_scoped_cells(
             "sheet_policy": SheetPolicy(
                 required_selectors=[],
                 ignored_selectors=[],
-                extra_sheet_action="ignore",
                 selector_match_action="all",
             ),
             "workbook_checks": [
@@ -2287,7 +2346,6 @@ def test_unexpected_formula_reports_formula_in_filled_input_cell(tmp_path):
             "sheet_policy": SheetPolicy(
                 required_selectors=[],
                 ignored_selectors=[],
-                extra_sheet_action="ignore",
                 selector_match_action="all",
             ),
             "workbook_checks": [
@@ -4303,7 +4361,6 @@ def test_required_filled_cells_reports_blank_matching_fill(tmp_path):
             "sheet_policy": SheetPolicy(
                 required_selectors=[],
                 ignored_selectors=[],
-                extra_sheet_action="ignore",
                 selector_match_action="all",
             ),
             "workbook_checks": [
@@ -5011,7 +5068,6 @@ def test_validate_excel_supports_regex_sheet_selectors(tmp_path):
                     )
                 ],
                 ignored_selectors=[],
-                extra_sheet_action="ignore",
                 selector_match_action="all",
             )
         }
@@ -5037,7 +5093,6 @@ def test_validate_excel_reports_multiple_selector_matches(tmp_path):
                     )
                 ],
                 ignored_selectors=[],
-                extra_sheet_action="ignore",
                 selector_match_action="error_on_multiple",
             )
         }

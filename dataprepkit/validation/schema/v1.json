@@ -564,11 +564,6 @@
     "SheetPolicy": {
       "additionalProperties": false,
       "properties": {
-        "extra_sheet_action": {
-          "default": "ignore",
-          "title": "Extra Sheet Action",
-          "type": "string"
-        },
         "ignored_selectors": {
           "items": {
             "$ref": "#/$defs/SheetSelector"

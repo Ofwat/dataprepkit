@@ -13,7 +13,6 @@ comparison:
 sheet_policy:
   required_selectors: []
   ignored_selectors: []
-  extra_sheet_action: ignore
   selector_match_action: all
 
 tables: []

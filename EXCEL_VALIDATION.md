@@ -37,7 +37,16 @@ profile, and lists replace profile lists rather than being concatenated:
 
 ```python
 config = load_validation_config(
-    {"sheet_policy": {"extra_sheet_action": "warning"}},
+    {
+        "workbook_checks": [
+            {
+                "rule_code": "extra_sheet",
+                "enabled": True,
+                "scope": "all_sheets",
+                "severity": "warning",
+            }
+        ]
+    },
     compatibility_profile="profiles/standalone.yaml",
 )
 ```
@@ -148,7 +157,7 @@ Checks are configured with `workbook_checks`. Built-in checks include:
 | Rule | Purpose |
 | --- | --- |
 | `required_sheet` | Enforced through `sheet_policy.required_selectors`. |
-| `extra_sheet` | Enforced through `sheet_policy.extra_sheet_action`. |
+| `extra_sheet` | Finds candidate sheets absent from the reference workbook. |
 | `missing_reference_sheet` | Finds reference sheets absent from the candidate. |
 | `sheet_structure` | Compares content-based used areas. |
 | `formula_difference` | Compares candidate/reference formula text. |
@@ -177,7 +186,7 @@ table into pandas.
 | Check | Configure it with | What it reports |
 | --- | --- | --- |
 | `required_sheet` | `sheet_policy.required_selectors` | A required sheet selector matched no sheet. |
-| `extra_sheet` | `sheet_policy.extra_sheet_action` | A candidate sheet was not selected or ignored. |
+| `extra_sheet` | `workbook_checks` | A candidate sheet is absent from the reference workbook. |
 | `expected_cell` | `expected_cells` | A resolved cell differs from its expected value. |
 | `required_filled_cells` | `workbook_checks` | A cell with a configured fill colour is blank. |
 | `unexpected_formula` | `workbook_checks` | A formula appears in a filled input cell. |

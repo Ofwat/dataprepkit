@@ -15,8 +15,8 @@ _BUILT_IN_RULES = (
     },
     {
         "rule_code": "extra_sheet",
-        "attachment": "sheet_policy.extra_sheet_action",
-        "description": "Report candidate sheets that are not selected or ignored.",
+        "attachment": "workbook_checks",
+        "description": "Report candidate sheets absent from the reference workbook.",
     },
     {
         "rule_code": "expected_cell",

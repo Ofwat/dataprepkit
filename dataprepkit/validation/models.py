@@ -62,7 +62,6 @@ class SheetSelector(_PublicModel):
 class SheetPolicy(_PublicModel):
     required_selectors: list[SheetSelector] = Field(default_factory=list)
     ignored_selectors: list[SheetSelector] = Field(default_factory=list)
-    extra_sheet_action: str = "ignore"
     selector_match_action: str = "all"
 
 
