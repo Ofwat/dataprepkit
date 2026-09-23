@@ -3046,6 +3046,12 @@ def _database_value_type_check(
             failed = True
             column_number = entry["column_number"].get(validation.column)
             excel_row = entry["header_row"] + 1 + int(row_index)
+            lookup_key = dict(zip(source_key_columns, source_key))
+            expected_type_name = (
+                "text"
+                if str(expected_type).casefold() == "text"
+                else "numeric"
+            )
             errors.append(
                 ValidationEvent(
                     rule_code=check.rule_code,
@@ -3063,14 +3069,25 @@ def _database_value_type_check(
                         "source_table": check.source_table,
                         "lookup_name": check.lookup,
                         "lookup_table": lookup_definition.table,
+                        "column": validation.column,
+                        "lookup_key": lookup_key,
+                        "dimension_values": {
+                            validation.value_type_from: expected_type,
+                        },
                         "source_key": (
-                            dict(zip(source_key_columns, source_key))
+                            lookup_key
                             if lookup_definition.persist_lookup_keys else None
                         ),
                     },
                     description=(
                         f"Column '{validation.column}' must contain "
-                        f"{expected_type} values"
+                        f"{expected_type_name} values for "
+                        + ", ".join(
+                            f"{key}={value!r}"
+                            for key, value in lookup_key.items()
+                        )
+                        + f" ({validation.value_type_from}="
+                        f"{expected_type!r})"
                     ),
                 )
             )

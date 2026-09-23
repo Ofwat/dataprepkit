@@ -360,6 +360,14 @@ def test_database_check_uses_lookup_to_validate_loaded_excel_values(tmp_path):
     ]
     assert result.errors[0].metadata["lookup_name"] == "measure_dimension"
     assert result.errors[0].metadata["source_key"] == {"Measure_Cd": "INN001"}
+    assert result.errors[0].metadata["column"] == "Measure_Value"
+    assert result.errors[0].metadata["dimension_values"] == {
+        "Expected_Value_Type": "numeric",
+    }
+    assert (
+        "Measure_Cd='INN001'" in result.errors[0].description
+    )
+    assert "Expected_Value_Type='numeric'" in result.errors[0].description
     assert any(
         statement.lstrip().upper().startswith("SELECT")
         for statement in statements
