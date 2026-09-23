@@ -683,6 +683,17 @@ def test_database_check_rejects_dependency_cycle():
         validate_config(data)
 
 
+def test_database_lookup_duplicate_names_report_names_and_indexes():
+    data = make_database_type_config().model_dump()
+    data["database_lookups"].append(data["database_lookups"][0].copy())
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"duplicate names.*measure_dimension.*\[0, 1\]",
+    ):
+        validate_config(data)
+
+
 def test_database_duplicate_check_uses_mapped_dimension_columns(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()

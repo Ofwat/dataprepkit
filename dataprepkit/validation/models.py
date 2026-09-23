@@ -764,9 +764,23 @@ class WorkbookValidationConfig(_PublicModel):
         table_names = {table.name for table in self.tables}
         if len(table_names) != len(self.tables):
             raise ValueError("tables must not contain duplicate names")
-        lookup_names = {lookup.name for lookup in self.database_lookups}
-        if len(lookup_names) != len(self.database_lookups):
-            raise ValueError("database_lookups must not contain duplicate names")
+        lookup_indexes: dict[str, list[int]] = {}
+        for index, lookup in enumerate(self.database_lookups):
+            lookup_indexes.setdefault(lookup.name, []).append(index)
+        duplicate_lookups = {
+            name: indexes
+            for name, indexes in lookup_indexes.items()
+            if len(indexes) > 1
+        }
+        if duplicate_lookups:
+            details = "; ".join(
+                f"{name!r} at indexes {indexes}"
+                for name, indexes in duplicate_lookups.items()
+            )
+            raise ValueError(
+                "database_lookups contains duplicate names: " + details
+            )
+        lookup_names = set(lookup_indexes)
         database_check_names = {
             check.name for check in self.database_checks
         }
