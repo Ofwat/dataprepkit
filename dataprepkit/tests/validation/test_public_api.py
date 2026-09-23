@@ -923,6 +923,78 @@ def test_database_check_does_not_accept_conflicting_lookup_rows(tmp_path):
     ]
 
 
+def test_database_lookup_filters_scd2_rows_before_duplicate_detection(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Measure_Cd", "Measure_Value"])
+    workbook.active.append(["INN001", "TBC"])
+    workbook.save(candidate_path)
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE dim_measure "
+                "(Measure_Cd TEXT, Expected_Value_Type TEXT, Current_Ind INTEGER)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO dim_measure VALUES "
+                "('INN001', 'numeric', 0), "
+                "('INN001', 'text', 0), "
+                "('INN001', 'numeric', 1)"
+            )
+        )
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="process_data",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        columns=["Measure_Cd", "Measure_Value"],
+                    ),
+                )
+            ],
+            "database_lookups": [
+                DatabaseLookup(
+                    name="measure_dimension",
+                    table="dim_measure",
+                    key_columns={"Measure_Cd": "Measure_Cd"},
+                    value_columns=["Expected_Value_Type"],
+                    filters={"Current_Ind": 1},
+                )
+            ],
+            "database_checks": [
+                DatabaseCheck(
+                    name="measure_value_type",
+                    rule_code="measure_value_type",
+                    source_table="process_data",
+                    lookup="measure_dimension",
+                    column_validations=[
+                        {
+                            "column": "Measure_Value",
+                            "value_type_from": "Expected_Value_Type",
+                        }
+                    ],
+                )
+            ],
+        }
+    )
+
+    result = validate_excel(candidate_path, config, engine=engine)
+
+    assert [(event.rule_code, event.cell_reference) for event in result.errors] == [
+        ("measure_value_type", "B2"),
+    ]
+    assert not result.not_run
+
+
 @pytest.mark.parametrize(
     ("setup_sql", "expected_reason"),
     [

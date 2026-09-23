@@ -2815,7 +2815,11 @@ def _database_lookup_rows(lookup, source_entries, connection, cache):
             "DATABASE_LOOKUP_LIMIT",
             f"Lookup '{lookup.name}' exceeded its distinct key limit",
         )
-    cache_key = (lookup.name, tuple(sorted(map(repr, source_keys))))
+    cache_key = (
+        lookup.name,
+        tuple(sorted(map(repr, source_keys))),
+        tuple(sorted((column, repr(value)) for column, value in lookup.filters.items())),
+    )
     if cache_key in cache:
         return cache[cache_key], None
     if not source_keys:
@@ -2832,7 +2836,11 @@ def _database_lookup_rows(lookup, source_entries, connection, cache):
                 schema=lookup.schema_name,
             )
         }
-        required_columns = set(lookup.key_columns.values()) | set(lookup.value_columns)
+        required_columns = (
+            set(lookup.key_columns.values())
+            | set(lookup.value_columns)
+            | set(lookup.filters)
+        )
         missing = required_columns - columns
         if missing:
             return {}, (
@@ -2863,9 +2871,21 @@ def _database_lookup_rows(lookup, source_entries, connection, cache):
                 )
                 parameters[parameter] = value
             predicates.append("(" + " AND ".join(parts) + ")")
+        filter_parts = []
+        for index, (column, value) in enumerate(lookup.filters.items()):
+            parameter = f"filter_{index}"
+            filter_parts.append(
+                f"{_quote_sql_identifier(connection, column)} = :{parameter}"
+            )
+            parameters[parameter] = value
+        where_clause = " OR ".join(predicates)
+        if filter_parts:
+            where_clause = (
+                f"({where_clause}) AND " + " AND ".join(filter_parts)
+            )
         statement = text(
             f"SELECT {rendered_columns} FROM {rendered_table} "
-            f"WHERE {' OR '.join(predicates)}"
+            f"WHERE {where_clause}"
         )
         rows = connection.execute(statement, parameters).mappings().all()
     except Exception as error:

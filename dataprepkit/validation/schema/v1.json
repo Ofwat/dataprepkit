@@ -367,6 +367,7 @@
         "table": {"type": "string"},
         "key_columns": {"additionalProperties": {"type": "string"}, "minProperties": 1, "type": "object"},
         "value_columns": {"items": {"type": "string"}, "minItems": 1, "type": "array"},
+        "filters": {"additionalProperties": true, "type": "object"},
         "batch_size": {"default": 500, "maximum": 5000, "minimum": 1, "type": "integer"},
         "max_distinct_keys": {"default": 100000, "maximum": 100000, "minimum": 1, "type": "integer"},
         "timeout_seconds": {"default": 30, "minimum": 1, "type": "integer"},

@@ -502,6 +502,7 @@ class DatabaseLookup(_PublicModel):
     table: str
     key_columns: dict[str, str] = Field(min_length=1)
     value_columns: list[str] = Field(min_length=1)
+    filters: dict[str, Any] = Field(default_factory=dict)
     batch_size: int = 500
     max_distinct_keys: int = 100_000
     timeout_seconds: int = 30
@@ -521,6 +522,8 @@ class DatabaseLookup(_PublicModel):
             _validate_sql_identifier(lookup_column, "lookup key column")
         for column in self.value_columns:
             _validate_sql_identifier(column, "value column")
+        for column in self.filters:
+            _validate_sql_identifier(column, "filter column")
         if self.batch_size < 1 or self.batch_size > 5000:
             raise ValueError("batch_size must be between 1 and 5000")
         if self.max_distinct_keys < 1 or self.max_distinct_keys > 100_000:
