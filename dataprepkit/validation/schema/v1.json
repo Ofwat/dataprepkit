@@ -384,7 +384,8 @@
       "additionalProperties": false,
       "properties": {
         "column": {"type": "string"},
-        "value_type_from": {"type": "string"}
+        "value_type_from": {"type": "string"},
+        "null_policy": {"default": "error", "enum": ["error", "allow", "ignore"], "type": "string"}
       },
       "required": ["column", "value_type_from"],
       "title": "LookupColumnValidation",

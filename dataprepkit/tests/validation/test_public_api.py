@@ -995,6 +995,72 @@ def test_database_lookup_filters_scd2_rows_before_duplicate_detection(tmp_path):
     assert not result.not_run
 
 
+def test_database_value_type_allows_null_values_when_configured(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Measure_Cd", "Measure_Value"])
+    workbook.active.append(["INN001", None])
+    workbook.save(candidate_path)
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE dim_measure "
+                "(Measure_Cd TEXT, Expected_Value_Type TEXT)"
+            )
+        )
+        connection.execute(
+            text("INSERT INTO dim_measure VALUES ('INN001', 'numeric')")
+        )
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="process_data",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        columns=["Measure_Cd", "Measure_Value"],
+                    ),
+                )
+            ],
+            "database_lookups": [
+                DatabaseLookup(
+                    name="measure_dimension",
+                    table="dim_measure",
+                    key_columns={"Measure_Cd": "Measure_Cd"},
+                    value_columns=["Expected_Value_Type"],
+                )
+            ],
+            "database_checks": [
+                DatabaseCheck(
+                    name="measure_value_type",
+                    rule_code="measure_value_type",
+                    source_table="process_data",
+                    lookup="measure_dimension",
+                    column_validations=[
+                        {
+                            "column": "Measure_Value",
+                            "value_type_from": "Expected_Value_Type",
+                            "null_policy": "allow",
+                        }
+                    ],
+                )
+            ],
+        }
+    )
+
+    result = validate_excel(candidate_path, config, engine=engine)
+
+    assert result.is_valid
+    assert not result.errors
+    assert not result.not_run
+
+
 @pytest.mark.parametrize(
     ("setup_sql", "expected_reason"),
     [

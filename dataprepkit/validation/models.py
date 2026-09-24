@@ -551,6 +551,16 @@ class DatabaseLookup(_PublicModel):
 class LookupColumnValidation(_PublicModel):
     column: str
     value_type_from: str
+    null_policy: str = "error"
+
+    @field_validator("null_policy")
+    @classmethod
+    def validate_null_policy(cls, value):
+        if value not in {"error", "allow", "ignore"}:
+            raise ValueError(
+                "null_policy must be error, allow, or ignore"
+            )
+        return value
 
 
 class DatabaseDimension(_PublicModel):

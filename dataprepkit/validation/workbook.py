@@ -2986,7 +2986,6 @@ def _database_value_type_check(
 ):
     errors = []
     failed = False
-    del comparison
     source_key_columns = list(lookup_definition.key_columns)
     missing_source = [
         column for column in source_key_columns if column not in dataframe.columns
@@ -3078,6 +3077,11 @@ def _database_value_type_check(
                 )
                 continue
             value = row[validation.column]
+            if (
+                _normalise_comparison_value(value, comparison) is None
+                and validation.null_policy in {"allow", "ignore"}
+            ):
+                continue
             processed_counts[check.rule_code] = processed_counts.get(
                 check.rule_code, 0
             ) + 1
