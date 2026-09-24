@@ -3297,6 +3297,57 @@ def test_dependent_formula_check_is_not_run_when_structure_fails(tmp_path):
     assert result.not_run[0].expected_value == ["sheet_structure"]
 
 
+def test_dependent_formula_check_only_skips_sheets_with_structure_failures(
+    tmp_path,
+):
+    candidate_path = tmp_path / "candidate.xlsx"
+    reference_path = tmp_path / "reference.xlsx"
+
+    candidate = openpyxl.Workbook()
+    candidate.active.title = "Data"
+    candidate.active["A1"] = "value"
+    candidate.create_sheet("Other")["A1"] = "=SUM(A1)"
+    candidate.save(candidate_path)
+
+    reference = openpyxl.Workbook()
+    reference.active.title = "Data"
+    reference.active["A1"] = "value"
+    reference.active["B1"] = "extra"
+    reference.create_sheet("Other")["A1"] = "=SUM(A2)"
+    reference.save(reference_path)
+
+    config = make_config(
+        workbook_checks=[
+            WorkbookCheck(
+                rule_code="formula_difference",
+                enabled=True,
+                scope="overlapping_sheets",
+                depends_on=["sheet_structure"],
+            ),
+            WorkbookCheck(
+                rule_code="sheet_structure",
+                enabled=True,
+                scope="overlapping_sheets",
+            ),
+        ]
+    )
+
+    result = validate_excel(
+        candidate_path=candidate_path,
+        reference_path=reference_path,
+        config=config,
+    )
+
+    assert [(event.rule_code, event.sheet_name) for event in result.errors] == [
+        ("sheet_structure", "Data"),
+        ("formula_difference", "Other"),
+    ]
+    assert [
+        (event.rule_code, event.sheet_name, event.reason)
+        for event in result.not_run
+    ] == [("formula_difference", "Data", "DEPENDENCY_FAILED")]
+
+
 def test_rule_dependencies_reject_cycles():
     config = make_config(workbook_checks=[]).model_dump(mode="json")
     config["workbook_checks"] = [

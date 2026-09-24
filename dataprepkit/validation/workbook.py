@@ -1174,19 +1174,27 @@ def validate_excel(
                 )
                 complete = False
         rule_outcomes = {}
+        structure_mismatched_sheets = None
         workbook_checks = _ordered_workbook_checks(
             resolved_config.workbook_checks
         )
         for check_index, check in enumerate(workbook_checks):
-            if any(
-                rule_outcomes.get(dependency) != "passed"
+            failed_dependencies = [
+                dependency
                 for dependency in check.depends_on
-            ):
-                failed_dependencies = [
-                    dependency
-                    for dependency in check.depends_on
-                    if rule_outcomes.get(dependency) != "passed"
-                ]
+                if rule_outcomes.get(dependency) != "passed"
+            ]
+            per_sheet_structure_dependency = (
+                check.rule_code == "formula_difference"
+                and "sheet_structure" in check.depends_on
+                and rule_outcomes.get("sheet_structure") == "failed"
+                and structure_mismatched_sheets is not None
+                and not any(
+                    dependency != "sheet_structure"
+                    for dependency in failed_dependencies
+                )
+            )
+            if failed_dependencies and not per_sheet_structure_dependency:
                 dependency_reason = (
                     "DEPENDENCY_FAILED"
                     if any(
@@ -1364,6 +1372,7 @@ def validate_excel(
                     sheet.title: sheet
                     for sheet in formula_workbook.worksheets
                 }
+                structure_mismatched_sheets = set()
                 for candidate_sheet in value_workbook.worksheets:
                     reference_sheet = reference_sheets.get(candidate_sheet.title)
                     if reference_sheet is None:
@@ -1378,6 +1387,7 @@ def validate_excel(
                     )
                     if actual_shape == expected_shape:
                         continue
+                    structure_mismatched_sheets.add(candidate_sheet.title)
                     errors.append(
                         ValidationEvent(
                             rule_code="sheet_structure",
@@ -1427,6 +1437,21 @@ def validate_excel(
                 for candidate_sheet in formula_workbook.worksheets:
                     reference_sheet = reference_sheets.get(candidate_sheet.title)
                     if reference_sheet is None:
+                        continue
+                    if candidate_sheet.title in (structure_mismatched_sheets or set()):
+                        not_run.append(
+                            ValidationEvent(
+                                rule_code="formula_difference",
+                                status="NOT_RUN",
+                                reason="DEPENDENCY_FAILED",
+                                sheet_name=candidate_sheet.title,
+                                expected_value=["sheet_structure"],
+                                description=(
+                                    "Formula comparison skipped because the "
+                                    "sheet structure differs from the reference"
+                                ),
+                            )
+                        )
                         continue
                     for row_number, column_number in _comparison_coordinates(
                         candidate_sheet,
