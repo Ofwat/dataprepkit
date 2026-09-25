@@ -3,14 +3,18 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass, field
+from functools import lru_cache
 from numbers import Number
+from colorsys import hls_to_rgb, rgb_to_hls
 import re
 import unicodedata
+from xml.etree import ElementTree as ET
 from pathlib import Path
 from zipfile import ZipFile
 
 import openpyxl
 import pandas as pd
+from openpyxl.styles.colors import COLOR_INDEX
 from openpyxl.utils.cell import (
     column_index_from_string,
     get_column_letter,
@@ -1542,7 +1546,7 @@ def validate_excel(
                             cell.data_type != "f"
                             or not any(
                                 _color_within_tolerance(
-                                    _cell_fill_rgb(cell),
+                                    _cell_fill_rgb(formula_workbook, cell),
                                     expected,
                                     tolerance,
                                 )
@@ -1582,7 +1586,7 @@ def validate_excel(
                     if not _sheet_in_scope(sheet.title, check.scope):
                         continue
                     for cell in value_resolution.cells(sheet):
-                        actual_color = _cell_fill_rgb(cell)
+                        actual_color = _cell_fill_rgb(value_workbook, cell)
                         if actual_color is None or not any(
                             _color_within_tolerance(actual_color, expected, tolerance)
                             for expected in colors
@@ -3337,13 +3341,77 @@ def _hex_rgb(value):
     return tuple(int(digits[index:index + 2], 16) for index in (0, 2, 4))
 
 
-def _cell_fill_rgb(cell):
+@lru_cache(maxsize=32)
+def _theme_colour_hex(theme_xml, theme_index):
+    if not theme_xml or theme_index is None:
+        return None
+
+    namespace = {
+        "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+    }
+    root = ET.fromstring(theme_xml)
+    colour_scheme = root.find(".//a:clrScheme", namespace)
+    if colour_scheme is None:
+        return None
+
+    theme_colours = list(colour_scheme)
+    if theme_index >= len(theme_colours):
+        return None
+
+    colour_node = next(iter(theme_colours[theme_index]), None)
+    if colour_node is None:
+        return None
+
+    value = colour_node.attrib.get("val")
+    if not re.fullmatch(r"[0-9A-Fa-f]{6}", value or ""):
+        value = colour_node.attrib.get("lastClr")
+    if not re.fullmatch(r"[0-9A-Fa-f]{6}", value or ""):
+        return None
+
+    return value.upper()
+
+
+def _theme_rgb(workbook, theme_index, tint=0.0):
+    value = _theme_colour_hex(
+        getattr(workbook, "loaded_theme", None),
+        theme_index,
+    )
+    if value is None:
+        return None
+
+    red, green, blue = (
+        int(value[index:index + 2], 16) / 255
+        for index in (0, 2, 4)
+    )
+    hue, lightness, saturation = rgb_to_hls(red, green, blue)
+    tint = float(tint or 0.0)
+    if tint >= 0:
+        lightness += (1 - lightness) * tint
+    else:
+        lightness *= 1 + tint
+    red, green, blue = hls_to_rgb(
+        hue,
+        max(0.0, min(1.0, lightness)),
+        saturation,
+    )
+    return tuple(round(value * 255) for value in (red, green, blue))
+
+
+def _cell_fill_rgb(workbook, cell):
     fill = cell.fill
     color = fill.fgColor
-    if fill.fill_type != "solid" or color.type != "rgb" or not color.rgb:
+    if fill.fill_type != "solid":
         return None
-    digits = color.rgb[-6:]
-    return tuple(int(digits[index:index + 2], 16) for index in (0, 2, 4))
+    if color.type == "rgb" and color.rgb:
+        return _hex_rgb(color.rgb)
+    if color.type == "theme":
+        return _theme_rgb(workbook, color.theme, color.tint)
+    if color.type == "indexed" and color.indexed is not None:
+        if color.indexed >= len(COLOR_INDEX):
+            return None
+        indexed = COLOR_INDEX[color.indexed]
+        return _hex_rgb(indexed)
+    return None
 
 
 def _color_within_tolerance(actual, expected, tolerance):

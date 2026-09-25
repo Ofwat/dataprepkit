@@ -6,7 +6,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import openpyxl
 import pytest
 from sqlalchemy import create_engine, event, text
-from openpyxl.styles import PatternFill
+from openpyxl.styles import Color, PatternFill
 from openpyxl.worksheet.table import Table
 from openpyxl.worksheet.formula import ArrayFormula
 from openpyxl.chart import BarChart, Reference
@@ -4634,6 +4634,87 @@ def test_required_filled_cells_reports_blank_matching_fill(tmp_path):
 
     assert [(event.rule_code, event.cell_reference) for event in result.errors] == [
         ("required_filled_cells", "A2"),
+    ]
+
+
+def test_required_filled_cells_normalises_theme_fill_to_hex(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Inputs"
+    sheet["A1"].fill = PatternFill(
+        fill_type="solid",
+        fgColor=Color(theme=1),
+    )
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "sheet_policy": SheetPolicy(
+                required_selectors=[],
+                ignored_selectors=[],
+                selector_match_action="all",
+            ),
+            "workbook_checks": [
+                WorkbookCheck(
+                    rule_code="required_filled_cells",
+                    enabled=True,
+                    scope="all_sheets",
+                    options={
+                        "fill_colors": ["#FFFFFF"],
+                        "tolerance_percent": 0,
+                    },
+                )
+            ],
+            "enabled_rules": None,
+        }
+    )
+
+    result = validate_excel(candidate_path, config=config)
+
+    assert [(event.rule_code, event.cell_reference) for event in result.errors] == [
+        ("required_filled_cells", "A1"),
+    ]
+
+
+def test_unexpected_formula_normalises_theme_fill_to_hex(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Inputs"
+    sheet["A1"] = "=1"
+    sheet["A1"].fill = PatternFill(
+        fill_type="solid",
+        fgColor=Color(theme=1),
+    )
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "sheet_policy": SheetPolicy(
+                required_selectors=[],
+                ignored_selectors=[],
+                selector_match_action="all",
+            ),
+            "workbook_checks": [
+                WorkbookCheck(
+                    rule_code="unexpected_formula",
+                    enabled=True,
+                    scope="all_sheets",
+                    options={
+                        "fill_colors": ["#FFFFFF"],
+                        "tolerance_percent": 0,
+                    },
+                )
+            ],
+            "enabled_rules": None,
+        }
+    )
+
+    result = validate_excel(candidate_path, config=config)
+
+    assert [(event.rule_code, event.cell_reference) for event in result.errors] == [
+        ("unexpected_formula", "A1"),
     ]
 
 
