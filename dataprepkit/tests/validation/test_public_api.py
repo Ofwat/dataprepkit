@@ -480,6 +480,77 @@ def test_database_checks_reuse_lookup_results(tmp_path):
     assert len(lookup_selects) == 1
 
 
+def test_dimension_value_check_reports_missing_database_dimension_value(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Business_Type_Cd"])
+    workbook.active.append(["AddCtrl"])
+    workbook.active.append(["ADDN2"])
+    workbook.save(candidate_path)
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE dim_business_type "
+                "(Business_Type_Cd TEXT, Business_Type_Id INTEGER)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO dim_business_type VALUES "
+                "('AddCtrl', 1)"
+            )
+        )
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="process_data",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        columns=["Business_Type_Cd"],
+                    ),
+                )
+            ],
+            "database_lookups": [
+                DatabaseLookup(
+                    name="business_type_dimension",
+                    table="dim_business_type",
+                    key_columns={
+                        "Business_Type_Cd": "Business_Type_Cd",
+                    },
+                    value_columns=["Business_Type_Id"],
+                )
+            ],
+            "database_checks": [
+                DatabaseCheck(
+                    name="business_type_exists",
+                    rule_code="dimension_value",
+                    source_table="process_data",
+                    lookup="business_type_dimension",
+                    column="Business_Type_Cd",
+                )
+            ],
+        }
+    )
+
+    result = validate_excel(candidate_path, config, engine=engine)
+
+    assert [(event.rule_code, event.cell_reference) for event in result.errors] == [
+        ("dimension_value", "A3"),
+    ]
+    assert result.errors[0].actual_value == "ADDN2"
+    assert result.errors[0].metadata["lookup_name"] == (
+        "business_type_dimension"
+    )
+    assert "Business_Type_Cd='ADDN2'" in result.errors[0].description
+
+
 def test_database_check_can_report_a_warning_severity(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()

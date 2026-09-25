@@ -2820,6 +2820,16 @@ def _run_database_checks_on_connection(config, dataframe_cache, connection):
                     dimension_rows,
                     processed_counts,
                 )
+            elif check.rule_code == "dimension_value":
+                check_errors, check_failed = _database_dimension_value_check(
+                    check,
+                    dataframe,
+                    entry,
+                    severity,
+                    lookup,
+                    lookup_rows,
+                    processed_counts,
+                )
             else:
                 check_errors, check_failed = _database_value_type_check(
                     check,
@@ -3164,6 +3174,72 @@ def _database_value_type_check(
                     ),
                 )
             )
+    return errors, failed
+
+
+def _database_dimension_value_check(
+    check,
+    dataframe,
+    entry,
+    severity,
+    lookup_definition,
+    lookup_rows,
+    processed_counts,
+):
+    errors = []
+    failed = False
+    column = check.column
+    if column not in dataframe.columns:
+        return [
+            ValidationEvent(
+                rule_code="missing_column",
+                severity=severity,
+                sheet_name=entry["sheet_name"],
+                expected_value=column,
+                description=(
+                    f"Database dimension column '{column}' was not found "
+                    "in the loaded table"
+                ),
+            )
+        ], True
+
+    column_number = entry["column_number"].get(column)
+    for row_index, row in dataframe.iterrows():
+        value = row[column]
+        if _is_null_value(value):
+            continue
+        processed_counts[check.rule_code] = (
+            processed_counts.get(check.rule_code, 0) + 1
+        )
+        if (value,) in lookup_rows:
+            continue
+        failed = True
+        excel_row = entry["header_row"] + 1 + int(row_index)
+        errors.append(
+            ValidationEvent(
+                rule_code=check.rule_code,
+                severity=severity,
+                sheet_name=entry["sheet_name"],
+                cell_reference=(
+                    f"{get_column_letter(column_number)}{excel_row}"
+                    if column_number is not None else None
+                ),
+                row_number=excel_row,
+                column_number=column_number,
+                actual_value=value,
+                expected_value=lookup_definition.table,
+                metadata={
+                    "source_table": check.source_table,
+                    "lookup_name": check.lookup,
+                    "lookup_table": lookup_definition.table,
+                    "column": column,
+                },
+                description=(
+                    f"Value {column}={value!r} was not found in lookup "
+                    f"'{check.lookup}'"
+                ),
+            )
+        )
     return errors, failed
 
 

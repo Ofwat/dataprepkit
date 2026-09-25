@@ -579,6 +579,7 @@ class DatabaseCheck(_PublicModel):
     rule_code: str
     source_table: str
     lookup: str | None = None
+    column: str | None = None
     column_validations: list[LookupColumnValidation] = Field(
         default_factory=list
     )
@@ -600,10 +601,17 @@ class DatabaseCheck(_PublicModel):
                 raise ValueError(
                     "conflicting_duplicate requires dimensions and value_columns"
                 )
+        elif self.rule_code == "dimension_value":
+            if not self.lookup or not self.column:
+                raise ValueError(
+                    "dimension_value requires lookup and column"
+                )
         elif not self.lookup or not self.column_validations:
             raise ValueError(
                 "database value checks require lookup and column_validations"
             )
+        if self.column:
+            _validate_sql_identifier(self.column, "column")
         for dimension in self.dimensions:
             if not dimension.source_column or not dimension.canonical_column:
                 raise ValueError(
@@ -824,6 +832,12 @@ class WorkbookValidationConfig(_PublicModel):
             }
             if check.lookup is not None:
                 lookup = lookups_by_name[check.lookup]
+                if check.rule_code == "dimension_value":
+                    if lookup.key_columns.keys() != {check.column}:
+                        raise ValueError(
+                            "dimension_value lookup must map exactly its "
+                            "configured column"
+                        )
                 for validation in check.column_validations:
                     if validation.value_type_from not in lookup.value_columns:
                         raise ValueError(

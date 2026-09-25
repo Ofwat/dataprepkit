@@ -409,6 +409,7 @@
         "rule_code": {"type": "string"},
         "source_table": {"type": "string"},
         "lookup": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null},
+        "column": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null},
         "column_validations": {"items": {"$ref": "#/$defs/LookupColumnValidation"}, "type": "array"},
         "dimensions": {"items": {"$ref": "#/$defs/DatabaseDimension"}, "type": "array"},
         "value_columns": {"items": {"type": "string"}, "type": "array"},
