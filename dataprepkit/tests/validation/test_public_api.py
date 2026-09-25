@@ -2724,6 +2724,50 @@ def test_validate_excel_reports_missing_table_header(tmp_path):
     assert [event.rule_code for event in result.errors] == ["column_header"]
     assert result.errors[0].sheet_name == "Data"
     assert result.errors[0].actual_value == ["Unit", "Other"]
+    assert result.errors[0].description == (
+        "Table 'outputs' is missing required columns: reference"
+    )
+
+
+def test_validate_excel_reports_table_header_order_separately(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Reference", "Unit"])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="outputs",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    column_definitions=[
+                        ColumnDefinition(name="unit", aliases=["Unit"]),
+                        ColumnDefinition(
+                            name="reference",
+                            aliases=["Reference"],
+                        ),
+                    ],
+                    header_policy=HeaderPolicy(
+                        required_columns=["unit", "reference"],
+                        match_mode="contains_in_order",
+                        extra_column_action="allowed",
+                    ),
+                )
+            ]
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert result.is_valid is False
+    assert [event.rule_code for event in result.errors] == ["column_header"]
+    assert result.errors[0].description == (
+        "Table 'outputs' required columns are out of order; "
+        "expected order: unit, reference"
+    )
 
 
 def test_validate_excel_reports_missing_required_table(tmp_path):

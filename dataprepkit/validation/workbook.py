@@ -590,14 +590,18 @@ def validate_excel(
                         missing_columns.append(logical_name)
                     else:
                         required_positions.append(position)
+                order_issue = False
                 if table.header_policy.match_mode == "exact_order":
-                    if required_positions != list(range(len(required_positions))):
-                        missing_columns.append("required columns are out of order")
+                    order_issue = (
+                        not missing_columns
+                        and required_positions != list(range(len(required_positions)))
+                    )
                 elif (
                     table.header_policy.match_mode == "contains_in_order"
+                    and not missing_columns
                     and required_positions != sorted(required_positions)
                 ):
-                    missing_columns.append("required columns are out of order")
+                    order_issue = True
                 # Missing required columns are reported structurally, but do
                 # not prevent loading the columns that are present. Physical
                 # header corruption does prevent a reliable load.
@@ -620,8 +624,24 @@ def validate_excel(
                         actual_value=headers,
                         expected_value=table.header_policy.required_columns,
                         description=(
-                            f"Table '{table.name}' header validation failed: "
+                            f"Table '{table.name}' is missing required columns: "
                             f"{', '.join(missing_columns)}"
+                        ),
+                    )
+                    if table.header_policy.missing_column_action == "warning":
+                        warnings.append(event)
+                    else:
+                        errors.append(event)
+                if order_issue and header_rule_enabled:
+                    event = ValidationEvent(
+                        rule_code="column_header",
+                        sheet_name=sheet_name,
+                        actual_value=headers,
+                        expected_value=table.header_policy.required_columns,
+                        description=(
+                            f"Table '{table.name}' required columns are out of "
+                            "order; expected order: "
+                            + ", ".join(table.header_policy.required_columns)
                         ),
                     )
                     if table.header_policy.missing_column_action == "warning":
