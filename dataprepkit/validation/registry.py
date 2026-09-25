@@ -102,6 +102,11 @@ _BUILT_IN_RULES = (
         ),
     },
     {
+        "rule_code": "missing_identity_value",
+        "attachment": "tables.table_validations",
+        "description": "Report blank values in a configured duplicate identity.",
+    },
+    {
         "rule_code": "required_filled_cells",
         "attachment": "workbook_checks",
         "description": "Require cells with configured fill colours to be populated.",

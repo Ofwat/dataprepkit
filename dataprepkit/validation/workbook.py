@@ -2202,6 +2202,45 @@ def _run_table_validations(
                 else None
                 for value in (row[column] for column in key_columns)
             )
+            missing_key_columns = [
+                column
+                for column, value in zip(key_columns, key)
+                if value is None
+            ]
+            if missing_key_columns:
+                processed_counts["missing_identity_value"] = (
+                    processed_counts.get("missing_identity_value", 0) + 1
+                )
+                column = missing_key_columns[0]
+                column_number = column_numbers.get(column)
+                excel_row = table.header_row + 1 + int(row_index)
+                errors.append(
+                    ValidationEvent(
+                        rule_code="missing_identity_value",
+                        severity=(
+                            validation.severity
+                            or config.rule_severity.get("missing_identity_value")
+                            or config.rule_severity.get(validation.rule_code)
+                        ),
+                        sheet_name=sheet_name,
+                        cell_reference=(
+                            f"{get_column_letter(column_number)}{excel_row}"
+                            if column_number is not None else None
+                        ),
+                        row_number=excel_row,
+                        column_number=column_number,
+                        actual_value={
+                            key_column: row[key_column]
+                            for key_column in missing_key_columns
+                        },
+                        expected_value="non-null identity values",
+                        description=(
+                            "Identity key contains blank values in: "
+                            + ", ".join(missing_key_columns)
+                        ),
+                    )
+                )
+                continue
             values = tuple(
                 _normalise_comparison_value(value, config.comparison)
                 if value is not None and not pd.isna(value)

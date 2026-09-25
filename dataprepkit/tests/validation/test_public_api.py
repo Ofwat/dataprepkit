@@ -1195,6 +1195,7 @@ def test_public_rule_catalogue_lists_all_builtin_checks():
             "max_length",
             "value_type",
             "conflicting_duplicate",
+            "missing_identity_value",
             "required_filled_cells",
             "unexpected_formula",
             "values_in_reference",
@@ -4668,6 +4669,57 @@ def test_conflicting_duplicate_table_validation_reports_different_values(tmp_pat
     assert [(event.rule_code, event.cell_reference) for event in result.errors] == [
         ("conflicting_duplicate", "C3"),
     ]
+
+
+def test_conflicting_duplicate_reports_incomplete_identity_and_skips_group(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    sheet = workbook.active
+    sheet.append(["Measure_Cd", "Organisation_Cd", "Measure_Value"])
+    sheet.append(["INN001", None, 100])
+    sheet.append(["INN001", None, 125])
+    workbook.save(candidate_path)
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="measurements",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        infer_columns=True,
+                    ),
+                    table_validations=[
+                        TableValidation(
+                            rule_code="conflicting_duplicate",
+                            key_columns=ColumnSelector(
+                                mode="pattern",
+                                pattern=r".*_Cd$",
+                            ),
+                            value_columns=["Measure_Value"],
+                        )
+                    ],
+                )
+            ],
+            "rule_severity": {
+                "missing_identity_value": "error",
+            },
+        }
+    )
+
+    result = validate_excel(candidate_path, config=config)
+
+    assert [event.rule_code for event in result.errors] == [
+        "missing_identity_value",
+        "missing_identity_value",
+    ]
+    assert all(
+        event.cell_reference == cell
+        for event, cell in zip(result.errors, ["B2", "B3"])
+    )
 
 
 def test_required_filled_cells_reports_blank_matching_fill(tmp_path):
