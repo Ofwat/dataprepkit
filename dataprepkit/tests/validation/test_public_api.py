@@ -3595,6 +3595,7 @@ def test_validate_excel_runs_dataframe_max_length_check(tmp_path):
     assert result.errors[0].sheet_name == "Measurements"
     assert result.errors[0].cell_reference == "A2"
     assert result.errors[0].row_number == 2
+    assert len(result.errors[0].actual_value) == 4000
     assert result.errors[0].expected_value == 4000
 
 

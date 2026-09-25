@@ -2039,7 +2039,10 @@ def _run_dataframe_column_validations(
                         cell_reference=cell_reference,
                         row_number=excel_row,
                         column_number=column_number,
-                        actual_value=value,
+                        actual_value=_truncate_actual_value(
+                            value,
+                            validation.max_length,
+                        ),
                         expected_value=validation.max_length,
                         description=(
                             f"Value in column '{validation.column}' exceeds "
@@ -2504,7 +2507,10 @@ def _run_dataframe_checks(
                             cell_reference=f"{get_column_letter(column_number)}{excel_row}",
                             row_number=excel_row,
                             column_number=column_number,
-                            actual_value=value,
+                            actual_value=_truncate_actual_value(
+                                value,
+                                check.max_length,
+                            ),
                             expected_value=check.max_length,
                             description=(
                                 f"Value in column '{check.column}' exceeds "
@@ -3410,6 +3416,12 @@ def _is_numeric_value(value):
             return False
         return parsed.is_finite() and bool(value.strip())
     return False
+
+
+def _truncate_actual_value(value, max_length):
+    if isinstance(value, str):
+        return value[:max_length]
+    return value
 
 
 def _hex_rgb(value):
