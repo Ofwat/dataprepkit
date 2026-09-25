@@ -551,6 +551,72 @@ def test_dimension_value_check_reports_missing_database_dimension_value(tmp_path
     assert "Business_Type_Cd='ADDN2'" in result.errors[0].description
 
 
+def test_dimension_value_check_reports_blank_dimension_value(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Business_Type_Cd"])
+    workbook.active.append([None])
+    workbook.active.append(["AddCtrl"])
+    workbook.save(candidate_path)
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE dim_business_type "
+                "(Business_Type_Cd TEXT, Business_Type_Id INTEGER)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO dim_business_type VALUES "
+                "('AddCtrl', 1)"
+            )
+        )
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="process_data",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        columns=["Business_Type_Cd"],
+                    ),
+                )
+            ],
+            "database_lookups": [
+                DatabaseLookup(
+                    name="business_type_dimension",
+                    table="dim_business_type",
+                    key_columns={
+                        "Business_Type_Cd": "Business_Type_Cd",
+                    },
+                    value_columns=["Business_Type_Id"],
+                )
+            ],
+            "database_checks": [
+                DatabaseCheck(
+                    name="business_type_exists",
+                    rule_code="dimension_value",
+                    source_table="process_data",
+                    lookup="business_type_dimension",
+                    column="Business_Type_Cd",
+                )
+            ],
+        }
+    )
+
+    result = validate_excel(candidate_path, config, engine=engine)
+
+    assert [(event.rule_code, event.cell_reference) for event in result.errors] == [
+        ("missing_dimension_value", "A2"),
+    ]
+
+
 def test_database_check_can_report_a_warning_severity(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()
@@ -1196,6 +1262,7 @@ def test_public_rule_catalogue_lists_all_builtin_checks():
             "value_type",
             "conflicting_duplicate",
             "missing_identity_value",
+            "missing_dimension_value",
             "required_filled_cells",
             "unexpected_formula",
             "values_in_reference",

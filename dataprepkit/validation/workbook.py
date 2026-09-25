@@ -2870,6 +2870,7 @@ def _run_database_checks_on_connection(config, dataframe_cache, connection):
                     check,
                     dataframe,
                     entry,
+                    config.comparison,
                     severity,
                     lookup,
                     lookup_rows,
@@ -3226,6 +3227,7 @@ def _database_dimension_value_check(
     check,
     dataframe,
     entry,
+    comparison,
     severity,
     lookup_definition,
     lookup_rows,
@@ -3251,7 +3253,39 @@ def _database_dimension_value_check(
     column_number = entry["column_number"].get(column)
     for row_index, row in dataframe.iterrows():
         value = row[column]
-        if _is_null_value(value):
+        if _normalise_comparison_value(value, comparison) is None:
+            if check.null_policy == "ignore":
+                continue
+            failed = True
+            processed_counts["missing_dimension_value"] = (
+                processed_counts.get("missing_dimension_value", 0) + 1
+            )
+            excel_row = entry["header_row"] + 1 + int(row_index)
+            errors.append(
+                ValidationEvent(
+                    rule_code="missing_dimension_value",
+                    severity=severity,
+                    sheet_name=entry["sheet_name"],
+                    cell_reference=(
+                        f"{get_column_letter(column_number)}{excel_row}"
+                        if column_number is not None else None
+                    ),
+                    row_number=excel_row,
+                    column_number=column_number,
+                    actual_value=value,
+                    expected_value="non-null dimension value",
+                    metadata={
+                        "source_table": check.source_table,
+                        "lookup_name": check.lookup,
+                        "lookup_table": lookup_definition.table,
+                        "column": column,
+                    },
+                    description=(
+                        f"Blank value in dimension column '{column}' cannot "
+                        f"be checked against lookup '{check.lookup}'"
+                    ),
+                )
+            )
             continue
         processed_counts[check.rule_code] = (
             processed_counts.get(check.rule_code, 0) + 1
