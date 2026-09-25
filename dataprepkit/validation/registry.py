@@ -107,11 +107,6 @@ _BUILT_IN_RULES = (
         "description": "Report blank values in a configured duplicate identity.",
     },
     {
-        "rule_code": "missing_dimension_value",
-        "attachment": "database_checks",
-        "description": "Report blank values in a configured database dimension column.",
-    },
-    {
         "rule_code": "required_filled_cells",
         "attachment": "workbook_checks",
         "description": "Require cells with configured fill colours to be populated.",

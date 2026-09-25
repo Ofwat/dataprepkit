@@ -580,7 +580,6 @@ class DatabaseCheck(_PublicModel):
     source_table: str
     lookup: str | None = None
     column: str | None = None
-    null_policy: str = "error"
     column_validations: list[LookupColumnValidation] = Field(
         default_factory=list
     )
@@ -613,8 +612,6 @@ class DatabaseCheck(_PublicModel):
             )
         if self.column:
             _validate_sql_identifier(self.column, "column")
-        if self.null_policy not in {"error", "ignore"}:
-            raise ValueError("null_policy must be error or ignore")
         for dimension in self.dimensions:
             if not dimension.source_column or not dimension.canonical_column:
                 raise ValueError(

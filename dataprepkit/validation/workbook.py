@@ -2901,7 +2901,12 @@ def _run_database_checks_on_connection(config, dataframe_cache, connection):
     )
 
 
-def _database_lookup_rows(lookup, source_entries, connection, cache):
+def _database_lookup_rows(
+    lookup,
+    source_entries,
+    connection,
+    cache,
+):
     source_keys = set()
     source_columns = list(lookup.key_columns)
     for entry in source_entries.values():
@@ -2912,8 +2917,6 @@ def _database_lookup_rows(lookup, source_entries, connection, cache):
                 f"Source table is missing a lookup key column for '{lookup.name}'",
             )
         for values in dataframe[source_columns].itertuples(index=False, name=None):
-            if any(_is_null_value(value) for value in values):
-                continue
             source_keys.add(tuple(values))
     if len(source_keys) > lookup.max_distinct_keys:
         return {}, (
@@ -3091,8 +3094,6 @@ def _database_value_type_check(
         return errors, True
     for row_index, row in dataframe.iterrows():
         source_key = tuple(row[column] for column in source_key_columns)
-        if any(_is_null_value(value) for value in source_key):
-            continue
         lookup_value = lookup_rows.get(source_key)
         if lookup_value is None:
             failed = True
@@ -3253,40 +3254,6 @@ def _database_dimension_value_check(
     column_number = entry["column_number"].get(column)
     for row_index, row in dataframe.iterrows():
         value = row[column]
-        if _normalise_comparison_value(value, comparison) is None:
-            if check.null_policy == "ignore":
-                continue
-            failed = True
-            processed_counts["missing_dimension_value"] = (
-                processed_counts.get("missing_dimension_value", 0) + 1
-            )
-            excel_row = entry["header_row"] + 1 + int(row_index)
-            errors.append(
-                ValidationEvent(
-                    rule_code="missing_dimension_value",
-                    severity=severity,
-                    sheet_name=entry["sheet_name"],
-                    cell_reference=(
-                        f"{get_column_letter(column_number)}{excel_row}"
-                        if column_number is not None else None
-                    ),
-                    row_number=excel_row,
-                    column_number=column_number,
-                    actual_value=value,
-                    expected_value="non-null dimension value",
-                    metadata={
-                        "source_table": check.source_table,
-                        "lookup_name": check.lookup,
-                        "lookup_table": lookup_definition.table,
-                        "column": column,
-                    },
-                    description=(
-                        f"Blank value in dimension column '{column}' cannot "
-                        f"be checked against lookup '{check.lookup}'"
-                    ),
-                )
-            )
-            continue
         processed_counts[check.rule_code] = (
             processed_counts.get(check.rule_code, 0) + 1
         )
@@ -3353,9 +3320,6 @@ def _database_conflicting_duplicates(
                 )
                 return errors, True
             source_value = row[source_column]
-            if _is_null_value(source_value):
-                missing_lookup = True
-                break
             lookup_key = (source_value,)
             lookup_value = rows.get(lookup_key)
             if lookup_value is None:

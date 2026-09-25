@@ -557,6 +557,7 @@ def test_dimension_value_check_reports_blank_dimension_value(tmp_path):
     workbook.active.title = "Data"
     workbook.active.append(["Business_Type_Cd"])
     workbook.active.append([None])
+    workbook.active.append(["NA"])
     workbook.active.append(["AddCtrl"])
     workbook.save(candidate_path)
 
@@ -575,7 +576,15 @@ def test_dimension_value_check_reports_blank_dimension_value(tmp_path):
             )
         )
 
-    config = make_config().model_copy(
+    base_config = make_config()
+    base_config = base_config.model_copy(
+        update={
+            "comparison": base_config.comparison.model_copy(
+                update={"null_tokens": ["NA"]}
+            )
+        }
+    )
+    config = base_config.model_copy(
         update={
             "tables": [
                 TableConfig(
@@ -612,8 +621,12 @@ def test_dimension_value_check_reports_blank_dimension_value(tmp_path):
 
     result = validate_excel(candidate_path, config, engine=engine)
 
-    assert [(event.rule_code, event.cell_reference) for event in result.errors] == [
-        ("missing_dimension_value", "A2"),
+    assert [
+        (event.rule_code, event.cell_reference)
+        for event in result.errors
+    ] == [
+        ("dimension_value", "A2"),
+        ("dimension_value", "A3"),
     ]
 
 
@@ -1198,6 +1211,34 @@ def test_database_value_type_allows_null_values_when_configured(tmp_path):
     assert not result.not_run
 
 
+def test_database_value_type_reports_null_dimension_keys(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Measure_Cd", "Measure_Value"])
+    workbook.active.append([None, 125])
+    workbook.save(candidate_path)
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE dim_measure "
+                "(Measure_Cd TEXT, Expected_Value_Type TEXT)"
+            )
+        )
+
+    result = validate_excel(
+        candidate_path,
+        make_database_type_config(),
+        engine=engine,
+    )
+
+    assert [(event.rule_code, event.cell_reference) for event in result.errors] == [
+        ("database_missing_lookup", "A2"),
+    ]
+
+
 @pytest.mark.parametrize(
     ("setup_sql", "expected_reason"),
     [
@@ -1262,7 +1303,6 @@ def test_public_rule_catalogue_lists_all_builtin_checks():
             "value_type",
             "conflicting_duplicate",
             "missing_identity_value",
-            "missing_dimension_value",
             "required_filled_cells",
             "unexpected_formula",
             "values_in_reference",
