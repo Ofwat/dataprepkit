@@ -4076,24 +4076,12 @@ def _table_data_end_row(
                 )
                 if cell.column in column_numbers
                 and cell.row > header_row
-                and cell.value is not None
+                and cell.value not in (None, "")
             ]
-            rows.extend(
-                cell.row
-                for cell in (
-                    formula_resolution.cells(formula_sheet)
-                    if formula_resolution is not None
-                    else _stored_cells(formula_sheet)
-                )
-                if cell.column in column_numbers
-                and cell.row > header_row
-                and cell.value is not None
-            )
             return max(rows, default=header_row)
         for row_number in range(max_row, header_row, -1):
             if any(
-                value_sheet.cell(row_number, column).value is not None
-                or formula_sheet.cell(row_number, column).value is not None
+                value_sheet.cell(row_number, column).value not in (None, "")
                 for column in column_numbers
             ):
                 return row_number

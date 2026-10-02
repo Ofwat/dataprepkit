@@ -630,6 +630,66 @@ def test_dimension_value_check_reports_blank_dimension_value(tmp_path):
     ]
 
 
+def test_empty_formula_does_not_extend_last_non_empty_table_boundary(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Measure_Cd"])
+    workbook.active.append(["INN001"])
+    workbook.active["A10"] = '=""'
+    workbook.save(candidate_path)
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE dim_measure "
+                "(Measure_Cd TEXT, Measure_Id INTEGER)"
+            )
+        )
+        connection.execute(
+            text("INSERT INTO dim_measure VALUES ('INN001', 1)")
+        )
+
+    config = make_config().model_copy(
+        update={
+            "tables": [
+                TableConfig(
+                    name="process_data",
+                    sheet_selector=SheetSelector(mode="exact", value="Data"),
+                    header_row=1,
+                    data_boundary=DataBoundary(
+                        mode="last_non_empty_row",
+                        columns=["Measure_Cd"],
+                    ),
+                )
+            ],
+            "database_lookups": [
+                DatabaseLookup(
+                    name="measure_dimension",
+                    table="dim_measure",
+                    key_columns={"Measure_Cd": "Measure_Cd"},
+                    value_columns=["Measure_Id"],
+                )
+            ],
+            "database_checks": [
+                DatabaseCheck(
+                    name="measure_exists",
+                    rule_code="dimension_value",
+                    source_table="process_data",
+                    lookup="measure_dimension",
+                    column="Measure_Cd",
+                )
+            ],
+        }
+    )
+
+    result = validate_excel(candidate_path, config, engine=engine)
+
+    assert not result.errors
+    assert not result.not_run
+
+
 def test_database_check_can_report_a_warning_severity(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()
