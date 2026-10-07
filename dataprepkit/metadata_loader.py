@@ -266,8 +266,20 @@ def _read_excel_one_sheet_openpyxl(filepath: str) -> pd.DataFrame:
 
 def _normalize_input_column_names(df: pd.DataFrame) -> pd.DataFrame:
     normalized = [str(column).strip() for column in df.columns]
-    if len(normalized) != len(set(normalized)):
-        raise ValueError("Input data contains duplicate column names after trimming whitespace.")
+    duplicates = {
+        name: [index + 1 for index, value in enumerate(normalized) if value == name]
+        for name in dict.fromkeys(normalized)
+        if normalized.count(name) > 1
+    }
+    if duplicates:
+        details = "; ".join(
+            f"{name!r} in columns {positions}"
+            for name, positions in duplicates.items()
+        )
+        raise ValueError(
+            "Input data contains duplicate column names after trimming whitespace: "
+            f"{details}. Rename or remove the duplicate columns."
+        )
     renamed = df.copy()
     renamed.columns = normalized
     return renamed

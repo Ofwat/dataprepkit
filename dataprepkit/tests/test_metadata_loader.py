@@ -2002,3 +2002,12 @@ def test_run_dimension_raises_before_scd2_for_invalid_float_values(monkeypatch):
         )
 
     assert apply_changes_called is False
+
+
+def test_normalize_input_column_names_reports_duplicate_positions():
+    frame = metadata_loader.pd.DataFrame([[1, 2]], columns=["Code", " Code "])
+
+    with pytest.raises(ValueError, match=r"'Code' in columns \[1, 2\]") as error:
+        metadata_loader._normalize_input_column_names(frame)
+
+    assert "Rename or remove the duplicate columns" in str(error.value)
