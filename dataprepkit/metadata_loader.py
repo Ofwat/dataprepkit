@@ -399,6 +399,11 @@ def _write_source_watermark(path: Path, value: datetime) -> None:
     temporary.replace(path)
 
 
+def _source_watermark_path(directory: str | Path, name: str) -> Path:
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name)
+    return Path(directory) / f"{safe_name}.watermark"
+
+
 def run_dimensions_in_dependency_order(
     engine: Engine,
     names: Sequence[str] | None = None,
@@ -412,21 +417,30 @@ def run_dimensions_in_dependency_order(
         else registry
     )
     execution_order = resolve_dimension_execution_order(selected_registry)
-    watermark_path = run_dimension_kwargs.pop("source_watermark_path", None)
-    watermark = _read_source_watermark(watermark_path) if watermark_path else None
+    watermark_dir = run_dimension_kwargs.pop("source_watermark_dir", None)
     results = []
     for name in execution_order:
-        results.append(
-            run_dimension(
-                engine,
-                name,
-                metadata_registry=selected_registry,
-                source_modified_after=watermark,
-                **run_dimension_kwargs,
-            )
+        metadata = selected_registry[name]
+        watermark_path = (
+            _source_watermark_path(watermark_dir, name)
+            if watermark_dir
+            else None
         )
-    if watermark_path:
-        _write_source_watermark(Path(watermark_path), _capture_execution_time())
+        watermark = _read_source_watermark(watermark_path) if watermark_path else None
+        results.append(run_dimension(
+            engine,
+            name,
+            metadata_registry=selected_registry,
+            source_modified_after=watermark,
+            **run_dimension_kwargs,
+        ))
+        if watermark_dir:
+            source_path = Path(metadata.filepath)
+            if source_path.is_file():
+                _write_source_watermark(
+                    Path(watermark_path),
+                    datetime.fromtimestamp(source_path.stat().st_mtime, timezone.utc),
+                )
     return results
 
 
