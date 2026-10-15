@@ -381,6 +381,24 @@ def resolve_dimension_execution_order(
     return order
 
 
+def _read_source_watermark(path: str | Path) -> datetime | None:
+    watermark_path = Path(path)
+    if not watermark_path.is_file():
+        return None
+    try:
+        return datetime.fromisoformat(watermark_path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        logger.warning("Ignoring invalid source watermark: %s", watermark_path)
+        return None
+
+
+def _write_source_watermark(path: Path, value: datetime) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(f"{path.suffix}.tmp")
+    temporary.write_text(value.isoformat(), encoding="utf-8")
+    temporary.replace(path)
+
+
 def run_dimensions_in_dependency_order(
     engine: Engine,
     names: Sequence[str] | None = None,
@@ -394,15 +412,22 @@ def run_dimensions_in_dependency_order(
         else registry
     )
     execution_order = resolve_dimension_execution_order(selected_registry)
-    return [
-        run_dimension(
-            engine,
-            name,
-            metadata_registry=selected_registry,
-            **run_dimension_kwargs,
+    watermark_path = run_dimension_kwargs.pop("source_watermark_path", None)
+    watermark = _read_source_watermark(watermark_path) if watermark_path else None
+    results = []
+    for name in execution_order:
+        results.append(
+            run_dimension(
+                engine,
+                name,
+                metadata_registry=selected_registry,
+                source_modified_after=watermark,
+                **run_dimension_kwargs,
+            )
         )
-        for name in execution_order
-    ]
+    if watermark_path:
+        _write_source_watermark(Path(watermark_path), _capture_execution_time())
+    return results
 
 
 def _split_reserved_member_rows(
@@ -877,33 +902,6 @@ def _delete_reserved_member(
     return result.rowcount or 0
 
 
-def _source_is_not_newer_than_target(engine: Engine, metadata: DimensionMetadata) -> bool:
-    source_path = Path(metadata.filepath)
-    if not source_path.is_file():
-        return False
-
-    schema, table = _split_table_name(metadata.target_table)
-    inspector = inspect(engine)
-    if not inspector.has_table(table, schema=schema):
-        return False
-
-    quoted_insert_date = _quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS["insert_date"])
-    with engine.connect() as connection:
-        max_insert_date = connection.execute(
-            text(
-                f"SELECT MAX({quoted_insert_date}) "
-                f"FROM {metadata.target_table}"
-            )
-        ).scalar_one_or_none()
-    if max_insert_date is None:
-        return False
-
-    source_modified = datetime.fromtimestamp(source_path.stat().st_mtime, timezone.utc)
-    if max_insert_date.tzinfo is None:
-        max_insert_date = max_insert_date.replace(tzinfo=timezone.utc)
-    return source_modified <= max_insert_date
-
-
 def run_dimension(
     engine: Engine,
     metadata_name: str,
@@ -916,6 +914,7 @@ def run_dimension(
     staging_copy_source_base_url: str | None = None,
     staging_copy_into_options: str = "",
     skip_unchanged_source: bool = True,
+    source_modified_after: datetime | None = None,
 ) -> pd.DataFrame:
     """
     Load a dimension based on metadata and apply SCD2 semantics.
@@ -940,13 +939,18 @@ def run_dimension(
         Optional OPENROWSET options suffix (for example ", MAXERRORS = 10").
     skip_unchanged_source
         If True, skip file-backed loads when the source modification time is not
-        newer than the target table's maximum ``Insert_Date``.
+        newer than the latest audit archive.
     """
     metadata = get_metadata(metadata_name, metadata_registry=metadata_registry)
     if (
         skip_unchanged_source
         and override_df is None
-        and _source_is_not_newer_than_target(engine, metadata)
+        and source_modified_after is not None
+        and Path(metadata.filepath).is_file()
+        and datetime.fromtimestamp(
+            Path(metadata.filepath).stat().st_mtime,
+            timezone.utc,
+        ) <= source_modified_after
     ):
         logger.info("Skipping %s because its source has not changed", metadata_name)
         return pd.DataFrame()
