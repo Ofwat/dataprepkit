@@ -210,7 +210,7 @@ def test_quickxor_reference_vector_for_single_byte():
     quickxor = sharepoint._QuickXorHash()
     quickxor.update(b"a")
 
-    assert quickxor.hexdigest() == "AAAAAAAAAAAAAAAAAQAAAAAAAGE="
+    assert quickxor.hexdigest() == "YQAAAAAAAAAAAAAAAQAAAAAAAAA="
 
 
 def test_missing_content_hash_does_not_skip_existing_file(monkeypatch, tmp_path):

@@ -229,22 +229,33 @@ class _QuickXorHash:
     """Streaming implementation of Microsoft's 160-bit QuickXorHash."""
 
     def __init__(self):
-        self._data = bytearray(20)
+        self._data = [0, 0, 0]
         self._length = 0
-        self._position = 0
+        self._shift = 0
 
     def update(self, chunk: bytes) -> None:
-        for value in chunk:
-            bit = (self._position * 11) % 160
-            index, offset = divmod(bit, 8)
-            self._data[index] ^= (value << offset) & 0xFF
-            if offset:
-                self._data[(index + 1) % 20] ^= value >> (8 - offset)
-            self._position += 1
-            self._length += 1
+        width = 160
+        for index in range(min(len(chunk), 20)):
+            vector_index, offset = divmod(self._shift, 64)
+            bits_in_cell = 32 if vector_index == 2 else 64
+            values = chunk[index::20]
+            value = 0
+            for byte in values:
+                value ^= byte
+            cell_mask = (1 << bits_in_cell) - 1
+            self._data[vector_index] ^= (value << offset) & cell_mask
+            if offset > bits_in_cell - 8:
+                next_index = 0 if vector_index == 2 else vector_index + 1
+                low_bits = bits_in_cell - offset
+                self._data[next_index] ^= value >> low_bits
+            self._shift = (self._shift + 11) % width
+        self._length += len(chunk)
 
     def hexdigest(self) -> str:
-        result = bytearray(reversed(self._data))
+        result = bytearray()
+        result.extend(self._data[0].to_bytes(8, "little"))
+        result.extend(self._data[1].to_bytes(8, "little"))
+        result.extend(self._data[2].to_bytes(8, "little")[:4])
         for index, value in enumerate(self._length.to_bytes(8, "little")):
             result[12 + index] ^= value
         return base64.b64encode(result).decode("ascii")
