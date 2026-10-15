@@ -206,11 +206,11 @@ def test_sha1_mismatch_raises_download_error(monkeypatch, tmp_path):
         )
 
 
-def test_quickxor_reference_vector_for_single_byte():
+def test_quickxor_reference_vector_for_hello_world():
     quickxor = sharepoint._QuickXorHash()
-    quickxor.update(b"a")
+    quickxor.update(b"hello world")
 
-    assert quickxor.hexdigest() == "YQAAAAAAAAAAAAAAAQAAAAAAAAA="
+    assert quickxor.hexdigest() == "aCgDG9jwBhDc4Q1yawMZAAAAAAA="
 
 
 def test_missing_content_hash_does_not_skip_existing_file(monkeypatch, tmp_path):
