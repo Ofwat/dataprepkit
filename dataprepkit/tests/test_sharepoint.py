@@ -206,6 +206,13 @@ def test_sha1_mismatch_raises_download_error(monkeypatch, tmp_path):
         )
 
 
+def test_quickxor_reference_vector_for_single_byte():
+    quickxor = sharepoint._QuickXorHash()
+    quickxor.update(b"a")
+
+    assert quickxor.hexdigest() == "AAAAAAAAAAAAAAAAAQAAAAAAAGE="
+
+
 def test_missing_content_hash_does_not_skip_existing_file(monkeypatch, tmp_path):
     destination = tmp_path / "input.xlsx"
     destination.write_bytes(b"old content")
