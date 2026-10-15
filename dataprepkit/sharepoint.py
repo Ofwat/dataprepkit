@@ -348,6 +348,22 @@ def _download_sharepoint_files(
                 folders = next_folders
 
     matches.sort(key=lambda pair: pair[0])
+    if has_wildcard:
+        for index, (remote_path, item) in enumerate(matches):
+            if _content_hash(item) is None:
+                try:
+                    details = _get_json(
+                        f"{GRAPH}/drives/{drive_id}/items/{item['id']}?$select=id,file",
+                        headers,
+                        max_retries,
+                        timeout,
+                    )
+                except requests.RequestException:
+                    details = {}
+                if details.get("file"):
+                    item = dict(item)
+                    item["file"] = details["file"]
+                    matches[index] = remote_path, item
     LOGGER.info("Matched %s SharePoint file(s)", len(matches))
 
     active_metadata = {

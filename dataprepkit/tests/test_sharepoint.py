@@ -141,6 +141,7 @@ def test_wildcard_download_preserves_relative_tree(monkeypatch, tmp_path):
             ],
         }),
         FakeResponse({"value": [{"id": "file-id", "name": "input.xlsx", "file": {}}]}),
+        FakeResponse({"id": "file-id", "file": {}}),
         FakeResponse(content=[b"data"]),
     ])
     monkeypatch.setattr(sharepoint.requests, "get", lambda *args, **kwargs: next(responses))
