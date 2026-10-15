@@ -877,6 +877,31 @@ def _delete_reserved_member(
     return result.rowcount or 0
 
 
+def _source_is_not_newer_than_target(engine: Engine, metadata: DimensionMetadata) -> bool:
+    source_path = Path(metadata.filepath)
+    if not source_path.is_file():
+        return False
+
+    schema, table = _split_table_name(metadata.target_table)
+    inspector = inspect(engine)
+    if not inspector.has_table(table, schema=schema):
+        return False
+
+    quoted_insert_date = _quote_identifier(engine, DEFAULT_SYSTEM_COLUMNS["insert_date"])
+    with engine.connect() as connection:
+        max_insert_date = connection.execute(
+            text(
+                f"SELECT MAX({quoted_insert_date}) "
+                f"FROM {metadata.target_table}"
+            )
+        ).scalar_one_or_none()
+    if max_insert_date is None:
+        return False
+
+    source_modified = datetime.fromtimestamp(source_path.stat().st_mtime, timezone.utc)
+    if max_insert_date.tzinfo is None:
+        max_insert_date = max_insert_date.replace(tzinfo=timezone.utc)
+    return source_modified <= max_insert_date
 
 
 def run_dimension(
@@ -890,6 +915,7 @@ def run_dimension(
     staging_parquet_base_dir: str | None = None,
     staging_copy_source_base_url: str | None = None,
     staging_copy_into_options: str = "",
+    skip_unchanged_source: bool = True,
 ) -> pd.DataFrame:
     """
     Load a dimension based on metadata and apply SCD2 semantics.
@@ -912,8 +938,18 @@ def run_dimension(
         Optional SQL-visible base path/URI for OPENROWSET BULK source.
     staging_copy_into_options
         Optional OPENROWSET options suffix (for example ", MAXERRORS = 10").
+    skip_unchanged_source
+        If True, skip file-backed loads when the source modification time is not
+        newer than the target table's maximum ``Insert_Date``.
     """
     metadata = get_metadata(metadata_name, metadata_registry=metadata_registry)
+    if (
+        skip_unchanged_source
+        and override_df is None
+        and _source_is_not_newer_than_target(engine, metadata)
+    ):
+        logger.info("Skipping %s because its source has not changed", metadata_name)
+        return pd.DataFrame()
     incoming = (
         override_df.copy()
         if override_df is not None
