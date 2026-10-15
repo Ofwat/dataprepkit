@@ -219,50 +219,6 @@ def test_missing_content_hash_does_not_skip_existing_file(monkeypatch, tmp_path)
     assert destination.read_bytes() == b"new content"
 
 
-def test_quickxor_hash_is_verified(monkeypatch, tmp_path):
-    content = b"quickxor content"
-    quickxor = sharepoint._QuickXorHash()
-    quickxor.update(content)
-    responses = iter([
-        FakeResponse({"id": "drive-id"}),
-        FakeResponse({
-            "id": "file-id",
-            "file": {"hashes": {"quickXorHash": quickxor.hexdigest()}},
-        }),
-        FakeResponse(content=[content]),
-    ])
-    monkeypatch.setattr(sharepoint.requests, "get", lambda *args, **kwargs: next(responses))
-
-    result = sharepoint._download_sharepoint_files(
-        "token", "site-id", "input.xlsx", output_dir=str(tmp_path), max_retries=0,
-    )
-
-    assert result == [tmp_path / "input.xlsx"]
-
-
-def test_quickxor_empty_reference_vector():
-    quickxor = sharepoint._QuickXorHash()
-
-    assert quickxor.hexdigest() == "AAAAAAAAAAAAAAAAAAAAAAAAAAA="
-
-
-def test_quickxor_mismatch_raises_download_error(monkeypatch, tmp_path):
-    responses = iter([
-        FakeResponse({"id": "drive-id"}),
-        FakeResponse({
-            "id": "file-id",
-            "file": {"hashes": {"quickXorHash": "AAAAAAAAAAAAAAAAAAAAAA=="}},
-        }),
-        FakeResponse(content=[b"unexpected content"]),
-    ])
-    monkeypatch.setattr(sharepoint.requests, "get", lambda *args, **kwargs: next(responses))
-
-    with pytest.raises(sharepoint.SharePointDownloadError, match="quickxor checksum mismatch"):
-        sharepoint._download_sharepoint_files(
-            "token", "site-id", "input.xlsx", output_dir=str(tmp_path), max_retries=0,
-        )
-
-
 def test_timeout_must_be_positive(tmp_path):
     with pytest.raises(ValueError, match="timeout"):
         sharepoint._download_sharepoint_files(

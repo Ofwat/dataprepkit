@@ -5,7 +5,7 @@
 ## SharePoint downloads
 
 `download_sharepoint_file` stores one metadata JSON file per SharePoint item under
-`<output_dir>/.dataprepkit/metadata` by default. Content hashes are used for change
+`<output_dir>/.dataprepkit/metadata` by default. SHA-1 hashes are used for change
 detection and downloaded content is verified before replacement. `metadata_dir` can
 override that directory. Concurrent syncs targeting the same output directory are
 not coordinated; run only one sync per destination at a time.

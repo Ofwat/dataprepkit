@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import hashlib
-import base64
 import logging
 import os
 import random
@@ -207,10 +206,9 @@ def _save_metadata(path: Path, metadata: dict) -> None:
 def _content_hash(item: dict) -> tuple[str, str] | None:
     file_facet = item.get("file") or {}
     hashes = file_facet.get("hashes") or {}
-    for algorithm in ("sha1Hash", "quickXorHash"):
-        value = hashes.get(algorithm)
-        if value:
-            return algorithm.removesuffix("Hash").lower(), value
+    value = hashes.get("sha1Hash")
+    if value:
+        return "sha1", value
     return None
 
 
@@ -229,33 +227,6 @@ def _load_metadata(path: Path) -> dict:
     if not isinstance(metadata, dict):
         raise SharePointManifestError(f"Metadata must contain a JSON object: {path}")
     return metadata
-
-
-class _QuickXorHash:
-    """Streaming implementation of Microsoft QuickXorHash."""
-
-    _WIDTH = 20
-    _SHIFT = 11
-
-    def __init__(self):
-        self._data = bytearray(self._WIDTH)
-        self._length = 0
-        self._position = 0
-
-    def update(self, chunk: bytes) -> None:
-        for value in chunk:
-            bit = (self._position * self._SHIFT) % (self._WIDTH * 8)
-            index, offset = divmod(bit, 8)
-            self._data[index] ^= (value << offset) & 0xFF
-            self._data[(index + 1) % self._WIDTH] ^= value >> (8 - offset) if offset else 0
-            self._position += 1
-            self._length += 1
-
-    def hexdigest(self) -> str:
-        length = self._length.to_bytes(8, "little", signed=False)
-        for index, value in enumerate(length):
-            self._data[index] ^= value
-        return base64.b64encode(bytes(reversed(self._data))).decode("ascii")
 
 
 def _download_sharepoint_files(
@@ -427,19 +398,13 @@ def _download_sharepoint_files(
                     timeout=timeout,
                 ) as response:
                     digest = hashlib.sha1()
-                    quickxor = _QuickXorHash()
                     with temporary.open("wb") as handle:
                         for chunk in response.iter_content(chunk_size=1024 * 1024):
                             if chunk:
                                 handle.write(chunk)
                                 digest.update(chunk)
-                                quickxor.update(chunk)
                 if current_hash:
-                    actual_hash = (
-                        digest.hexdigest()
-                        if current_hash[0] == "sha1"
-                        else quickxor.hexdigest()
-                    )
+                    actual_hash = digest.hexdigest()
                     if actual_hash.lower() != current_hash[1].lower():
                         raise ValueError(
                             f"{current_hash[0]} checksum mismatch for {remote_path}"
