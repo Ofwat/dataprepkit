@@ -46,7 +46,7 @@ def test_download_sharepoint_file_orchestrates_authentication(monkeypatch, tmp_p
 
     def fake_download(**kwargs):
         calls["download"] = kwargs
-        return [Path("downloaded.xlsx")]
+        return sharepoint.SharePointSyncSummary(1, 1, 0, 0, (Path("downloaded.xlsx"),))
 
     monkeypatch.setattr(sharepoint, "get_graph_token", fake_token)
     monkeypatch.setattr(sharepoint, "get_sharepoint_site_id", fake_site)
@@ -57,7 +57,8 @@ def test_download_sharepoint_file_orchestrates_authentication(monkeypatch, tmp_p
         "input.xlsx", output_dir=str(tmp_path), skip_unchanged=False,
     )
 
-    assert result == [Path("downloaded.xlsx")]
+    assert result.downloaded == 1
+    assert result.files == (Path("downloaded.xlsx"),)
     assert calls["token"] == ("tenant", "client", "secret")
     assert calls["site"] == ("token", "contoso.sharepoint.com", "/sites/data")
     assert calls["download"]["site_id"] == "site-id"
@@ -78,7 +79,8 @@ def test_download_literal_file_writes_content_and_manifest(monkeypatch, tmp_path
     )
 
     destination = tmp_path / "input.xlsx"
-    assert result == [destination]
+    assert result.downloaded == 1
+    assert result.files == (destination,)
     assert destination.read_bytes() == b"hello world"
     metadata = next((tmp_path / ".dataprepkit" / "metadata").glob("*.json"))
     assert '"file_path": "folder/input.xlsx"' in metadata.read_text(encoding="utf-8")
@@ -147,7 +149,7 @@ def test_wildcard_download_preserves_relative_tree(monkeypatch, tmp_path):
         "token", "site-id", "folder/**", output_dir=str(tmp_path), max_retries=0,
     )
 
-    assert result == [tmp_path / "nested" / "input.xlsx"]
+    assert result.files == (tmp_path / "nested" / "input.xlsx",)
 
 
 def test_invalid_metadata_shape_raises_clear_error(tmp_path):
@@ -182,7 +184,8 @@ def test_content_hash_skips_unchanged_file(monkeypatch, tmp_path):
         "token", "site-id", "input.xlsx", output_dir=str(tmp_path), max_retries=0,
     )
 
-    assert result == [tmp_path / "input.xlsx"]
+    assert result.skipped == 1
+    assert result.files == (tmp_path / "input.xlsx",)
 
 
 def test_sha1_mismatch_raises_download_error(monkeypatch, tmp_path):

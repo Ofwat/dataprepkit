@@ -9,6 +9,7 @@ import re
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -23,11 +24,21 @@ USER_AGENT = "dataprepkit-sharepoint/1"
 DEFAULT_TIMEOUT = (15, 120)
 
 
+@dataclass(frozen=True)
+class SharePointSyncSummary:
+    matched: int
+    downloaded: int
+    skipped: int
+    failed: int
+    files: tuple[Path, ...]
+
+
 class SharePointDownloadError(RuntimeError):
     """Raised when one or more SharePoint files cannot be downloaded."""
 
-    def __init__(self, failures: dict[str, str]):
+    def __init__(self, failures: dict[str, str], summary: SharePointSyncSummary):
         self.failures = failures
+        self.summary = summary
         super().__init__(f"{len(failures)} SharePoint file(s) failed: {failures}")
 
 
@@ -242,7 +253,7 @@ def _download_sharepoint_files(
     checkpoint_every: int = 10,
     timeout: tuple[float, float] = DEFAULT_TIMEOUT,
     fail_on_metadata_error: bool = False,
-) -> list[Path]:
+) -> SharePointSyncSummary:
     """Download matching files from the site's default document library.
 
     Examples:
@@ -475,8 +486,21 @@ def _download_sharepoint_files(
         len(matches), downloaded, skipped, len(failures),
     )
     if failures:
-        raise SharePointDownloadError(failures)
-    return sorted(successful)
+        summary = SharePointSyncSummary(
+            matched=len(matches),
+            downloaded=downloaded,
+            skipped=skipped,
+            failed=len(failures),
+            files=tuple(sorted(successful)),
+        )
+        raise SharePointDownloadError(failures, summary)
+    return SharePointSyncSummary(
+        matched=len(matches),
+        downloaded=downloaded,
+        skipped=skipped,
+        failed=0,
+        files=tuple(sorted(successful)),
+    )
 
 
 def download_sharepoint_file(
@@ -495,7 +519,7 @@ def download_sharepoint_file(
     checkpoint_every: int = 10,
     timeout: tuple[float, float] = DEFAULT_TIMEOUT,
     fail_on_metadata_error: bool = False,
-) -> list[Path]:
+) -> SharePointSyncSummary:
     """Authenticate, resolve the SharePoint site, and sync matching files.
 
     file_path is relative to the site's default document library.
