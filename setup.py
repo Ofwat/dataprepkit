@@ -31,6 +31,7 @@ setup(
         "pyarrow",
         "openpyxl",
         "PyYAML",
+        "requests",
     ],
     extras_require={
         "dev": [

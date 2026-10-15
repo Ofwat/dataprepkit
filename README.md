@@ -2,6 +2,14 @@
 
 `dataprepkit` turns CSV snapshots into evolving dimensions by declaring the schema, keys, and dependency joins in metadata. The loader and `scd2.apply_changes` take care of schema evolution, dependency joins, normalizing datetimes, and the SCD2 workflow.
 
+## SharePoint downloads
+
+`download_sharepoint_file` stores one metadata JSON file per SharePoint item under
+`<output_dir>/.dataprepkit/metadata` by default. Content hashes are used for change
+detection and downloaded content is verified before replacement. `metadata_dir` can
+override that directory. Concurrent syncs targeting the same output directory are
+not coordinated; run only one sync per destination at a time.
+
 ## Metadata format
 
 Each metadata entry registered via `register_metadata(name, metadata)` must include:
