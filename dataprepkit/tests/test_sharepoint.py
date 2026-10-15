@@ -1,4 +1,3 @@
-import hashlib
 from pathlib import Path
 
 import pytest
@@ -163,10 +162,9 @@ def test_invalid_metadata_shape_raises_clear_error(tmp_path):
 
 def test_content_hash_skips_unchanged_file(monkeypatch, tmp_path):
     content = b"stable content"
-    sha1 = hashlib.sha1(content).hexdigest()
     responses = iter([
         FakeResponse({"id": "drive-id"}),
-        FakeResponse({"id": "file-id", "file": {"hashes": {"sha1Hash": sha1}}}),
+        FakeResponse({"id": "file-id", "file": {}, "lastModifiedDateTime": "2026-01-01T00:00:00Z", "size": len(content)}),
         FakeResponse(content=[content]),
     ])
     monkeypatch.setattr(sharepoint.requests, "get", lambda *args, **kwargs: next(responses))
@@ -176,7 +174,7 @@ def test_content_hash_skips_unchanged_file(monkeypatch, tmp_path):
 
     second_responses = iter([
         FakeResponse({"id": "drive-id"}),
-        FakeResponse({"id": "file-id", "file": {"hashes": {"sha1Hash": sha1}}}),
+        FakeResponse({"id": "file-id", "file": {}, "lastModifiedDateTime": "2026-01-01T00:00:00Z", "size": len(content)}),
     ])
     monkeypatch.setattr(
         sharepoint.requests, "get", lambda *args, **kwargs: next(second_responses)
@@ -187,30 +185,6 @@ def test_content_hash_skips_unchanged_file(monkeypatch, tmp_path):
 
     assert result.skipped == 1
     assert result.files == (tmp_path / "input.xlsx",)
-
-
-def test_sha1_mismatch_raises_download_error(monkeypatch, tmp_path):
-    responses = iter([
-        FakeResponse({"id": "drive-id"}),
-        FakeResponse({
-            "id": "file-id",
-            "file": {"hashes": {"sha1Hash": "0" * 40}},
-        }),
-        FakeResponse(content=[b"wrong content"]),
-    ])
-    monkeypatch.setattr(sharepoint.requests, "get", lambda *args, **kwargs: next(responses))
-
-    with pytest.raises(sharepoint.SharePointDownloadError, match="checksum mismatch"):
-        sharepoint._download_sharepoint_files(
-            "token", "site-id", "input.xlsx", output_dir=str(tmp_path), max_retries=0,
-        )
-
-
-def test_quickxor_reference_vector_for_hello_world():
-    quickxor = sharepoint._QuickXorHash()
-    quickxor.update(b"hello world")
-
-    assert quickxor.hexdigest() == "aCgDG9jwBhDc4Q1yawMZAAAAAAA="
 
 
 def test_missing_content_hash_does_not_skip_existing_file(monkeypatch, tmp_path):

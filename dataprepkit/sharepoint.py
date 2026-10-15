@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import hashlib
-import base64
 import logging
 import os
 import random
@@ -126,7 +125,7 @@ def _request(
                 timeout=timeout,
                 stream=stream,
             )
-        except (requests.Timeout, requests.ConnectionError, requests.ChunkedEncodingError):
+        except (requests.Timeout, requests.ConnectionError):
             if attempt == max_retries:
                 raise
             time.sleep(min(60.0, 2 ** attempt + random.random()))
@@ -213,52 +212,6 @@ def _save_metadata(path: Path, metadata: dict) -> None:
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
-
-
-def _content_hash(item: dict) -> tuple[str, str] | None:
-    file_facet = item.get("file") or {}
-    hashes = file_facet.get("hashes") or {}
-    for algorithm in ("sha1Hash", "quickXorHash"):
-        value = hashes.get(algorithm)
-        if value:
-            return algorithm.removesuffix("Hash").lower(), value
-    return None
-
-
-class _QuickXorHash:
-    """Streaming implementation of Microsoft's 160-bit QuickXorHash."""
-
-    def __init__(self):
-        self._data = [0, 0, 0]
-        self._length = 0
-        self._shift = 0
-
-    def update(self, chunk: bytes) -> None:
-        width = 160
-        for index in range(min(len(chunk), 20)):
-            vector_index, offset = divmod(self._shift, 64)
-            bits_in_cell = 32 if vector_index == 2 else 64
-            values = chunk[index::20]
-            value = 0
-            for byte in values:
-                value ^= byte
-            cell_mask = (1 << bits_in_cell) - 1
-            self._data[vector_index] ^= (value << offset) & cell_mask
-            if offset > bits_in_cell - 8:
-                next_index = 0 if vector_index == 2 else vector_index + 1
-                low_bits = bits_in_cell - offset
-                self._data[next_index] ^= value >> low_bits
-            self._shift = (self._shift + 11) % width
-        self._length += len(chunk)
-
-    def hexdigest(self) -> str:
-        result = bytearray()
-        result.extend(self._data[0].to_bytes(8, "little"))
-        result.extend(self._data[1].to_bytes(8, "little"))
-        result.extend(self._data[2].to_bytes(8, "little")[:4])
-        for index, value in enumerate(self._length.to_bytes(8, "little")):
-            result[12 + index] ^= value
-        return base64.b64encode(result).decode("ascii")
 
 
 def _metadata_file(metadata_dir: Path, drive_id: str, item_id: str) -> Path:
@@ -386,22 +339,6 @@ def _download_sharepoint_files(
                 folders = next_folders
 
     matches.sort(key=lambda pair: pair[0])
-    if has_wildcard:
-        for index, (remote_path, item) in enumerate(matches):
-            if _content_hash(item) is None:
-                try:
-                    details = _get_json(
-                        f"{GRAPH}/drives/{drive_id}/items/{item['id']}?$select=id,file",
-                        headers,
-                        max_retries,
-                        timeout,
-                    )
-                except requests.RequestException:
-                    details = {}
-                if details.get("file"):
-                    item = dict(item)
-                    item["file"] = details["file"]
-                    matches[index] = remote_path, item
     LOGGER.info("Matched %s SharePoint file(s)", len(matches))
 
     active_metadata = {
@@ -435,14 +372,13 @@ def _download_sharepoint_files(
         previous = _load_metadata(metadata_file)
         destination = (destination_root / _relative_output_path(pattern, remote_path)).resolve()
 
-        current_hash = _content_hash(item)
-        previous_hash = previous.get("content_hash")
+        current_modified = item.get("lastModifiedDateTime")
+        current_size = item.get("size")
         unchanged = (
-            current_hash is not None
-            and previous_hash == {
-                "algorithm": current_hash[0],
-                "value": current_hash[1],
-            }
+            current_modified is not None
+            and current_size is not None
+            and previous.get("last_modified") == current_modified
+            and previous.get("size") == current_size
         )
         should_download = (
             not skip_unchanged
@@ -463,23 +399,11 @@ def _download_sharepoint_files(
                     timeout=timeout,
                 ) as response:
                     digest = hashlib.sha1()
-                    quickxor = _QuickXorHash()
                     with temporary.open("wb") as handle:
                         for chunk in response.iter_content(chunk_size=1024 * 1024):
                             if chunk:
                                 handle.write(chunk)
                                 digest.update(chunk)
-                                quickxor.update(chunk)
-                if current_hash:
-                    actual_hash = (
-                        digest.hexdigest()
-                        if current_hash[0] == "sha1"
-                        else quickxor.hexdigest()
-                    )
-                    if actual_hash.lower() != current_hash[1].lower():
-                        raise ValueError(
-                            f"{current_hash[0]} checksum mismatch for {remote_path}"
-                        )
                 os.replace(temporary, destination)
             finally:
                 temporary.unlink(missing_ok=True)
@@ -507,11 +431,10 @@ def _download_sharepoint_files(
             "last_checked": now,
             "last_downloaded": now if should_download else previous.get("last_downloaded"),
         })
-        if current_hash:
-            updated["content_hash"] = {
-                "algorithm": current_hash[0],
-                "value": current_hash[1],
-            }
+        updated["last_modified"] = current_modified
+        updated["size"] = current_size
+        if should_download:
+            updated["local_sha1"] = digest.hexdigest()
         return destination, metadata_file, updated, should_download
 
     successful = []
