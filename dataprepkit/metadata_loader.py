@@ -929,6 +929,7 @@ def run_dimension(
     staging_copy_into_options: str = "",
     skip_unchanged_source: bool = True,
     source_modified_after: datetime | None = None,
+    source_watermark_dir: str | Path | None = None,
 ) -> pd.DataFrame:
     """
     Load a dimension based on metadata and apply SCD2 semantics.
@@ -956,6 +957,13 @@ def run_dimension(
         newer than the latest audit archive.
     """
     metadata = get_metadata(metadata_name, metadata_registry=metadata_registry)
+    watermark_path = (
+        _source_watermark_path(source_watermark_dir, metadata_name)
+        if source_watermark_dir
+        else None
+    )
+    if source_modified_after is None and watermark_path:
+        source_modified_after = _read_source_watermark(watermark_path)
     if (
         skip_unchanged_source
         and override_df is None
@@ -1193,6 +1201,13 @@ def run_dimension(
         metadata.natural_key_cols,
         metadata.join_numeric_key,
     )
+    if watermark_path:
+        source_path = Path(metadata.filepath)
+        if source_path.is_file():
+            _write_source_watermark(
+                watermark_path,
+                datetime.fromtimestamp(source_path.stat().st_mtime, timezone.utc),
+            )
     return incoming
 
 
