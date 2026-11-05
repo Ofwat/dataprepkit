@@ -222,6 +222,46 @@ def test_current_business_key_index_sql_uses_business_keys_and_current_ind():
     )
 
 
+def test_current_business_key_index_name_obeys_sql_server_length_limit():
+    sql = _current_business_key_index_sql(
+        "pcd_output_prototype",
+        [
+            "submissionNumber",
+            "businessDomain",
+            "partyCode",
+            "periodCode",
+            "deliveryPlanReference",
+            "pcdReference",
+            "pcdOutputDescription",
+            "bonCode",
+        ],
+        "Current_Ind",
+    )
+    index_name = sql.removeprefix("CREATE INDEX ").split(" ON ", 1)[0]
+
+    assert len(index_name) <= 128
+    assert sql.endswith(
+        '("submissionNumber", "businessDomain", "partyCode", "periodCode", '
+        '"deliveryPlanReference", "pcdReference", "pcdOutputDescription", '
+        '"bonCode", "Current_Ind")'
+    )
+
+
+def test_long_current_business_key_index_names_remain_distinct():
+    first = _current_business_key_index_sql(
+        "t", [f"{'x' * 125}A"], "Current_Ind"
+    )
+    second = _current_business_key_index_sql(
+        "t", [f"{'x' * 125}B"], "Current_Ind"
+    )
+    first_name = first.removeprefix("CREATE INDEX ").split(" ON ", 1)[0]
+    second_name = second.removeprefix("CREATE INDEX ").split(" ON ", 1)[0]
+
+    assert first_name != second_name
+    assert len(first_name) <= 128
+    assert len(second_name) <= 128
+
+
 def test_build_dimension_dependency_graph_orders_registered_dimensions():
     upstream = DimensionMetadata(
         name="dim_region",

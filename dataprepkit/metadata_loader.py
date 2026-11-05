@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import hashlib
 import re
 from typing import Any, Callable, Dict, Iterable, Mapping, Sequence, Literal
 
@@ -1443,7 +1444,13 @@ def _current_business_key_index_sql(
 ) -> str:
     _, table = _split_table_name(target_table)
     index_columns = [*natural_key_cols, current_ind]
-    index_name = f"ix_{_safe_identifier_token(table)}_{'_'.join(_safe_identifier_token(col) for col in index_columns)}"
+    index_column_tokens = "_".join(
+        _safe_identifier_token(column) for column in index_columns
+    )
+    index_name = f"ix_{_safe_identifier_token(table)}_{index_column_tokens}"
+    if len(index_name) > 128:
+        digest = hashlib.sha256(index_name.encode("utf-8")).hexdigest()[:16]
+        index_name = f"{index_name[:111]}_{digest}"
     rendered_columns = ", ".join(f'"{col}"' for col in index_columns)
     return f"CREATE INDEX {index_name} ON {target_table} ({rendered_columns})"
 
