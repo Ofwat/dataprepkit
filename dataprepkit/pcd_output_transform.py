@@ -7,6 +7,8 @@ from typing import Any
 
 import pandas as pd
 
+from dataprepkit.metadata_loader import ColumnSpec, DimensionMetadata
+
 
 SOURCE_COLUMNS = (
     "submissionNumber",
@@ -198,3 +200,59 @@ def transform_price_control_deliverable_output(
         .reset_index()
     )
     return grouped.loc[:, OUTPUT_COLUMNS]
+
+
+def create_pcd_output_dimension_metadata(
+    *,
+    name: str,
+    target_table: str,
+    filepath: str,
+) -> DimensionMetadata:
+    """Create metadata for loading transformed PCD output rows with SCD2."""
+    natural_key_types = {
+        "submissionNumber": "VARCHAR(64)",
+        "businessDomain": "VARCHAR(1024)",
+        "partyCode": "VARCHAR(8)",
+        "periodCode": "VARCHAR(256)",
+        "deliveryPlanReference": "VARCHAR(32)",
+        "pcdReference": "VARCHAR(256)",
+        "pcdOutputDescription": "VARCHAR(2048)",
+        "bonCode": "VARCHAR(256)",
+    }
+    data_types = {
+        "pcdCategory": "VARCHAR(16)",
+        "tabName": "VARCHAR(64)",
+        "pcdApplicableToCompany": "BIT",
+        "ragRatingCompany": "VARCHAR(16)",
+        "ragRatingAssurer": "VARCHAR(16)",
+        "pcdLineDescription": "VARCHAR(2048)",
+        "cumulativeTarget": "FLOAT",
+        "cumulativeOutturnForecast": "FLOAT",
+        "unitOfmeasure": "VARCHAR(256)",
+        "decimalPlace": "INT",
+        "versionNumber": "VARCHAR(64)",
+        "submissionNote": "VARCHAR(2048)",
+        "columnHeader": "VARCHAR(256)",
+        "recordStatus": "VARCHAR(16)",
+    }
+    return DimensionMetadata(
+        name=name,
+        target_table=target_table,
+        natural_key_cols=list(natural_key_types),
+        natural_key_specs={
+            column: ColumnSpec(type=sql_type)
+            for column, sql_type in natural_key_types.items()
+        },
+        data_columns={
+            column: ColumnSpec(type=sql_type)
+            for column, sql_type in data_types.items()
+        },
+        surrogate_key="surrogate_key",
+        join_numeric_key="join_numeric_key",
+        filepath=filepath,
+        reserved_source_members=[],
+        processing_class=transform_price_control_deliverable_output,
+        processing_class_input="raw",
+        missing_rows_action="retain",
+        new_key_effective_date="execution_time",
+    )

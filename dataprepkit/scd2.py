@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import re
-from typing import Mapping, Sequence
+from typing import Literal, Mapping, Sequence
 
 import pandas as pd
 import math
@@ -117,6 +117,8 @@ def apply_changes(
     staging_copy_source_base_url: str | None = None,
     staging_copy_into_options: str = "",
     return_summary: bool = False,
+    missing_rows_action: Literal["soft_delete", "retain"] = "soft_delete",
+    new_key_effective_date: Literal["minimum", "execution_time"] = "minimum",
 ) -> bool | SCD2ChangeSummary:
     """
     Apply SCD2 semantics to the target table using the incoming DataFrame.
@@ -125,6 +127,14 @@ def apply_changes(
     old rows, and inserts new rows while respecting the configured system
     columns. All writes happen within a single transaction for atomicity.
     """
+    if missing_rows_action not in {"soft_delete", "retain"}:
+        raise SCD2ValidationError(
+            "missing_rows_action must be 'soft_delete' or 'retain'."
+        )
+    if new_key_effective_date not in {"minimum", "execution_time"}:
+        raise SCD2ValidationError(
+            "new_key_effective_date must be 'minimum' or 'execution_time'."
+        )
     cols = system_columns or DEFAULT_SYSTEM_COLUMNS
     required_keys = {
         "row_hash",
@@ -326,6 +336,8 @@ def apply_changes(
                     has_archive_filename=has_archive_filename,
                     incoming_rows=len(incoming_df),
                     target_rows_before=pre_total,
+                    missing_rows_action=missing_rows_action,
+                    new_key_effective_date=new_key_effective_date,
                 ),
                 incoming_rows=len(incoming_df),
                 target_rows_before=pre_total,
@@ -965,6 +977,8 @@ def _apply_snapshot_to_target(
     has_archive_filename: bool = False,
     incoming_rows: int = 0,
     target_rows_before: int = 0,
+    missing_rows_action: Literal["soft_delete", "retain"] = "soft_delete",
+    new_key_effective_date: Literal["minimum", "execution_time"] = "minimum",
 ) -> SCD2ChangeSummary:
     quote = lambda value: _quote_identifier(conn.engine, value)
     join_condition = _build_natural_key_match_condition(
@@ -999,23 +1013,25 @@ def _apply_snapshot_to_target(
         deleted_ind_column=deleted_ind_column,
         incoming_rows=incoming_rows,
         target_rows_before=target_rows_before,
+        missing_rows_action=missing_rows_action,
     )
 
-    delete_sql = text(
-        f"""
-        UPDATE {target_table}
-        SET {deleted_ind_column} = 1,
-            {update_date_column} = :execution_time,
-            {effective_end_column} = :execution_time
-        WHERE {current_ind_column} = 1
-          AND {deleted_ind_column} = 0
-          AND NOT EXISTS (
-            SELECT 1 FROM {staging_table} s
-            WHERE {join_condition}
-          )
-        """
-    )
-    conn.execute(delete_sql, {"execution_time": execution_time})
+    if missing_rows_action == "soft_delete":
+        delete_sql = text(
+            f"""
+            UPDATE {target_table}
+            SET {deleted_ind_column} = 1,
+                {update_date_column} = :execution_time,
+                {effective_end_column} = :execution_time
+            WHERE {current_ind_column} = 1
+              AND {deleted_ind_column} = 0
+              AND NOT EXISTS (
+                SELECT 1 FROM {staging_table} s
+                WHERE {join_condition}
+              )
+            """
+        )
+        conn.execute(delete_sql, {"execution_time": execution_time})
 
     update_changed_sql = text(
         f"""
@@ -1094,12 +1110,18 @@ def _apply_snapshot_to_target(
         select_parts.append(":batch_id")
     if has_archive_filename:
         select_parts.append(":archive_filename")
+    new_key_start = (
+        ":execution_time"
+        if new_key_effective_date == "execution_time"
+        else "CASE WHEN s.existing_join_numeric IS NULL "
+        "THEN :effective_date_min ELSE :execution_time END"
+    )
     select_parts.extend(
         [
             f"s.{hash_column}",
             ":execution_time",
             "NULL",
-            "CASE WHEN s.existing_join_numeric IS NULL THEN :effective_date_min ELSE :execution_time END",
+            new_key_start,
             ":effective_date_max",
             "1",
             "0",
@@ -1153,6 +1175,7 @@ def _count_snapshot_changes(
     deleted_ind_column: str,
     incoming_rows: int,
     target_rows_before: int,
+    missing_rows_action: Literal["soft_delete", "retain"] = "soft_delete",
 ) -> SCD2ChangeSummary:
     match_condition = match_condition or "1 = 1"
     active_current = f"t.{current_ind_column} = 1 AND t.{deleted_ind_column} = 0"
@@ -1195,31 +1218,35 @@ def _count_snapshot_changes(
           )
         """,
     )
-    soft_deleted_rows = _scalar_count(
-        conn,
-        f"""
-        SELECT COUNT(1)
-        FROM {target_table} t
-        WHERE {active_current}
-          AND NOT EXISTS (
-            SELECT 1
-            FROM {staging_table} s
-            WHERE {match_condition}
-          )
-        """,
-    )
-    soft_deleted_natural_keys = _sample_matching_natural_keys(
-        conn,
-        target_table=target_table,
-        natural_key_cols=natural_key_cols,
-        sql_filter=(
-            f"{active_current} AND NOT EXISTS ("
-            f"SELECT 1 FROM {staging_table} s WHERE {match_condition}"
-            f")"
-        ),
-        table_alias="t",
-        source_table=target_table,
-    )
+    if missing_rows_action == "soft_delete":
+        soft_deleted_rows = _scalar_count(
+            conn,
+            f"""
+            SELECT COUNT(1)
+            FROM {target_table} t
+            WHERE {active_current}
+              AND NOT EXISTS (
+                SELECT 1
+                FROM {staging_table} s
+                WHERE {match_condition}
+              )
+            """,
+        )
+        soft_deleted_natural_keys = _sample_matching_natural_keys(
+            conn,
+            target_table=target_table,
+            natural_key_cols=natural_key_cols,
+            sql_filter=(
+                f"{active_current} AND NOT EXISTS ("
+                f"SELECT 1 FROM {staging_table} s WHERE {match_condition}"
+                f")"
+            ),
+            table_alias="t",
+            source_table=target_table,
+        )
+    else:
+        soft_deleted_rows = 0
+        soft_deleted_natural_keys = []
     reactivated_rows = _scalar_count(
         conn,
         f"""

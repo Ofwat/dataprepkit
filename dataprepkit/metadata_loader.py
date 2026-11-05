@@ -99,6 +99,9 @@ class DimensionMetadata(BaseModel):
     dependencies: Sequence[DependencyJoin] = Field(default_factory=list)
     run_policy: RunPolicy = Field(default_factory=RunPolicy)
     processing_class: Callable[[pd.DataFrame], pd.DataFrame] | None = None
+    processing_class_input: Literal["typed", "raw"] = "typed"
+    missing_rows_action: Literal["soft_delete", "retain"] = "soft_delete"
+    new_key_effective_date: Literal["minimum", "execution_time"] = "minimum"
     archive_path: str | None = None
     target_schema: str | None = None
     archive_batch_id: str | None = None
@@ -992,7 +995,8 @@ def run_dimension(
         len(incoming),
         list(incoming.columns),
     )
-    incoming = _cast_data_columns(incoming, metadata)
+    if metadata.processing_class_input == "typed":
+        incoming = _cast_data_columns(incoming, metadata)
     schema_columns_added = _ensure_target_table(engine, metadata) or []
     _apply_table_description(engine, metadata)
     if metadata.column_renames:
@@ -1104,6 +1108,8 @@ def run_dimension(
             staging_parquet_base_dir=staging_parquet_base_dir,
             staging_copy_source_base_url=staging_copy_source_base_url,
             staging_copy_into_options=staging_copy_into_options,
+            missing_rows_action=metadata.missing_rows_action,
+            new_key_effective_date=metadata.new_key_effective_date,
             return_summary=True,
         )
         change_summary = _coerce_scd2_change_summary(apply_result, rows_processed)
@@ -1237,7 +1243,8 @@ def run_dimension_copy_into(
         if override_df is not None
         else csv_reader(metadata.filepath)
     )
-    incoming = _cast_data_columns(incoming, metadata)
+    if metadata.processing_class_input == "typed":
+        incoming = _cast_data_columns(incoming, metadata)
     if metadata.column_renames:
         incoming = incoming.rename(columns=metadata.column_renames)
         if incoming.columns.duplicated().any():

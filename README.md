@@ -25,6 +25,9 @@ Each metadata entry registered via `register_metadata(name, metadata)` must incl
 | `filepath` | CSV path (or lakehouse path) to read. |
 | `schema_handling.mode` | `"suggest"` (default) or `"evolve"` (auto-add missing columns). |
 | `processing_class` | Optional callable that transforms the incoming pandas DataFrame. |
+| `processing_class_input` | `"typed"` (default) casts configured columns before the callback; `"raw"` passes source values to it, then casts the callback output. |
+| `missing_rows_action` | `"soft_delete"` (default) or `"retain"` current target keys absent from this snapshot. |
+| `new_key_effective_date` | `"minimum"` (default) or `"execution_time"` for the start of new-key history. |
 | `dependencies` | Optional dependency definitions (see below). |
 | `run_policy` | Determines failure handling (`continue` or `abort`). |
 | `archive_path` | Optional location for parquet archives. |
@@ -105,10 +108,12 @@ Joins run inside SQL; pandas only reads the filtered result set, renames columns
 ## PCD output transform
 
 `dataprepkit.pcd_output_transform.transform_price_control_deliverable_output`
-is a prototype of the PCD output business mapping. It accepts a pandas
-DataFrame and returns transformed business columns; it does not load or update
-a target table. See [the PCD transform notes](examples/pcd_output_transform/README.md)
-for usage and current SQL parity limits.
+is a prototype of the PCD output business mapping. Use
+`create_pcd_output_dimension_metadata(...)` with `run_dimension` to apply the
+transform and the shared SCD2 engine. The metadata factory retains keys missing
+from a snapshot and starts new-key history at execution time. See [the PCD
+transform notes](examples/pcd_output_transform/README.md) for notebook usage and
+current SQL parity limits.
 
 ## Excel validation
 

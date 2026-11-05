@@ -1,7 +1,13 @@
 import pandas as pd
 import pytest
+from sqlalchemy import create_engine, text
 
+from dataprepkit import metadata_loader
+from dataprepkit.metadata_loader import (
+    run_dimension,
+)
 from dataprepkit.pcd_output_transform import (
+    create_pcd_output_dimension_metadata,
     transform_price_control_deliverable_output,
 )
 
@@ -236,3 +242,164 @@ def test_transform_uses_full_datapoint_code_for_bon_and_measure_routing():
     assert actual.loc[0, "bonCode"] == datapoint_code
     assert actual.loc[0, "cumulativeTarget"] == 0
     assert actual.loc[0, "cumulativeOutturnForecast"] == 9.5
+
+
+def _pcd_dimension_metadata(target_table):
+    return create_pcd_output_dimension_metadata(
+        name="pcd_output_test",
+        target_table=target_table,
+        filepath="unused.csv",
+    )
+
+
+def _load_pcd(engine, metadata, incoming):
+    return run_dimension(
+        engine,
+        metadata.name,
+        metadata_registry={metadata.name: metadata},
+        override_df=incoming,
+    )
+
+
+def test_pcd_public_load_lifecycle_uses_shared_scd2_without_deleting_missing_keys(
+    monkeypatch,
+):
+    target_table = "pcd_output_lifecycle"
+    engine = create_engine("sqlite:///:memory:")
+    metadata = _pcd_dimension_metadata(target_table)
+    run_times = iter(
+        pd.to_datetime(
+            [
+                "2026-01-01T00:00:00Z",
+                "2026-01-02T00:00:00Z",
+                "2026-01-03T00:00:00Z",
+                "2026-01-04T00:00:00Z",
+                "2026-01-05T00:00:00Z",
+            ]
+        ).to_pydatetime()
+    )
+    monkeypatch.setattr(
+        metadata_loader, "_capture_execution_time", lambda: next(run_times)
+    )
+    first_key = _source_row(submissionNumber="5")
+    second_key = _source_row(submissionNumber="6")
+
+    _load_pcd(engine, metadata, pd.DataFrame([first_key, second_key]))
+    _load_pcd(engine, metadata, pd.DataFrame([first_key, second_key]))
+
+    with engine.connect() as conn:
+        rows_after_reload = conn.execute(
+            text(f"SELECT * FROM {target_table} ORDER BY submissionNumber")
+        ).mappings().all()
+    assert len(rows_after_reload) == 2
+    assert all(row["Current_Ind"] == 1 for row in rows_after_reload)
+    assert all(row["Deleted_Ind"] == 0 for row in rows_after_reload)
+    assert all(
+        pd.Timestamp(row["Effective_Date_Start"])
+        == pd.Timestamp("2026-01-01T00:00:00Z")
+        for row in rows_after_reload
+    )
+
+    changed_first_key = _source_row(submissionNumber="5", datapointValue="20")
+    _load_pcd(engine, metadata, pd.DataFrame([changed_first_key, second_key]))
+    _load_pcd(engine, metadata, pd.DataFrame([second_key]))
+
+    with engine.connect() as conn:
+        after_partial = conn.execute(
+            text(f"SELECT * FROM {target_table} ORDER BY submissionNumber, Current_Ind")
+        ).mappings().all()
+    assert len(after_partial) == 3
+    current_rows = [row for row in after_partial if row["Current_Ind"] == 1]
+    assert len(current_rows) == 2
+    assert {row["submissionNumber"] for row in current_rows} == {"5", "6"}
+    assert all(row["Deleted_Ind"] == 0 for row in current_rows)
+    assert sum(row["cumulativeTarget"] == 20 for row in current_rows) == 1
+    assert sum(row["Current_Ind"] == 0 for row in after_partial) == 1
+    old_first_key = next(
+        row
+        for row in after_partial
+        if row["submissionNumber"] == "5" and row["Current_Ind"] == 0
+    )
+    new_first_key = next(
+        row
+        for row in current_rows
+        if row["submissionNumber"] == "5"
+    )
+    assert old_first_key["Deleted_Ind"] == 0
+    assert pd.Timestamp(old_first_key["Effective_Date_End"]) == pd.Timestamp(
+        "2026-01-03T00:00:00Z"
+    )
+    assert pd.Timestamp(new_first_key["Effective_Date_Start"]) == pd.Timestamp(
+        "2026-01-03T00:00:00Z"
+    )
+
+    empty_source = pd.DataFrame(columns=list(_source_row()))
+    _load_pcd(engine, metadata, empty_source)
+
+    with engine.connect() as conn:
+        after_empty = conn.execute(
+            text(f"SELECT COUNT(*) FROM {target_table} WHERE Current_Ind = 1")
+        ).scalar_one()
+    assert after_empty == 2
+
+
+def test_pcd_duplicate_transformed_keys_fail_without_changing_history():
+    target_table = "pcd_output_duplicate"
+    engine = create_engine("sqlite:///:memory:")
+    metadata = _pcd_dimension_metadata(target_table)
+    initial = pd.DataFrame([_source_row()])
+    _load_pcd(engine, metadata, initial)
+    conflicting = pd.DataFrame(
+        [
+            _source_row(datapointValue="2", pcdLineDescription="Line A"),
+            _source_row(datapointValue="3", pcdLineDescription="Line B"),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="duplicate natural keys"):
+        _load_pcd(engine, metadata, conflicting)
+
+    with engine.connect() as conn:
+        rows = conn.execute(text(f"SELECT * FROM {target_table}")).mappings().all()
+    assert len(rows) == 1
+    assert rows[0]["Current_Ind"] == 1
+    assert rows[0]["cumulativeTarget"] == 12.5
+
+
+def test_pcd_metadata_factory_declares_output_contract_and_scd2_policies():
+    metadata = create_pcd_output_dimension_metadata(
+        name="pcd_output",
+        target_table="eds.pcd_output",
+        filepath="source.csv",
+    )
+
+    assert metadata.natural_key_cols == [
+        "submissionNumber",
+        "businessDomain",
+        "partyCode",
+        "periodCode",
+        "deliveryPlanReference",
+        "pcdReference",
+        "pcdOutputDescription",
+        "bonCode",
+    ]
+    assert list(metadata.data_columns) == [
+        "pcdCategory",
+        "tabName",
+        "pcdApplicableToCompany",
+        "ragRatingCompany",
+        "ragRatingAssurer",
+        "pcdLineDescription",
+        "cumulativeTarget",
+        "cumulativeOutturnForecast",
+        "unitOfmeasure",
+        "decimalPlace",
+        "versionNumber",
+        "submissionNote",
+        "columnHeader",
+        "recordStatus",
+    ]
+    assert metadata.processing_class is transform_price_control_deliverable_output
+    assert metadata.processing_class_input == "raw"
+    assert metadata.missing_rows_action == "retain"
+    assert metadata.new_key_effective_date == "execution_time"

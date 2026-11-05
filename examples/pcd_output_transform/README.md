@@ -28,13 +28,28 @@ python -m pip install --upgrade "git+https://github.com/Ofwat/dataprepkit.git"
 Then import it in a notebook:
 
 ```python
+from dataprepkit.metadata_loader import run_dimension
 from dataprepkit.pcd_output_transform import (
-    transform_price_control_deliverable_output,
+    create_pcd_output_dimension_metadata,
 )
 
-output = transform_price_control_deliverable_output(source_dataframe)
-display(output)
+metadata = create_pcd_output_dimension_metadata(
+    name="pcd_output",
+    target_table="eds.pcd_output_python",
+    filepath="source.xlsx",
+)
+run_dimension(
+    engine,
+    metadata.name,
+    metadata_registry={metadata.name: metadata},
+    override_df=source_dataframe,
+)
 ```
+
+The metadata factory configures the PCD natural key and attributes, applies the
+transform to raw source rows, retains target keys absent from a snapshot, and
+starts new history at the load execution time. Use an isolated target table
+while validating this prototype.
 
 ## Known parity limits
 
