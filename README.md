@@ -102,6 +102,14 @@ Joins run inside SQL; pandas only reads the filtered result set, renames columns
 * `python -m pytest dataprepkit/tests/test_metadata_loader.py` — metadata parsing, datetime casting, dependency joins, schema aliases.
 * `python -m pytest dataprepkit/tests/scd2/test_apply_changes.py::test_nullable_data_column_allows_null_staging` — staging with nullable columns.
 
+## PCD output transform
+
+`dataprepkit.pcd_output_transform.transform_price_control_deliverable_output`
+is a prototype of the PCD output business mapping. It accepts a pandas
+DataFrame and returns transformed business columns; it does not load or update
+a target table. See [the PCD transform notes](examples/pcd_output_transform/README.md)
+for usage and current SQL parity limits.
+
 ## Excel validation
 
 Excel workbook validation, starter YAML profiles, and configuration examples

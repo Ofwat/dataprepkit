@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from examples.pcd_output_transform import (
+from dataprepkit.pcd_output_transform import (
     transform_price_control_deliverable_output,
 )
 
