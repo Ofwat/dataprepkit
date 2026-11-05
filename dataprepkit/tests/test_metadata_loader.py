@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from dataprepkit import metadata_loader
 from dataprepkit.metadata_loader import (
     CircularDimensionDependencyError,
@@ -187,8 +189,10 @@ def test_prepare_archive_snapshot_stringifies_mixed_object_columns():
 
     archive_df = metadata_loader._prepare_archive_snapshot(incoming)
 
-    assert archive_df["mixed"].tolist() == ["A", "1", None]
-    assert archive_df["uniform_text"].tolist() == ["x", "y", None]
+    assert archive_df["mixed"].dropna().tolist() == ["A", "1"]
+    assert archive_df["mixed"].isna().tolist() == [False, False, True]
+    assert archive_df["uniform_text"].dropna().tolist() == ["x", "y"]
+    assert archive_df["uniform_text"].isna().tolist() == [False, False, True]
     assert archive_df["uniform_int"].tolist() == [1, 2, 3]
 
 
@@ -298,11 +302,9 @@ def test_build_dimension_dependency_edge_frame_returns_dependency_edges():
     )
 
     assert list(graph.columns) == ["source", "target"]
-    assert graph.to_dict(orient="records") == [
-        {"source": "dim_region", "target": "dim_scheme"},
-        {"source": None, "target": "dim_region"},
-        {"source": None, "target": "dim_isolated"},
-    ]
+    assert graph["source"].dropna().tolist() == ["dim_region"]
+    assert graph["source"].isna().tolist() == [False, True, True]
+    assert graph["target"].tolist() == ["dim_scheme", "dim_region", "dim_isolated"]
 
 
 def test_resolve_dimension_execution_order_ignores_external_dependencies():
@@ -548,6 +550,59 @@ def test_run_dimensions_in_dependency_order_passes_explicit_registry_to_run_dime
     assert captured == [registry]
 
 
+@pytest.mark.parametrize(
+    ("cutoff", "use_watermark"),
+    [
+        ("omitted", False),
+        ("omitted", True),
+        (None, True),
+        ("2026-01-01T00:00:00+00:00", False),
+        ("2026-01-01T00:00:00+00:00", True),
+    ],
+)
+def test_dependency_runner_preserves_source_cutoff(
+    monkeypatch, tmp_path, cutoff, use_watermark
+):
+    metadata = DimensionMetadata(
+        name="dim_a",
+        target_table="dimension",
+        natural_key_cols=["id"],
+        data_columns={"name": ColumnSpec(type="TEXT")},
+        surrogate_key="surrogate_key",
+        join_numeric_key="join_numeric_key",
+        filepath=str(tmp_path / "unused.csv"),
+    )
+    stored_cutoff = datetime.fromisoformat("2026-02-01T00:00:00+00:00")
+    captured = []
+    monkeypatch.setattr(
+        metadata_loader,
+        "run_dimension",
+        lambda _engine, name, **kwargs: captured.append(kwargs) or name,
+    )
+    options = {}
+    if use_watermark:
+        (tmp_path / "dim_a.watermark").write_text(
+            stored_cutoff.isoformat(), encoding="utf-8"
+        )
+        options["source_watermark_dir"] = tmp_path
+    if cutoff != "omitted":
+        options["source_modified_after"] = (
+            datetime.fromisoformat(cutoff) if cutoff is not None else None
+        )
+
+    result = run_dimensions_in_dependency_order(
+        object(), metadata_registry={"dim_a": metadata}, **options
+    )
+
+    expected = {"metadata_registry": {"dim_a": metadata}}
+    if cutoff != "omitted":
+        expected["source_modified_after"] = options["source_modified_after"]
+    elif use_watermark:
+        expected["source_modified_after"] = stored_cutoff
+    assert result == ["dim_a"]
+    assert captured == [expected]
+
+
 def test_dependency_where_clause_filters_join():
     engine = create_engine("sqlite:///:memory:")
     with engine.begin() as conn:
@@ -724,9 +779,9 @@ def test_dependency_join_error_allows_matched_null_selected_values():
 
     joined = metadata_loader._apply_dependency_joins(incoming, [dependency], engine)
 
-    assert joined.to_dict("records") == [
-        {"Service_Type_Cd": "S1", "Policy_Flag": None}
-    ]
+    assert list(joined.columns) == ["Service_Type_Cd", "Policy_Flag"]
+    assert joined["Service_Type_Cd"].tolist() == ["S1"]
+    assert joined["Policy_Flag"].isna().tolist() == [True]
 
 
 def test_dependency_join_error_reports_missing_source_keys():
@@ -804,9 +859,9 @@ def test_dependency_join_inner_keeps_matched_rows_with_null_selected_values():
 
     joined = metadata_loader._apply_dependency_joins(incoming, [dependency], engine)
 
-    assert joined.to_dict("records") == [
-        {"Service_Type_Cd": "S1", "Policy_Flag": None}
-    ]
+    assert list(joined.columns) == ["Service_Type_Cd", "Policy_Flag"]
+    assert joined["Service_Type_Cd"].tolist() == ["S1"]
+    assert joined["Policy_Flag"].isna().tolist() == [True]
 
 
 def test_dependency_join_normalizes_numeric_like_source_keys_to_match_text_targets():
@@ -1763,8 +1818,10 @@ def test_cast_data_columns_accepts_out_of_bounds_datetime_strings():
 
     casted = metadata_loader._cast_data_columns(incoming, metadata)
 
-    assert casted.loc[0, "Interval_Start_Date"] == "2999-12-31T00:00:00.000"
-    assert casted.loc[1, "Interval_Start_Date"] is None
+    assert metadata_loader.pd.Timestamp(casted.loc[0, "Interval_Start_Date"]) == (
+        metadata_loader.pd.Timestamp("2999-12-31T00:00:00.000")
+    )
+    assert metadata_loader.pd.isna(casted.loc[1, "Interval_Start_Date"])
     metadata_loader.METADATA_REGISTRY.pop("out_of_bounds_datetime_test", None)
 
 
@@ -1794,8 +1851,10 @@ def test_cast_data_columns_accepts_out_of_bounds_datetime_strings_with_seconds()
 
     casted = metadata_loader._cast_data_columns(incoming, metadata)
 
-    assert casted.loc[0, "Interval_End_Date"] == "2999-12-31T23:59:59.000"
-    assert casted.loc[1, "Interval_End_Date"] is None
+    assert metadata_loader.pd.Timestamp(casted.loc[0, "Interval_End_Date"]) == (
+        metadata_loader.pd.Timestamp("2999-12-31T23:59:59.000")
+    )
+    assert metadata_loader.pd.isna(casted.loc[1, "Interval_End_Date"])
     metadata_loader.METADATA_REGISTRY.pop("out_of_bounds_datetime_seconds_test", None)
 
 

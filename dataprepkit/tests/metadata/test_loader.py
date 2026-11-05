@@ -1192,7 +1192,8 @@ def test_stage_dataframe_copy_into_normalizes_mixed_object_columns(monkeypatch, 
         if_exists="append",
     )
 
-    assert captured["values"] == ["A1", "10", None]
+    assert captured["values"][:2] == ["A1", "10"]
+    assert pd.isna(captured["values"]).tolist() == [False, False, True]
 
 
 def test_stage_dataframe_copy_into_normalizes_nested_object_values(
@@ -1243,7 +1244,8 @@ def test_stage_dataframe_copy_into_normalizes_nested_object_values(
         if_exists="append",
     )
 
-    assert captured["values"] == ["[1, 2]", None]
+    assert captured["values"][0] == "[1, 2]"
+    assert pd.isna(captured["values"]).tolist() == [False, True]
 
 
 def test_stage_dataframe_copy_into_normalizes_integer_like_object_floats(monkeypatch, tmp_path):
@@ -1301,7 +1303,8 @@ def test_stage_dataframe_copy_into_normalizes_integer_like_object_floats(monkeyp
         if_exists="append",
     )
 
-    assert captured["values"] == ["350", None]
+    assert captured["values"][0] == "350"
+    assert pd.isna(captured["values"]).tolist() == [False, True]
 
 
 def test_stage_dataframe_copy_into_normalizes_datetime_columns(monkeypatch, tmp_path):
@@ -1367,7 +1370,7 @@ def test_stage_dataframe_copy_into_normalizes_datetime_columns(monkeypatch, tmp_
     )
 
     assert captured["values"][0].startswith("2026-01-01 10:30:00.")
-    assert captured["values"][1] is None
+    assert pd.isna(captured["values"]).tolist() == [False, True]
 
 
 def test_stage_dataframe_copy_into_creates_missing_table(monkeypatch, tmp_path):

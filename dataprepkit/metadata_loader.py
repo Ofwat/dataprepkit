@@ -426,13 +426,16 @@ def run_dimensions_in_dependency_order(
             if watermark_dir
             else None
         )
-        watermark = _read_source_watermark(watermark_path) if watermark_path else None
+        dimension_kwargs = dict(run_dimension_kwargs)
+        if watermark_path and "source_modified_after" not in dimension_kwargs:
+            dimension_kwargs["source_modified_after"] = _read_source_watermark(
+                watermark_path
+            )
         results.append(run_dimension(
             engine,
             name,
             metadata_registry=selected_registry,
-            source_modified_after=watermark,
-            **run_dimension_kwargs,
+            **dimension_kwargs,
         ))
         if watermark_dir:
             source_path = Path(metadata.filepath)
