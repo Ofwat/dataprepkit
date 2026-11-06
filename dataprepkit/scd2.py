@@ -170,34 +170,10 @@ def apply_changes(
         pre_total = _count_rows(conn, target_table)
         column_types = _get_column_types(conn, target_table)
         extra_columns = ["existing_join_numeric"]
-        existing_join_map = {}
-        if natural_key_cols:
-            select_cols = ", ".join(
-                _quote_identifier(conn.engine, col)
-                for col in [*natural_key_cols, join_numeric_key_col]
-            )
-            rows = conn.execute(
-                text(
-                    f"SELECT {select_cols} FROM {target_table} "
-                    f"WHERE {_quote_identifier(conn.engine, cols['current_ind'])} = 1"
-                )
-            ).fetchall()
-            for row in rows:
-                key = tuple(_normalize_natural_key_value(value) for value in row[:-1])
-                existing_join_map[key] = row[-1]
         incoming_df = incoming_df.copy()
-        if natural_key_cols:
-            incoming_df["existing_join_numeric"] = incoming_df.apply(
-                lambda row: existing_join_map.get(
-                    tuple(
-                        _normalize_natural_key_value(row[col])
-                        for col in natural_key_cols
-                    )
-                ),
-                axis=1,
-            )
-        else:
-            incoming_df["existing_join_numeric"] = None
+        # Resolve reusable IDs in the database after staging. Python equality
+        # and database key comparison can differ (collation, types, padding).
+        incoming_df["existing_join_numeric"] = None
         if not use_openrowset_staging:
             _create_staging_table(
                 conn,
@@ -318,6 +294,15 @@ def apply_changes(
                     hash_col,
                     extra_columns=extra_columns,
                 )
+            _populate_existing_join_numeric(
+                conn,
+                staging_table,
+                target_table,
+                natural_key_cols,
+                join_numeric_key_col,
+                cols["current_ind"],
+                column_types,
+            )
             change_summary = _coerce_change_summary(
                 _apply_snapshot_to_target(
                     conn,
@@ -958,6 +943,39 @@ def _build_natural_key_match_condition(
             )
         conditions.append(condition)
     return " AND ".join(conditions)
+
+
+def _populate_existing_join_numeric(
+    conn,
+    staging_table: str,
+    target_table: str,
+    natural_key_cols: Sequence[str],
+    join_numeric_key_col: str,
+    current_ind_col: str,
+    column_types: Mapping[str, str],
+) -> None:
+    if not natural_key_cols:
+        return
+    quote = lambda value: _quote_identifier(conn.engine, value)
+    match = _build_natural_key_match_condition(
+        conn.engine, "d", "s", natural_key_cols, column_types
+    )
+    join_numeric = quote(join_numeric_key_col)
+    current_ind = quote(current_ind_col)
+    if conn.engine.dialect.name == "mssql":
+        sql = text(
+            f"UPDATE s SET [existing_join_numeric] = d.{join_numeric} "
+            f"FROM {staging_table} AS s JOIN {target_table} AS d "
+            f"ON {match} AND d.{current_ind} = 1"
+        )
+    else:
+        sql = text(
+            f"UPDATE {staging_table} AS s "
+            f"SET {quote('existing_join_numeric')} = ("
+            f"SELECT d.{join_numeric} FROM {target_table} AS d "
+            f"WHERE {match} AND d.{current_ind} = 1)"
+        )
+    conn.execute(sql)
 
 
 def _apply_snapshot_to_target(

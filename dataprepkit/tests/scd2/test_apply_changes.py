@@ -619,6 +619,34 @@ def test_reinsert_after_delete_reuses_existing_join_numeric():
     assert current["join_numeric_key"] == 2
 
 
+def test_existing_join_numeric_is_resolved_using_database_key_match(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    _bootstrap_table(engine, [_build_initial_row("old-key", 41, "old-value")])
+
+    # Simulate a Python-side normalization collision. Database matching must
+    # remain authoritative, or the new key can reuse the old numeric ID.
+    monkeypatch.setattr(
+        "dataprepkit.scd2._normalize_natural_key_value",
+        lambda value: "collision",
+    )
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=pd.DataFrame([{"join_key": "new-key", "data_column": "new-value"}]),
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    current = _read_table(engine).loc[lambda rows: rows.Current_Ind == 1]
+    assert current.set_index("join_key")["join_numeric_key"].to_dict() == {
+        "old-key": 41,
+        "new-key": 42,
+    }
+
+
 def test_trailing_space_business_key_gets_distinct_current_join_numeric():
     engine = create_engine("sqlite:///:memory:")
     _bootstrap_table(engine, [])
@@ -1442,7 +1470,7 @@ def test_normalize_existing_join_numeric_for_raw_keeps_integer_text():
     assert _normalize_existing_join_numeric_for_raw(None) is None
 
 
-def test_apply_changes_openrowset_normalizes_existing_join_numeric_for_reuse(monkeypatch):
+def test_apply_changes_openrowset_defers_join_numeric_lookup_to_database(monkeypatch):
     class _FakeDialect:
         name = "mssql"
 
@@ -1512,10 +1540,10 @@ def test_apply_changes_openrowset_normalizes_existing_join_numeric_for_reuse(mon
         staging_parquet_base_dir="/tmp/stage",
     )
 
-    assert captured["raw_existing"] == ["7084"]
+    assert captured["raw_existing"] == [None]
 
 
-def test_apply_changes_openrowset_reuses_join_numeric_when_natural_key_is_numeric_like_text(
+def test_apply_changes_openrowset_defers_numeric_text_key_lookup_to_database(
     monkeypatch,
 ):
     class _FakeDialect:
@@ -1599,7 +1627,7 @@ def test_apply_changes_openrowset_reuses_join_numeric_when_natural_key_is_numeri
     )
 
     assert captured["interval_cd"] == ["1980"]
-    assert captured["raw_existing"] == ["5001"]
+    assert captured["raw_existing"] == [None]
 
 
 def test_apply_changes_openrowset_normalizes_integer_like_data_columns(monkeypatch):
