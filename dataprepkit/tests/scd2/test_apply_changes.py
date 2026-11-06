@@ -647,6 +647,81 @@ def test_existing_join_numeric_is_resolved_using_database_key_match(monkeypatch)
     }
 
 
+def test_apply_changes_preserves_sql_server_natural_key_types_in_staging(monkeypatch):
+    class _FakeDialect:
+        name = "mssql"
+
+    class _FakeConn:
+        def __init__(self, engine):
+            self.engine = engine
+            self.statements = []
+
+        def execute(self, statement, _params=None):
+            self.statements.append(str(statement))
+
+    class _FakeBegin:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def __enter__(self):
+            return self.conn
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeEngine:
+        dialect = _FakeDialect()
+
+        def __init__(self):
+            self.conn = _FakeConn(self)
+
+        def begin(self):
+            return _FakeBegin(self.conn)
+
+    engine = _FakeEngine()
+    monkeypatch.setattr("dataprepkit.scd2._count_rows", lambda *_: 0)
+    monkeypatch.setattr(
+        "dataprepkit.scd2._get_column_types",
+        lambda *_: {
+            "join_key": "VARCHAR(64)",
+            "data_column": "VARCHAR(32)",
+            "join_numeric_key": "BIGINT",
+            "row_hash": "VARCHAR(64)",
+        },
+    )
+    monkeypatch.setattr(
+        "dataprepkit.scd2._insert_snapshot_rows", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        "dataprepkit.scd2._populate_existing_join_numeric",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "dataprepkit.scd2._apply_snapshot_to_target",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "dataprepkit.scd2._validate_current_join_numeric_unique", lambda *_: None
+    )
+    monkeypatch.setattr("dataprepkit.scd2._validate_row_growth", lambda *_: None)
+
+    apply_changes(
+        engine=engine,
+        target_table="dimension",
+        incoming=pd.DataFrame([{"join_key": "k1", "data_column": "v1"}]),
+        natural_key_cols=["join_key"],
+        data_cols=["data_column"],
+        join_numeric_key_col="join_numeric_key",
+        surrogate_key_col="surrogate_key",
+        system_columns=SYSTEM_COLUMNS,
+    )
+
+    staging_ddl = next(
+        statement for statement in engine.conn.statements if "CREATE TABLE" in statement
+    )
+    assert "[join_key] VARCHAR(64) COLLATE Latin1_General_100_BIN2 NOT NULL" in staging_ddl
+
+
 def test_trailing_space_business_key_gets_distinct_current_join_numeric():
     engine = create_engine("sqlite:///:memory:")
     _bootstrap_table(engine, [])

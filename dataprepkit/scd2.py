@@ -192,6 +192,7 @@ def apply_changes(
                         preserve_mssql_types=True,
                     )
                 },
+                preserve_mssql_types=conn.engine.dialect.name == "mssql",
             )
         change_summary = SCD2ChangeSummary(
             incoming_rows=len(incoming_df),
