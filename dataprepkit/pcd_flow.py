@@ -186,7 +186,8 @@ def transform_pcd_external_company_submission(incoming: pd.DataFrame) -> pd.Data
         return pd.DataFrame(columns=["submissionNumber", "businessDomain", "partyCode", "pcdModel", "worksheetName", "createdDate", "recordStatus", "versionNumber", "submissionNote"])
     # The procedure groups on the original datetime value, then converts it.
     output = output.drop_duplicates(ignore_index=True)
-    output["createdDate"] = output.pop("_sourceCreatedDate").map(_datetime105)
+    output = output.rename(columns={"_sourceCreatedDate": "createdDate"})
+    output["createdDate"] = output["createdDate"].map(_datetime105)
     return output
 
 
@@ -206,7 +207,9 @@ def transform_pcd_expenditure(incoming: pd.DataFrame) -> pd.DataFrame:
         tab = _text(raw_tab, 64)
         code = _text(raw_code, 256)
         numeric = _number(row["datapointValue"])
-        upper = code.upper()
+        # LIKE in the procedure sees the original value; trim only for its
+        # separately projected bonCode column.
+        upper = str(raw_code).upper()
         np_value = numeric if upper.endswith("_NP") else 0.0
         outturn = numeric if upper.endswith(("_O", "_OT")) else 0.0
         allowance = numeric if not upper.endswith(("_O", "_OT", "_NP")) else 0.0
@@ -241,38 +244,56 @@ def transform_pcd_expenditure(incoming: pd.DataFrame) -> pd.DataFrame:
 def transform_pcd_scheme(incoming: pd.DataFrame, *, period_codes: Iterable[str]) -> pd.DataFrame:
     """Replicate PCD scheme staging, using the current EDS period lookup."""
     _require_columns(incoming, _SCHEME_INPUTS, "standard_landing")
-    periods = set(period_codes)
+    period_counts: dict[Any, int] = {}
+    for period_code in period_codes:
+        if not _missing(period_code):
+            period_counts[period_code] = period_counts.get(period_code, 0) + 1
     delay_suffixes = tuple(suffix for suffix, _ in _DELAY_REASONS)
     rows = []
     for row in incoming.to_dict("records"):
-        tab = _text(row["tabName"], 64)
+        raw_tab = row["tabName"]
+        if _missing(raw_tab) or str(raw_tab).rstrip(" ") not in {
+            "DPB3", "BRL_DPB3_ADD", "DPWW3", "DPW3"
+        }:
+            continue
+        tab = _text(raw_tab, 64)
         code = _text(row["datapointTypeCode"], 256)
-        if tab not in {"DPB3", "BRL_DPB3_ADD", "DPWW3", "DPW3"} or code[:3].strip() != "PCD":
+        if code[:3].strip() != "PCD":
             continue
         raw_period = row["datapointPeriod"]
         period = _text(raw_period, 256)
         value = _number(row["datapointValue"])
-        upper_code = code.upper()
+        upper_code = str(row["datapointTypeCode"]).upper()
         total_delayed = int(value) if "_DLY" in upper_code else 0
         delay_type = next((label for suffix, label in _DELAY_REASONS if suffix in upper_code), "N/A")
         delayed = int(value) if any(suffix in upper_code for suffix in delay_suffixes) else 0
         tab_upper = tab.upper()
         category = "Base" if tab_upper in {"DPB1", "DPB2", "DPB1_ADD", "DPB2_ADD"} else "Wastewater" if tab_upper in {"DPWW1", "DPWW2", "DPWW3", "DPWW4", "DPWW5"} else "Water" if tab_upper in {"DPW1", "DPW2", "DPW3", "DPW4", "DPW5"} else "N/A"
-        rows.append({
+        lookup_matches = (
+            0 if _missing(raw_period) else period_counts.get(raw_period, 0)
+        )
+        row_output = {
             "submissionNumber": _text(row["submissionNumber"], 64), "businessDomain": "PCD",
             "partyCode": _text(row["companyCode"], 8), "periodCode": period,
             "deliveryPlanReference": _text(row["dp_reference"], 32),
             "pcdOutputDescription": _text(row["pcdOutputDescription"], 2048),
             "pcdLineDescription": _text(row["pcdLineDescription"], 2048), "pcdCategory": category,
             "tabName": _text(row["tabName"], 64), "pcdReference": _text(row["pcdRef"], 256),
-            "pcdApplicableToCompany": int(_text(row["pcdApplicableToCompany"], 50).upper() in {"Y", "1"}),
-            "numberOfSchemes": int(value) if not _missing(raw_period) and raw_period in periods else 0,
+            "pcdApplicableToCompany": int(
+                not _missing(row["pcdApplicableToCompany"])
+                and str(row["pcdApplicableToCompany"]).rstrip(" ").upper() in {"Y", "1"}
+            ),
+            "numberOfSchemes": int(value) if lookup_matches else 0,
             "totalDelayedSchemes": total_delayed, "delayedSchemes": delayed,
             "delayType": delay_type, "unitOfmeasure": _text(row["unitOfmeasure"], 256),
             "decimalPlace": _try_integer(row["decimalPlace"]), "recordStatus": "Active",
             "versionNumber": _text(row["versionInfo"], 64), "submissionNote": _text(row["submissionNotes"], 2048),
             "columnHeader": period, "bonCode": code,
-        })
+        }
+        # The SP uses a LEFT JOIN, so a missing code yields one row while
+        # duplicate lookup codes multiply the source row before aggregation.
+        for _ in range(max(lookup_matches, 1)):
+            rows.append(row_output.copy())
     columns = ["submissionNumber", "businessDomain", "partyCode", "periodCode", "deliveryPlanReference", "pcdOutputDescription", "pcdLineDescription", "pcdCategory", "tabName", "pcdReference", "pcdApplicableToCompany", "numberOfSchemes", "delayType", "unitOfmeasure", "decimalPlace", "recordStatus", "versionNumber", "submissionNote", "columnHeader", "bonCode", "totalDelayedSchemes", "delayedSchemes"]
     frame = pd.DataFrame(rows, columns=columns)
     keys = columns[:-2]

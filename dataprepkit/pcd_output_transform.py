@@ -126,7 +126,7 @@ def transform_price_control_deliverable_output(
     accepted = incoming.loc[
         incoming["tabName"].map(
             lambda value: not _is_missing(value)
-            and str(value).upper() in _ACCEPTED_TABS
+            and str(value).rstrip(" ").upper() in _ACCEPTED_TABS
         )
     ]
     rows = []

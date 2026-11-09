@@ -74,3 +74,21 @@ ordinary float parser does not. Those formats, collation-sensitive tab
 matching, and null `DateTimeCreated` timestamps need SQL-backed parity cases
 before claiming full equivalence. `period_codes` lookup matches raw period
 values exactly as the SQL join does.
+
+## Procedure not in the traced PCD flow
+
+The database contains `cde.sp_stg_price_control_deliverable_milestone`, which
+references `lnd.price_control_deliverable` and
+`stg.price_control_deliverable_milestone`. However, the stored-procedure caller
+scan returned no other procedures referencing it, and none of the supplied
+Fabric pipeline definitions calls it directly.
+
+The known PCD pipeline invokes `cde.sp_load_eds`, which calls
+`cde.sp_stg_tbl_pcd`. In that wrapper, the comment `Price Control Deliverable -
+Milestone` precedes an execution of
+`cde.sp_stg_price_control_deliverable_scheme`; it does not call
+`cde.sp_stg_price_control_deliverable_milestone`. Python therefore implements
+the seven outputs produced by the wrapper, not this apparently unreferenced
+procedure. This is based on the SQL definitions and pipelines inspected; a
+direct invocation by an unprovided external client or manual run is not ruled
+out.

@@ -134,7 +134,7 @@ def test_stage_pcd_landing_builds_all_seven_sp_staging_outputs():
         period_codes=(),
     )
 
-    assert set(batch.frames) == {
+    expected_order = (
         "external_company_submission",
         "price_control_deliverable_output",
         "price_control_deliverable_expenditure",
@@ -142,7 +142,8 @@ def test_stage_pcd_landing_builds_all_seven_sp_staging_outputs():
         "deliverable_scheme_detail",
         "deliverable_scheme_milestone",
         "deliverable_scheme_expenditure",
-    }
+    )
+    assert tuple(batch.frames) == expected_order
     assert all(frame.empty for frame in batch.frames.values())
     assert _standard_landing().empty
     assert _list_landing().empty
@@ -423,6 +424,18 @@ def test_expenditure_measure_routing_matches_sp_cases(
     assert actual["nonDeliveryPayment"] == expected_np
     assert actual["cumulativeExpenditureAllowance"] == expected_allowance
     assert actual["cumulativeExpenditureOutturnForecast"] == expected_outturn
+
+
+def test_expenditure_suffix_match_uses_untrimmed_datapoint_type():
+    actual = pcd_flow.transform_pcd_expenditure(
+        pd.DataFrame(
+            [_standard_row(datapointTypeCode="PCD_TARGET_O ", datapointValue="7")]
+        )
+    ).iloc[0]
+
+    assert actual["bonCode"] == "PCD_TARGET_O"
+    assert actual["cumulativeExpenditureAllowance"] == 7
+    assert actual["cumulativeExpenditureOutturnForecast"] == 0
 
 
 @pytest.mark.parametrize(

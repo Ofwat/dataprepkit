@@ -110,6 +110,59 @@ def test_transform_maps_and_filters_pcd_output_rows():
     assert rag["columnHeader"] == "RAG Rating - Company Q1"
 
 
+@pytest.mark.parametrize(
+    "tab_name",
+    ["DPB1", "BRL_DPB1_ADD", "DPWW1", "DPW1"],
+)
+def test_output_procedure_filter_accepts_each_tab_without_filtering_datapoint_code(
+    tab_name,
+):
+    actual = transform_price_control_deliverable_output(
+        pd.DataFrame(
+            [
+                _source_row(
+                    tabName=tab_name,
+                    datapointTypeCode="NOT_A_PCD_CODE",
+                    datapointValue="5",
+                )
+            ]
+        )
+    )
+
+    assert len(actual) == 1
+    assert actual.loc[0, "tabName"] == tab_name
+    assert actual.loc[0, "bonCode"] == "NOT_A_PCD_CODE"
+
+
+@pytest.mark.parametrize(
+    "tab_name",
+    ["DPB2", "BRL_DPB2_ADD", "DPWW2", "DPW2", "DPB3", "DPWW3", "DPW3", "unknown"],
+)
+def test_output_procedure_filter_rejects_tabs_not_in_sp_list(tab_name):
+    actual = transform_price_control_deliverable_output(
+        pd.DataFrame([_source_row(tabName=tab_name)])
+    )
+
+    assert actual.empty
+
+
+def test_output_procedure_filter_accepts_sql_trailing_space_padding():
+    actual = transform_price_control_deliverable_output(
+        pd.DataFrame([_source_row(tabName="DPB1  ")])
+    )
+
+    assert len(actual) == 1
+    assert actual.loc[0, "tabName"] == "DPB1"
+
+
+def test_output_procedure_filter_rejects_leading_space_padding():
+    actual = transform_price_control_deliverable_output(
+        pd.DataFrame([_source_row(tabName=" DPB1")])
+    )
+
+    assert actual.empty
+
+
 def test_transform_groups_identical_business_rows_and_sums_measures():
     source = pd.DataFrame(
         [
