@@ -115,13 +115,13 @@ def _number(value: Any, default: float = 0.0) -> float:
     return number if math.isfinite(number) else default
 
 
-def _integer(value: Any, default: int = 0) -> int:
+def _try_integer(value: Any, null_default: int | None = 0) -> int | None:
     if _missing(value):
-        return default
+        return null_default
     try:
-        return int(float(str(value).strip()))
+        return int(str(value).strip())
     except (ValueError, TypeError, OverflowError):
-        return default
+        return None
 
 
 def _date23(value: Any) -> date | None:
@@ -195,18 +195,28 @@ def transform_pcd_expenditure(incoming: pd.DataFrame) -> pd.DataFrame:
     _require_columns(incoming, _EXPENDITURE_INPUTS, "standard_landing")
     rows = []
     for row in incoming.to_dict("records"):
-        tab = _text(row["tabName"], 64)
-        code = _text(row["datapointTypeCode"], 256)
-        if tab not in {"DPB2", "BRL_DPB2_ADD", "DPWW2", "DPW2"} or not code.startswith("PCD"):
+        raw_tab = row["tabName"]
+        raw_code = row["datapointTypeCode"]
+        # The SP filters the untrimmed tab and the first three raw code chars.
+        # SQL string equality ignores trailing spaces, but not leading spaces.
+        if _missing(raw_tab) or str(raw_tab).rstrip(" ") not in {"DPB2", "BRL_DPB2_ADD", "DPWW2", "DPW2"}:
             continue
+        if _missing(raw_code) or str(raw_code)[:3] != "PCD":
+            continue
+        tab = _text(raw_tab, 64)
+        code = _text(raw_code, 256)
         numeric = _number(row["datapointValue"])
         upper = code.upper()
         np_value = numeric if upper.endswith("_NP") else 0.0
         outturn = numeric if upper.endswith(("_O", "_OT")) else 0.0
         allowance = numeric if not upper.endswith(("_O", "_OT", "_NP")) else 0.0
         tab_upper = tab.upper()
-        category = "Base" if tab_upper in {"DPB2", "BRL_DPB2_ADD"} else "Wastewater" if tab_upper.startswith("DPWW") else "Water" if tab_upper.startswith("DPW") else "N/A"
-        applicable = _text(row["pcdApplicableToCompany"], 50).upper() in {"Y", "1"}
+        category = "Base" if tab_upper in {"DPB2", "DPB1_ADD", "DPB2_ADD"} else "Wastewater" if tab_upper in {"DPWW1", "DPWW2", "DPWW3", "DPWW4", "DPWW5"} else "Water" if tab_upper in {"DPW1", "DPW2", "DPW3", "DPW4", "DPW5"} else "N/A"
+        raw_applicable = row["pcdApplicableToCompany"]
+        applicable = (
+            not _missing(raw_applicable)
+            and str(raw_applicable).rstrip(" ").upper() in {"Y", "1"}
+        )
         rows.append({
             "submissionNumber": _text(row["submissionNumber"], 64), "businessDomain": "PCD",
             "partyCode": _text(row["companyCode"], 8), "periodCode": _text(row["datapointPeriod"], 256),
@@ -217,7 +227,7 @@ def transform_pcd_expenditure(incoming: pd.DataFrame) -> pd.DataFrame:
             "pcdApplicableToCompany": int(applicable), "nonDeliveryPayment": np_value,
             "cumulativeExpenditureAllowance": allowance,
             "cumulativeExpenditureOutturnForecast": outturn,
-            "unitOfmeasure": _text(row["unitOfmeasure"], 256), "decimalPlace": _integer(row["decimalPlace"]),
+            "unitOfmeasure": _text(row["unitOfmeasure"], 256), "decimalPlace": _try_integer(row["decimalPlace"]),
             "recordStatus": "Active", "versionNumber": _text(row["versionInfo"], 64),
             "submissionNote": _text(row["submissionNotes"], 2048),
             "columnHeader": _text(row["datapointPeriod"], 256), "bonCode": code,
@@ -247,7 +257,7 @@ def transform_pcd_scheme(incoming: pd.DataFrame, *, period_codes: Iterable[str])
         delay_type = next((label for suffix, label in _DELAY_REASONS if suffix in upper_code), "N/A")
         delayed = int(value) if any(suffix in upper_code for suffix in delay_suffixes) else 0
         tab_upper = tab.upper()
-        category = "Base" if tab_upper in {"DPB3", "BRL_DPB3_ADD"} else "Wastewater" if tab_upper.startswith("DPWW") else "Water"
+        category = "Base" if tab_upper in {"DPB1", "DPB2", "DPB1_ADD", "DPB2_ADD"} else "Wastewater" if tab_upper in {"DPWW1", "DPWW2", "DPWW3", "DPWW4", "DPWW5"} else "Water" if tab_upper in {"DPW1", "DPW2", "DPW3", "DPW4", "DPW5"} else "N/A"
         rows.append({
             "submissionNumber": _text(row["submissionNumber"], 64), "businessDomain": "PCD",
             "partyCode": _text(row["companyCode"], 8), "periodCode": period,
@@ -259,7 +269,7 @@ def transform_pcd_scheme(incoming: pd.DataFrame, *, period_codes: Iterable[str])
             "numberOfSchemes": int(value) if not _missing(raw_period) and raw_period in periods else 0,
             "totalDelayedSchemes": total_delayed, "delayedSchemes": delayed,
             "delayType": delay_type, "unitOfmeasure": _text(row["unitOfmeasure"], 256),
-            "decimalPlace": _integer(row["decimalPlace"]), "recordStatus": "Active",
+            "decimalPlace": _try_integer(row["decimalPlace"]), "recordStatus": "Active",
             "versionNumber": _text(row["versionInfo"], 64), "submissionNote": _text(row["submissionNotes"], 2048),
             "columnHeader": period, "bonCode": code,
         })
