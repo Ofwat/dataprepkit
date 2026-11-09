@@ -164,7 +164,11 @@ def _group_sum(frame: pd.DataFrame, keys: list[str], measures: list[str]) -> pd.
 
 
 def transform_pcd_external_company_submission(incoming: pd.DataFrame) -> pd.DataFrame:
-    """Collapse metadata-identical standard landing rows into submissions."""
+    """Build distinct PCD submission rows from standard landing metadata.
+
+    Mirrors the submission projection and deduplication in
+    ``cde.sp_stg_price_control_deliverable``.
+    """
     _require_columns(incoming, _STANDARD_COLUMNS, "standard_landing")
     rows = []
     null_created_default = datetime.now().replace(microsecond=0)
@@ -192,7 +196,11 @@ def transform_pcd_external_company_submission(incoming: pd.DataFrame) -> pd.Data
 
 
 def transform_pcd_expenditure(incoming: pd.DataFrame) -> pd.DataFrame:
-    """Replicate ``sp_stg_price_control_deliverable_expenditure``."""
+    """Filter and aggregate PCD expenditure datapoints from standard landing.
+
+    Mirrors the tab/code filters, category and measure mapping, and grouping in
+    ``cde.sp_stg_price_control_deliverable_expenditure``.
+    """
     _require_columns(incoming, _EXPENDITURE_INPUTS, "standard_landing")
     rows = []
     for row in incoming.to_dict("records"):
@@ -242,7 +250,11 @@ def transform_pcd_expenditure(incoming: pd.DataFrame) -> pd.DataFrame:
 
 
 def transform_pcd_scheme(incoming: pd.DataFrame, *, period_codes: Iterable[str]) -> pd.DataFrame:
-    """Replicate PCD scheme staging, using the current EDS period lookup."""
+    """Filter, classify, and aggregate PCD scheme datapoints.
+
+    Uses the supplied EDS period codes for the scheme-count lookup and mirrors
+    the staging rules in ``cde.sp_stg_price_control_deliverable_scheme``.
+    """
     _require_columns(incoming, _SCHEME_INPUTS, "standard_landing")
     period_counts: dict[Any, int] = {}
     for period_code in period_codes:
@@ -301,7 +313,11 @@ def transform_pcd_scheme(incoming: pd.DataFrame, *, period_codes: Iterable[str])
 
 
 def transform_deliverable_scheme_milestone(incoming: pd.DataFrame) -> pd.DataFrame:
-    """Unpivot seven baseline and seven forecast milestone dates per row."""
+    """Unpivot baseline and forecast milestone dates into typed rows.
+
+    Produces 14 milestone rows per landing row, following
+    ``cde.sp_stg_deliverable_scheme_milestone``.
+    """
     required = ("submissionNumber", "companyCode", "schemeId", *_MILESTONE_COLUMNS)
     _require_columns(incoming, required, "list_landing")
     rows = []
@@ -317,7 +333,11 @@ def transform_deliverable_scheme_milestone(incoming: pd.DataFrame) -> pd.DataFra
 
 
 def transform_deliverable_scheme_expenditure(incoming: pd.DataFrame) -> pd.DataFrame:
-    """Unpivot 14 baseline/forecast expenditure periods per landing row."""
+    """Unpivot baseline and forecast expenditure columns into period rows.
+
+    Produces 14 rows per landing row with normalized period and milestone type,
+    following ``cde.sp_stg_deliverable_scheme_expenditure``.
+    """
     required = ("submissionNumber", "companyCode", "schemeId", *_EXPENDITURE_COLUMNS)
     _require_columns(incoming, required, "list_landing")
     rows = []
@@ -339,7 +359,12 @@ def stage_pcd_landing(
     *,
     period_codes: Iterable[str],
 ) -> PcdStagingBatch:
-    """Build all seven business staging outputs from normalized landing frames."""
+    """Build all PCD business staging frames from standard and list landing.
+
+    This is the Python counterpart to ``cde.sp_stg_tbl_pcd``. It delegates
+    each output to a dedicated transform that names its corresponding staging
+    procedure.
+    """
     _require_columns(standard_landing, _STANDARD_COLUMNS, "standard_landing")
     _require_columns(list_landing, (*_LIST_COLUMNS, *_MILESTONE_COLUMNS, *_EXPENDITURE_COLUMNS), "list_landing")
     frames = {
@@ -361,11 +386,12 @@ def apply_pcd_scd2(
     dimensions: Iterable[PcdDimension],
     gen_staging: Mapping[str, pd.DataFrame] | None = None,
 ) -> PcdRunResult:
-    """Apply SCD2 to Implemented PCD plus selected shared GEN dimensions.
+    """Validate dependencies, then apply SCD2 to the selected PCD and GEN tables.
 
-    Every dependency is validated before the first database mutation. PCD
-    frames already represent their SQL staging transform; GEN frames are
-    supplied by the caller from the corresponding GEN staging nodes.
+    This implements the metadata-selected behavior corresponding to
+    ``cde.sp_run_scd2_etl``. Every dependency is validated before the first
+    database mutation. PCD frames already contain the staging transforms;
+    callers provide GEN frames from their corresponding staging nodes.
     """
     gen_staging = gen_staging or {}
     selected: list[PcdDimension] = []
@@ -421,6 +447,11 @@ def run_pcd_flow(
     dimensions: Iterable[PcdDimension],
     gen_staging: Mapping[str, pd.DataFrame] | None = None,
 ) -> PcdRunResult:
-    """Run PCD landing transforms followed by metadata-selected SCD2 loads."""
+    """Run the PCD landing-to-SCD2 route represented by ``cde.sp_load_eds``.
+
+    Builds the seven staging frames, then loads the selected dimensions with
+    SCD2. It composes ``cde.sp_stg_tbl_pcd`` and the configured PCD branch of
+    ``cde.sp_run_scd2_etl``.
+    """
     staging = stage_pcd_landing(standard_landing, list_landing, period_codes=period_codes)
     return apply_pcd_scd2(engine, staging, dimensions=dimensions, gen_staging=gen_staging)

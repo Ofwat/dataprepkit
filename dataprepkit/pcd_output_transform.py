@@ -112,10 +112,11 @@ def _category(tab_name: str) -> str:
 def transform_price_control_deliverable_output(
     incoming: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Map raw PCD landing rows to the output table's business columns.
+    """Map and aggregate standard landing rows into PCD output business fields.
 
     This is a pure transformation: it does not read or write a database and it
     deliberately leaves natural-key conflict selection to the load contract.
+    It mirrors ``cde.sp_stg_price_control_deliverable_output``.
     """
     if not isinstance(incoming, pd.DataFrame):
         raise TypeError("incoming must be a pandas DataFrame")
@@ -208,7 +209,11 @@ def create_pcd_output_dimension_metadata(
     target_table: str,
     filepath: str,
 ) -> DimensionMetadata:
-    """Create metadata for loading transformed PCD output rows with SCD2."""
+    """Define natural keys, types, and transform settings for PCD output SCD2.
+
+    The metadata describes rows produced by
+    ``cde.sp_stg_price_control_deliverable_output``.
+    """
     natural_key_types = {
         "submissionNumber": "VARCHAR(64)",
         "businessDomain": "VARCHAR(1024)",
