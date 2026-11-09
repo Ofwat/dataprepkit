@@ -315,7 +315,7 @@ def transform_pcd_scheme(incoming: pd.DataFrame, *, period_codes: Iterable[str])
 def transform_deliverable_scheme_milestone(incoming: pd.DataFrame) -> pd.DataFrame:
     """Unpivot baseline and forecast milestone dates into typed rows.
 
-    Produces 14 milestone rows per landing row, following
+    Unpivots the baseline and forecast milestone-date columns, following
     ``cde.sp_stg_deliverable_scheme_milestone``.
     """
     required = ("submissionNumber", "companyCode", "schemeId", *_MILESTONE_COLUMNS)
@@ -335,8 +335,9 @@ def transform_deliverable_scheme_milestone(incoming: pd.DataFrame) -> pd.DataFra
 def transform_deliverable_scheme_expenditure(incoming: pd.DataFrame) -> pd.DataFrame:
     """Unpivot baseline and forecast expenditure columns into period rows.
 
-    Produces 14 rows per landing row with normalized period and milestone type,
-    following ``cde.sp_stg_deliverable_scheme_expenditure``.
+    Unpivots the baseline and forecast expenditure columns into rows with
+    normalized period and milestone type, following
+    ``cde.sp_stg_deliverable_scheme_expenditure``.
     """
     required = ("submissionNumber", "companyCode", "schemeId", *_EXPENDITURE_COLUMNS)
     _require_columns(incoming, required, "list_landing")
