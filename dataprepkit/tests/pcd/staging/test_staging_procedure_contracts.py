@@ -419,6 +419,11 @@ class TestDeliverableSchemeExpenditureContract:
         assert actual["milestoneDetailType"].tolist() == [
             *("Baseline" for _ in range(7)), *("Forecast" for _ in range(7))
         ]
+        forecast_2027_28 = actual.loc[
+            (actual["periodCode"] == "2027-28")
+            & (actual["milestoneDetailType"] == "Forecast")
+        ].iloc[0]
+        assert forecast_2027_28["milestoneExpenditure"] == 12.5
         assert actual.iloc[0].to_dict() == {
             "submissionNumber": "5", "businessDomain": "PCD", "partyCode": "HDD",
             "recordStatus": "Active", "schemeId": "S-1",
