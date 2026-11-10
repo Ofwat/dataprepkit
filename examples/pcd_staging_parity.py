@@ -223,16 +223,16 @@ def make_pcd_parity_inputs(
     )
 
     def add_standard(tab, code, value, *, period="2025-26", reference=None, **updates):
+        row_updates = {
+            "tabName": tab,
+            "datapointTypeCode": code,
+            "datapointValue": value,
+            "datapointPeriod": period,
+            "dp_reference": reference or f"DP-{len(standard_rows):03d}",
+        }
+        row_updates.update(updates)
         standard_rows.append(
-            _standard_row(
-                marker,
-                tabName=tab,
-                datapointTypeCode=code,
-                datapointValue=value,
-                datapointPeriod=period,
-                dp_reference=reference or f"DP-{len(standard_rows):03d}",
-                **updates,
-            )
+            _standard_row(marker, **row_updates)
         )
 
     # Output procedure: each accepted tab/category, target/outturn suffixes,
@@ -305,7 +305,7 @@ def make_pcd_parity_inputs(
         _list_row(
             marker,
             "SCHEME-BASE-2",
-            tabName="DPB2",
+            tabName=" dpb2 ",
             forecastToComplete="invalid",
             originalRegulatoryDate="not-a-date",
             currentRegulatoryDate="2025/02/03",
@@ -314,8 +314,24 @@ def make_pcd_parity_inputs(
             percentSpendToDate="",
             criticalHighProfile="1",
         ),
-        _list_row(marker, "SCHEME-WW", tabName="DPWW5", criticalHighProfile="yes"),
-        _list_row(marker, "SCHEME-WATER", tabName="DPW5", criticalHighProfile=" yes "),
+        *[
+            _list_row(
+                marker,
+                f"SCHEME-WW-{number}",
+                tabName=f" dpww{number} " if number == 1 else f"DPWW{number}",
+                criticalHighProfile="yes",
+            )
+            for number in range(1, 6)
+        ],
+        *[
+            _list_row(
+                marker,
+                f"SCHEME-WATER-{number}",
+                tabName=f"dpw{number}" if number == 1 else f"DPW{number}",
+                criticalHighProfile=" yes ",
+            )
+            for number in range(1, 6)
+        ],
         _list_row(marker, "SCHEME-UNMAPPED", tabName="DPB1_ADD", criticalHighProfile="TRUE"),
         _list_row(marker, "SCHEME-UNKNOWN", tabName="UNKNOWN", originalRegulatoryDate="invalid"),
         _list_row(

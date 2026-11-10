@@ -8,8 +8,9 @@ used by the Python PCD flow:
 
 It includes accepted and rejected tabs/codes, output and expenditure measure
 routes, all scheme-delay labels, matched and unmatched EDS periods, duplicate
-grouping, null/default conversions, detail categories and casts, and the
-milestone/expenditure period columns.
+grouping, null/default conversions, every scheme-detail category tab (including
+case and whitespace normalization), detail casts, and all milestone/expenditure
+period columns.
 
 ## Notebook use
 
