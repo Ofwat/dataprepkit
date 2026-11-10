@@ -1,153 +1,12 @@
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine, text
 
 from dataprepkit import pcd_flow
-from dataprepkit.pcd_output_transform import create_pcd_output_dimension_metadata
-
-
-def _standard_landing():
-    return pd.DataFrame(
-        columns=[
-            "submissionNumber",
-            "companyCode",
-            "dataCollection",
-            "worksheetName",
-            "datapointPeriod",
-            "dp_reference",
-            "datapointTypeCode",
-            "datapointValue",
-            "DateTimeCreated",
-            "pcdModel",
-            "pcdRef",
-            "pcdApplicableToCompany",
-            "pcdLineDescription",
-            "pcdOutputDescription",
-            "unitOfmeasure",
-            "decimalPlace",
-            "versionInfo",
-            "submissionNotes",
-            "tabName",
-        ]
-    )
-
-
-def _list_landing():
-    columns = [
-        "submissionNumber",
-        "companyCode",
-        "tabName",
-        "lineDescription",
-        "versionInfo",
-        "schemeId",
-        "typeOfScheme",
-        "imMoveReason",
-        "substitutedSchemeName",
-        "pcdRef",
-        "eaId",
-        "winepId",
-        "schemeName",
-        "forecastToComplete",
-        "originalRegulatoryDate",
-        "currentRegulatoryDate",
-        "currentInterimMilestone",
-        "spendToDate",
-        "forecastOutturn",
-        "percentSpendToDate",
-        "criticalHighProfile",
-        "schemeType",
-        "amp",
-        "submissionNotes",
-    ]
-    columns.extend(f"baselineIm{number}" for number in range(1, 8))
-    columns.extend(f"forecastIm{number}" for number in range(1, 8))
-    columns.extend(
-        f"{period}{year}_{next_year % 100:02d}"
-        for period in ("baseline", "forecast")
-        for year, next_year in zip(range(2023, 2030), range(2024, 2031))
-    )
-    return pd.DataFrame(columns=columns)
-
-
-def _standard_row(**updates):
-    row = {column: None for column in _standard_landing().columns}
-    row.update(
-        submissionNumber="5",
-        companyCode="HDD",
-        dataCollection="PCD",
-        worksheetName="Submission",
-        datapointPeriod="2025-26",
-        dp_reference="DP-1",
-        datapointTypeCode="PCD_TARGET",
-        datapointValue="12.5",
-        DateTimeCreated="21-10-2026",
-        pcdRef="REF-1",
-        pcdApplicableToCompany="Y",
-        pcdLineDescription="Line",
-        pcdOutputDescription="Output",
-        unitOfmeasure="Ml/d",
-        decimalPlace="1",
-        versionInfo="3",
-        submissionNotes="Note",
-        tabName="DPB2",
-    )
-    row.update(updates)
-    return row
-
-
-def _list_row(**updates):
-    row = {column: None for column in _list_landing().columns}
-    row.update(
-        submissionNumber="5",
-        companyCode="HDD",
-        tabName="DPW1",
-        lineDescription="Line",
-        versionInfo="3",
-        schemeId="S-1",
-        typeOfScheme="Primary",
-        imMoveReason="Reason",
-        substitutedSchemeName="",
-        pcdRef="REF-1",
-        eaId="EA-1",
-        winepId="WINEP-1",
-        schemeName="Scheme",
-        forecastToComplete="10",
-        originalRegulatoryDate="2024-01-02",
-        currentRegulatoryDate="2025-01-02",
-        currentInterimMilestone="IM2",
-        spendToDate="5",
-        forecastOutturn="20",
-        percentSpendToDate="25",
-        criticalHighProfile="YES",
-        schemeType="Secondary",
-        amp="AMP8",
-        submissionNotes="Note",
-    )
-    row.update(updates)
-    return row
-
-
-def test_stage_pcd_landing_builds_all_seven_sp_staging_outputs():
-    batch = pcd_flow.stage_pcd_landing(
-        _standard_landing(),
-        _list_landing(),
-        period_codes=(),
-    )
-
-    expected_order = (
-        "external_company_submission",
-        "price_control_deliverable_output",
-        "price_control_deliverable_expenditure",
-        "price_control_deliverable_scheme",
-        "deliverable_scheme_detail",
-        "deliverable_scheme_milestone",
-        "deliverable_scheme_expenditure",
-    )
-    assert tuple(batch.frames) == expected_order
-    assert all(frame.empty for frame in batch.frames.values())
-    assert _standard_landing().empty
-    assert _list_landing().empty
-
+from dataprepkit.tests.pcd.fixtures import (
+    _list_row,
+    _standard_landing,
+    _standard_row,
+)
 
 def test_external_submission_deduplicates_same_metadata_row():
     source = pd.DataFrame([_standard_row(), _standard_row()])
@@ -219,12 +78,21 @@ def test_expenditure_filter_accepts_exactly_the_four_sp_tabs():
     "tab_name",
     ["DPB1", "BRL_DPB1_ADD", "DPWW1", "DPW1", "DPB3", "DPWW3", "DPW3", "unknown"],
 )
+
+
+@pytest.mark.parametrize(
+    "tab_name",
+    ["DPB1", "BRL_DPB1_ADD", "DPWW1", "DPW1", "DPB3", "DPWW3", "DPW3", "unknown"],
+)
 def test_expenditure_filter_rejects_tabs_not_listed_by_sp(tab_name):
     actual = pcd_flow.transform_pcd_expenditure(
         pd.DataFrame([_standard_row(tabName=tab_name)])
     )
 
     assert actual.empty
+
+
+@pytest.mark.parametrize("datapoint_type", ["XCD_TARGET", "APCD_TARGET", " PCD_TARGET"])
 
 
 @pytest.mark.parametrize("datapoint_type", ["XCD_TARGET", "APCD_TARGET", " PCD_TARGET"])
@@ -289,6 +157,17 @@ def test_expenditure_trims_each_trimmed_output_field():
     assert actual["unitOfmeasure"] == "Ml/d"
     assert actual["versionNumber"] == "3"
     assert actual["submissionNote"] == "Note"
+
+
+@pytest.mark.parametrize(
+    ("tab_name", "expected_category"),
+    [
+        ("DPB2", "Base"),
+        ("DPWW2", "Wastewater"),
+        ("DPW2", "Water"),
+        ("BRL_DPB2_ADD", "N/A"),
+    ],
+)
 
 
 @pytest.mark.parametrize(
@@ -394,12 +273,30 @@ def test_expenditure_sql_null_defaults_and_declared_output_lengths():
     ("applicable", "expected"),
     [("Y", 1), ("1", 1), ("N", 0), ("0", 0), ("other", 0), (" Y", 0)],
 )
+
+
+@pytest.mark.parametrize(
+    ("applicable", "expected"),
+    [("Y", 1), ("1", 1), ("N", 0), ("0", 0), ("other", 0), (" Y", 0)],
+)
 def test_expenditure_company_applicability_matches_sp_case(applicable, expected):
     actual = pcd_flow.transform_pcd_expenditure(
         pd.DataFrame([_standard_row(pcdApplicableToCompany=applicable)])
     )
 
     assert actual.loc[0, "pcdApplicableToCompany"] == expected
+
+
+@pytest.mark.parametrize(
+    ("datapoint_type", "expected_np", "expected_allowance", "expected_outturn"),
+    [
+        ("PCD_TARGET", 0, 7, 0),
+        ("PCD_TARGET_NP", 7, 0, 0),
+        ("PCD_TARGET_O", 0, 0, 7),
+        ("PCD_TARGET_OT", 0, 0, 7),
+        ("PCD_TARGET_NP_EXTRA", 0, 7, 0),
+    ],
+)
 
 
 @pytest.mark.parametrize(
@@ -436,6 +333,24 @@ def test_expenditure_suffix_match_uses_untrimmed_datapoint_type():
     assert actual["bonCode"] == "PCD_TARGET_O"
     assert actual["cumulativeExpenditureAllowance"] == 7
     assert actual["cumulativeExpenditureOutturnForecast"] == 0
+
+
+@pytest.mark.parametrize(
+    ("suffix", "expected_label"),
+    [
+        ("DIR", "Lack of internal resourcing"),
+        ("DSCR", "Lack of supply chain resourcing"),
+        ("DCS", "Change in solution (IM2)"),
+        ("DSCS", "Supply chain capacity"),
+        ("DPP", "Land and planning permission"),
+        ("DTPI", "Third-party interface"),
+        ("DCI", "Contractual issues"),
+        ("DSI", "Sites issues"),
+        ("DER", "Environmental risks"),
+        ("RS", "Regulatory Sign off Delay"),
+        ("DPLE", "Programme level efficiency"),
+    ],
+)
 
 
 @pytest.mark.parametrize(
@@ -571,136 +486,3 @@ def test_scheme_detail_milestone_and_expenditure_expansion_match_sql_periods():
     assert pd.isna(milestones.loc[milestones["periodCode"] == "forecastIm7", "milestoneDate"].iloc[0])
     assert expenditure.loc[expenditure["periodCode"] == "2023-24", "milestoneExpenditure"].iloc[0] == 12.5
     assert expenditure.loc[expenditure["periodCode"] == "2029-30", "milestoneExpenditure"].iloc[0] == 0
-
-
-def test_pcd_scd2_selects_implemented_pcd_and_gen_from_shared_staging(
-    monkeypatch,
-):
-    metadata = create_pcd_output_dimension_metadata(
-        name="pcd_output",
-        target_table="pcd_output_test",
-        filepath="unused.csv",
-    )
-    output = pd.DataFrame(
-        columns=[*metadata.natural_key_cols, *metadata.data_columns]
-    )
-    party = output.copy()
-    definitions = (
-        pcd_flow.PcdDimension(
-            metadata=metadata,
-            subject_area="PCD",
-            table_status="Implemented",
-            staging_table="price_control_deliverable_output",
-        ),
-        pcd_flow.PcdDimension(
-            metadata=metadata.model_copy(update={"name": "party"}),
-            subject_area="GEN",
-            table_status="Implemented",
-            staging_table="party",
-        ),
-        pcd_flow.PcdDimension(
-            metadata=metadata.model_copy(update={"name": "nav"}),
-            subject_area="NAV",
-            table_status="Implemented",
-            staging_table="nav",
-        ),
-        pcd_flow.PcdDimension(
-            metadata=metadata.model_copy(update={"name": "approved"}),
-            subject_area="PCD",
-            table_status="Approved",
-            staging_table="approved",
-        ),
-    )
-    calls = []
-    monkeypatch.setattr(
-        pcd_flow,
-        "run_dimension",
-        lambda engine, name, **kwargs: calls.append((name, kwargs)) or name,
-    )
-
-    result = pcd_flow.apply_pcd_scd2(
-        create_engine("sqlite:///:memory:"),
-        pcd_flow.PcdStagingBatch(
-            frames={"price_control_deliverable_output": output}
-        ),
-        dimensions=definitions,
-        gen_staging={"party": party},
-    )
-
-    assert [name for name, _ in calls] == ["pcd_output", "party"]
-    assert all(kwargs["override_df"] is not None for _, kwargs in calls)
-    assert all(
-        kwargs["metadata_registry"][name].processing_class is None
-        for name, kwargs in calls
-    )
-    assert result.loaded_tables == ("pcd_output", "party")
-    assert result.skipped_tables == {
-        "nav": "subject area is not PCD or GEN",
-        "approved": "table status is not Implemented",
-    }
-    assert metadata.processing_class is not None
-
-
-def test_missing_selected_gen_dependency_fails_before_any_scd2_write(monkeypatch):
-    metadata = create_pcd_output_dimension_metadata(
-        name="party",
-        target_table="party_test",
-        filepath="unused.csv",
-    )
-    calls = []
-    monkeypatch.setattr(
-        pcd_flow,
-        "run_dimension",
-        lambda *args, **kwargs: calls.append((args, kwargs)),
-    )
-
-    with pytest.raises(pcd_flow.PcdDependencyError, match="party"):
-        pcd_flow.apply_pcd_scd2(
-            create_engine("sqlite:///:memory:"),
-            pcd_flow.PcdStagingBatch(frames={}),
-            dimensions=(
-                pcd_flow.PcdDimension(
-                    metadata=metadata,
-                    subject_area="GEN",
-                    table_status="Implemented",
-                    staging_table="party",
-                ),
-            ),
-            gen_staging={},
-        )
-
-    assert calls == []
-
-
-def test_pcd_flow_sends_staged_business_frame_through_real_scd2_loader():
-    engine = create_engine("sqlite:///:memory:")
-    metadata = create_pcd_output_dimension_metadata(
-        name="pcd_output",
-        target_table="pcd_output_flow_test",
-        filepath="unused.csv",
-    )
-    staged = pcd_flow.transform_price_control_deliverable_output(
-        pd.DataFrame([_standard_row(tabName="DPB1", datapointTypeCode="PCD_TARGET")])
-    )
-    dimension = pcd_flow.PcdDimension(
-        metadata=metadata,
-        subject_area="PCD",
-        table_status="Implemented",
-        staging_table="price_control_deliverable_output",
-    )
-    batch = pcd_flow.PcdStagingBatch(
-        frames={"price_control_deliverable_output": staged}
-    )
-
-    pcd_flow.apply_pcd_scd2(engine, batch, dimensions=(dimension,))
-    pcd_flow.apply_pcd_scd2(engine, batch, dimensions=(dimension,))
-
-    with engine.connect() as connection:
-        rows = connection.execute(
-            text(
-                "SELECT COUNT(*) AS total, SUM(Current_Ind) AS current_rows "
-                "FROM pcd_output_flow_test"
-            )
-        ).mappings().one()
-    assert rows["total"] == 1
-    assert rows["current_rows"] == 1
