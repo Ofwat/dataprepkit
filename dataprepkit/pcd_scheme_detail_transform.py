@@ -119,8 +119,12 @@ def _date_style_23(value: Any) -> date | None:
     raw = str(value).strip(" ")
     try:
         # SQL TRY_CONVERT(datetime2, value, 23) is used before insertion into
-        # a DATE column. ISO timestamps retain only their calendar date here.
-        return date.fromisoformat(raw[:10]) if len(raw) >= 10 else None
+        # a DATE column. SQL accepts either separator in this year-first date;
+        # ISO timestamps retain only their calendar date here.
+        date_text = raw[:10]
+        if len(date_text) == 10 and date_text[4] == "/" and date_text[7] == "/":
+            date_text = date_text.replace("/", "-")
+        return date.fromisoformat(date_text) if len(date_text) == 10 else None
     except ValueError:
         return None
 

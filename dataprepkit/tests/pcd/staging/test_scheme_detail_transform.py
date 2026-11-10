@@ -165,6 +165,20 @@ def test_transform_preserves_duplicate_source_rows_for_shared_validation():
     assert len(actual) == 2
 
 
+def test_transform_accepts_sql_style_23_year_first_slash_date():
+    actual = transform_deliverable_scheme_detail(
+        pd.DataFrame(
+            [
+                _source_row(
+                    currentRegulatoryDate="2025/02/03",
+                )
+            ]
+        )
+    )
+
+    assert actual.loc[0, "currentRegulatoryDate"] == date(2025, 2, 3)
+
+
 def test_transform_requires_all_columns_read_by_the_procedure():
     source = pd.DataFrame([_source_row()]).drop(columns=["forecastOutturn"])
 
