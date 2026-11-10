@@ -2077,6 +2077,7 @@ def _cast_data_columns(incoming: pd.DataFrame, metadata: DimensionMetadata) -> p
                 if retry_mask.any():
                     parsed.loc[retry_mask] = pd.to_datetime(
                         df.loc[retry_mask, name],
+                        format="mixed",
                         errors="coerce",
                         dayfirst=spec.dayfirst,
                     )

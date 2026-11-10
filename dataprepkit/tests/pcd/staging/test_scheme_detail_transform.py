@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import date
 
 import pandas as pd
@@ -197,6 +198,9 @@ def test_scheme_detail_metadata_uses_declared_keys_attributes_and_policies():
 
 
 def test_scheme_detail_runs_through_shared_scd2_loader(monkeypatch):
+    # Python 3.12 deprecated sqlite3's implicit date adapter. Match SQLite's
+    # DATE representation explicitly for this in-memory integration test.
+    sqlite3.register_adapter(date, date.isoformat)
     engine = create_engine("sqlite:///:memory:")
     metadata = create_deliverable_scheme_detail_dimension_metadata(
         name="deliverable_scheme_detail",

@@ -7,7 +7,6 @@ import uuid
 import pandas as pd
 from pandas.api.types import (
     is_datetime64_any_dtype,
-    is_datetime64tz_dtype,
     is_object_dtype,
 )
 from sqlalchemy import Engine, inspect, text
@@ -343,7 +342,9 @@ def _normalize_for_parquet(df: pd.DataFrame) -> pd.DataFrame:
     normalized = df.copy()
     for col in normalized.columns:
         series = normalized[col]
-        if is_datetime64_any_dtype(series.dtype) or is_datetime64tz_dtype(series.dtype):
+        if is_datetime64_any_dtype(series.dtype) or isinstance(
+            series.dtype, pd.DatetimeTZDtype
+        ):
             normalized[col] = series.map(
                 lambda value: (
                     None
@@ -435,7 +436,8 @@ def stage_dataframe(
         dtype_overrides = {
             col: DATETIME2(precision=3)
             for col, dtype in df.dtypes.items()
-            if is_datetime64_any_dtype(dtype) or is_datetime64tz_dtype(dtype)
+            if is_datetime64_any_dtype(dtype)
+            or isinstance(dtype, pd.DatetimeTZDtype)
         }
 
         if use_copy_into_parquet:
