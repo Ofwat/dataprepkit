@@ -206,11 +206,13 @@ def test_transform_empty_source_returns_typed_empty_business_frame():
 @pytest.mark.parametrize(
     ("tab_name", "expected_category"),
     [
+        ("DPB1", "Base"),
         ("BRL_DPB1_ADD", "N/A"),
+        ("DPWW1", "Wastewater"),
         ("DPW1", "Water"),
     ],
 )
-def test_transform_accepts_additional_supported_tabs(tab_name, expected_category):
+def test_transform_maps_each_sp_accepted_tab_to_its_category(tab_name, expected_category):
     actual = transform_price_control_deliverable_output(
         pd.DataFrame([_source_row(tabName=tab_name)])
     )

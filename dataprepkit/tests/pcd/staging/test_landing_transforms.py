@@ -40,21 +40,6 @@ def test_expenditure_filters_dp_b2_and_groups_measures_by_all_other_fields():
     assert outturn["pcdCategory"] == "Water"
 
 
-def test_expenditure_brl_dpb2_add_category_matches_sp_default():
-    actual = pcd_flow.transform_pcd_expenditure(
-        pd.DataFrame(
-            [
-                _standard_row(
-                    tabName="BRL_DPB2_ADD",
-                    datapointTypeCode="PCD_TARGET",
-                )
-            ]
-        )
-    )
-
-    assert actual.loc[0, "pcdCategory"] == "N/A"
-
-
 def test_expenditure_filter_accepts_exactly_the_four_sp_tabs():
     tabs = ("DPB2", "BRL_DPB2_ADD", "DPWW2", "DPW2")
     source = pd.DataFrame(
@@ -394,12 +379,46 @@ def test_scheme_uses_period_lookup_and_maps_delay_logic():
     assert excluded["numberOfSchemes"] == 0
 
 
-def test_scheme_brl_dpb3_add_category_matches_sp_default():
+@pytest.mark.parametrize(
+    ("tab_name", "expected_category"),
+    [
+        ("DPB1", "Base"),
+        ("DPB2", "Base"),
+        ("DPB1_ADD", "Base"),
+        ("DPB2_ADD", "Base"),
+        ("DPWW1", "Wastewater"),
+        ("DPWW2", "Wastewater"),
+        ("DPWW3", "Wastewater"),
+        ("DPWW4", "Wastewater"),
+        ("DPWW5", "Wastewater"),
+        ("DPW1", "Water"),
+        ("DPW2", "Water"),
+        ("DPW3", "Water"),
+        ("DPW4", "Water"),
+        ("DPW5", "Water"),
+        ("unmapped", "N/A"),
+        (None, "N/A"),
+    ],
+)
+def test_scheme_category_case_matches_every_sp_mapping(tab_name, expected_category):
+    assert pcd_flow._pcd_scheme_category(tab_name) == expected_category
+
+
+@pytest.mark.parametrize(
+    ("tab_name", "expected_category"),
+    [
+        ("DPB3", "N/A"),
+        ("BRL_DPB3_ADD", "N/A"),
+        ("DPWW3", "Wastewater"),
+        ("DPW3", "Water"),
+    ],
+)
+def test_scheme_category_on_tabs_accepted_by_sp(tab_name, expected_category):
     actual = pcd_flow.transform_pcd_scheme(
         pd.DataFrame(
             [
                 _standard_row(
-                    tabName="BRL_DPB3_ADD",
+                    tabName=tab_name,
                     datapointTypeCode="PCD_TARGET",
                 )
             ]
@@ -407,7 +426,7 @@ def test_scheme_brl_dpb3_add_category_matches_sp_default():
         period_codes=(),
     )
 
-    assert actual.loc[0, "pcdCategory"] == "N/A"
+    assert actual.loc[0, "pcdCategory"] == expected_category
 
 
 def test_scheme_detail_milestone_and_expenditure_expansion_match_sql_periods():

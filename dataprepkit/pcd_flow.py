@@ -105,6 +105,18 @@ def _text(value: Any, length: int, default: str = "N/A") -> str:
     return default if _missing(value) else str(value).strip(" ")[:length]
 
 
+def _pcd_scheme_category(tab_name: Any) -> str:
+    """Map a scheme tab to the category used by ``sp_stg_price_control_deliverable_scheme``."""
+    normalized_tab = _text(tab_name, 64).upper()
+    if normalized_tab in {"DPB1", "DPB2", "DPB1_ADD", "DPB2_ADD"}:
+        return "Base"
+    if normalized_tab in {"DPWW1", "DPWW2", "DPWW3", "DPWW4", "DPWW5"}:
+        return "Wastewater"
+    if normalized_tab in {"DPW1", "DPW2", "DPW3", "DPW4", "DPW5"}:
+        return "Water"
+    return "N/A"
+
+
 def _number(value: Any, default: float = 0.0) -> float:
     if _missing(value):
         return default
@@ -279,8 +291,7 @@ def transform_pcd_scheme(incoming: pd.DataFrame, *, period_codes: Iterable[str])
         total_delayed = int(value) if "_DLY" in upper_code else 0
         delay_type = next((label for suffix, label in _DELAY_REASONS if suffix in upper_code), "N/A")
         delayed = int(value) if any(suffix in upper_code for suffix in delay_suffixes) else 0
-        tab_upper = tab.upper()
-        category = "Base" if tab_upper in {"DPB1", "DPB2", "DPB1_ADD", "DPB2_ADD"} else "Wastewater" if tab_upper in {"DPWW1", "DPWW2", "DPWW3", "DPWW4", "DPWW5"} else "Water" if tab_upper in {"DPW1", "DPW2", "DPW3", "DPW4", "DPW5"} else "N/A"
+        category = _pcd_scheme_category(tab)
         lookup_matches = (
             0 if _missing(raw_period) else period_counts.get(raw_period, 0)
         )
