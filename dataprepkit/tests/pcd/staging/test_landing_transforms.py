@@ -78,21 +78,12 @@ def test_expenditure_filter_accepts_exactly_the_four_sp_tabs():
     "tab_name",
     ["DPB1", "BRL_DPB1_ADD", "DPWW1", "DPW1", "DPB3", "DPWW3", "DPW3", "unknown"],
 )
-
-
-@pytest.mark.parametrize(
-    "tab_name",
-    ["DPB1", "BRL_DPB1_ADD", "DPWW1", "DPW1", "DPB3", "DPWW3", "DPW3", "unknown"],
-)
 def test_expenditure_filter_rejects_tabs_not_listed_by_sp(tab_name):
     actual = pcd_flow.transform_pcd_expenditure(
         pd.DataFrame([_standard_row(tabName=tab_name)])
     )
 
     assert actual.empty
-
-
-@pytest.mark.parametrize("datapoint_type", ["XCD_TARGET", "APCD_TARGET", " PCD_TARGET"])
 
 
 @pytest.mark.parametrize("datapoint_type", ["XCD_TARGET", "APCD_TARGET", " PCD_TARGET"])
@@ -157,17 +148,6 @@ def test_expenditure_trims_each_trimmed_output_field():
     assert actual["unitOfmeasure"] == "Ml/d"
     assert actual["versionNumber"] == "3"
     assert actual["submissionNote"] == "Note"
-
-
-@pytest.mark.parametrize(
-    ("tab_name", "expected_category"),
-    [
-        ("DPB2", "Base"),
-        ("DPWW2", "Wastewater"),
-        ("DPW2", "Water"),
-        ("BRL_DPB2_ADD", "N/A"),
-    ],
-)
 
 
 @pytest.mark.parametrize(
@@ -273,30 +253,12 @@ def test_expenditure_sql_null_defaults_and_declared_output_lengths():
     ("applicable", "expected"),
     [("Y", 1), ("1", 1), ("N", 0), ("0", 0), ("other", 0), (" Y", 0)],
 )
-
-
-@pytest.mark.parametrize(
-    ("applicable", "expected"),
-    [("Y", 1), ("1", 1), ("N", 0), ("0", 0), ("other", 0), (" Y", 0)],
-)
 def test_expenditure_company_applicability_matches_sp_case(applicable, expected):
     actual = pcd_flow.transform_pcd_expenditure(
         pd.DataFrame([_standard_row(pcdApplicableToCompany=applicable)])
     )
 
     assert actual.loc[0, "pcdApplicableToCompany"] == expected
-
-
-@pytest.mark.parametrize(
-    ("datapoint_type", "expected_np", "expected_allowance", "expected_outturn"),
-    [
-        ("PCD_TARGET", 0, 7, 0),
-        ("PCD_TARGET_NP", 7, 0, 0),
-        ("PCD_TARGET_O", 0, 0, 7),
-        ("PCD_TARGET_OT", 0, 0, 7),
-        ("PCD_TARGET_NP_EXTRA", 0, 7, 0),
-    ],
-)
 
 
 @pytest.mark.parametrize(
@@ -333,24 +295,6 @@ def test_expenditure_suffix_match_uses_untrimmed_datapoint_type():
     assert actual["bonCode"] == "PCD_TARGET_O"
     assert actual["cumulativeExpenditureAllowance"] == 7
     assert actual["cumulativeExpenditureOutturnForecast"] == 0
-
-
-@pytest.mark.parametrize(
-    ("suffix", "expected_label"),
-    [
-        ("DIR", "Lack of internal resourcing"),
-        ("DSCR", "Lack of supply chain resourcing"),
-        ("DCS", "Change in solution (IM2)"),
-        ("DSCS", "Supply chain capacity"),
-        ("DPP", "Land and planning permission"),
-        ("DTPI", "Third-party interface"),
-        ("DCI", "Contractual issues"),
-        ("DSI", "Sites issues"),
-        ("DER", "Environmental risks"),
-        ("RS", "Regulatory Sign off Delay"),
-        ("DPLE", "Programme level efficiency"),
-    ],
-)
 
 
 @pytest.mark.parametrize(
