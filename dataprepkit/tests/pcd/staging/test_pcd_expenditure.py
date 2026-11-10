@@ -2,22 +2,7 @@ import pandas as pd
 import pytest
 
 from dataprepkit import pcd_flow
-from dataprepkit.tests.pcd.fixtures import (
-    _list_row,
-    _standard_landing,
-    _standard_row,
-)
-
-def test_external_submission_deduplicates_same_metadata_row():
-    source = pd.DataFrame([_standard_row(), _standard_row()])
-
-    actual = pcd_flow.transform_pcd_external_company_submission(source)
-
-    assert len(actual) == 1
-    assert actual.loc[0, "businessDomain"] == "PCD"
-    assert actual.loc[0, "partyCode"] == "HDD"
-    assert actual.loc[0, "createdDate"].date().isoformat() == "2026-10-21"
-
+from dataprepkit.tests.pcd.fixtures import _standard_row
 
 def test_expenditure_filters_dp_b2_and_groups_measures_by_all_other_fields():
     source = pd.DataFrame(
@@ -282,40 +267,6 @@ def test_expenditure_suffix_match_uses_untrimmed_datapoint_type():
     assert actual["cumulativeExpenditureOutturnForecast"] == 0
 
 
-@pytest.mark.parametrize(
-    ("suffix", "expected_label"),
-    [
-        ("DIR", "Lack of internal resourcing"),
-        ("DSCR", "Lack of supply chain resourcing"),
-        ("DCS", "Change in solution (IM2)"),
-        ("DSCS", "Supply chain capacity"),
-        ("DPP", "Land and planning permission"),
-        ("DTPI", "Third-party interface"),
-        ("DCI", "Contractual issues"),
-        ("DSI", "Sites issues"),
-        ("DER", "Environmental risks"),
-        ("RS", "Regulatory Sign off Delay"),
-        ("DPLE", "Programme level efficiency"),
-    ],
-)
-def test_scheme_delay_code_labels_match_sp(suffix, expected_label):
-    actual = pcd_flow.transform_pcd_scheme(
-        pd.DataFrame(
-            [
-                _standard_row(
-                    tabName="DPW3",
-                    datapointTypeCode=f"PCD_{suffix}",
-                    datapointValue="3",
-                )
-            ]
-        ),
-        period_codes=(),
-    )
-
-    assert actual.loc[0, "delayedSchemes"] == 3
-    assert actual.loc[0, "delayType"] == expected_label
-
-
 def test_expenditure_invalid_decimal_place_is_null_like_try_cast():
     actual = pcd_flow.transform_pcd_expenditure(
         pd.DataFrame([_standard_row(decimalPlace="not-an-int")])
@@ -339,113 +290,3 @@ def test_expenditure_invalid_datapoint_value_contributes_zero():
     assert actual["nonDeliveryPayment"] == 0
     assert actual["cumulativeExpenditureAllowance"] == 0
     assert actual["cumulativeExpenditureOutturnForecast"] == 0
-
-
-def test_scheme_sums_delay_measures_after_grouping_by_business_fields():
-    source = pd.DataFrame(
-        [
-            _standard_row(tabName="DPW3", datapointTypeCode="PCD_DLY_DIR", datapointValue="2"),
-            _standard_row(tabName="DPW3", datapointTypeCode="PCD_DLY_DIR", datapointValue="4"),
-        ]
-    )
-
-    actual = pcd_flow.transform_pcd_scheme(source, period_codes=())
-
-    assert len(actual) == 1
-    assert actual.loc[0, "numberOfSchemes"] == 0
-    assert actual.loc[0, "totalDelayedSchemes"] == 6
-    assert actual.loc[0, "delayedSchemes"] == 6
-
-
-def test_scheme_uses_period_lookup_and_maps_delay_logic():
-    source = pd.DataFrame(
-        [
-            _standard_row(tabName="DPW3", datapointTypeCode="PCD_DLY_DIR", datapointValue="4"),
-            _standard_row(tabName="DPW3", datapointTypeCode="PCD_DLY_DIR", datapointValue="1"),
-            _standard_row(tabName="DPW3", datapointTypeCode="PCD_DLY_DIR", datapointPeriod="unknown", datapointValue="8"),
-        ]
-    )
-
-    actual = pcd_flow.transform_pcd_scheme(source, period_codes={"2025-26"})
-
-    assert len(actual) == 3
-    included = actual.loc[actual["numberOfSchemes"] == 4].iloc[0]
-    included_second_value = actual.loc[actual["numberOfSchemes"] == 1].iloc[0]
-    excluded = actual.loc[actual["periodCode"] == "unknown"].iloc[0]
-    assert included["totalDelayedSchemes"] == 4
-    assert included_second_value["totalDelayedSchemes"] == 1
-    assert included["delayedSchemes"] == 4
-    assert included["delayType"] == "Lack of internal resourcing"
-    assert excluded["numberOfSchemes"] == 0
-
-
-@pytest.mark.parametrize(
-    ("tab_name", "expected_category"),
-    [
-        ("DPB1", "Base"),
-        ("DPB2", "Base"),
-        ("DPB1_ADD", "Base"),
-        ("DPB2_ADD", "Base"),
-        ("DPWW1", "Wastewater"),
-        ("DPWW2", "Wastewater"),
-        ("DPWW3", "Wastewater"),
-        ("DPWW4", "Wastewater"),
-        ("DPWW5", "Wastewater"),
-        ("DPW1", "Water"),
-        ("DPW2", "Water"),
-        ("DPW3", "Water"),
-        ("DPW4", "Water"),
-        ("DPW5", "Water"),
-        ("unmapped", "N/A"),
-        (None, "N/A"),
-    ],
-)
-def test_scheme_category_case_matches_every_sp_mapping(tab_name, expected_category):
-    assert pcd_flow._pcd_scheme_category(tab_name) == expected_category
-
-
-@pytest.mark.parametrize(
-    ("tab_name", "expected_category"),
-    [
-        ("DPB3", "N/A"),
-        ("BRL_DPB3_ADD", "N/A"),
-        ("DPWW3", "Wastewater"),
-        ("DPW3", "Water"),
-    ],
-)
-def test_scheme_category_on_tabs_accepted_by_sp(tab_name, expected_category):
-    actual = pcd_flow.transform_pcd_scheme(
-        pd.DataFrame(
-            [
-                _standard_row(
-                    tabName=tab_name,
-                    datapointTypeCode="PCD_TARGET",
-                )
-            ]
-        ),
-        period_codes=(),
-    )
-
-    assert actual.loc[0, "pcdCategory"] == expected_category
-
-
-def test_scheme_detail_milestone_and_expenditure_expansion_match_sql_periods():
-    source = pd.DataFrame(
-        [
-            _list_row(
-                baselineIm1="2024-05-06",
-                forecastIm7="invalid",
-                baseline2023_24="12.5",
-                forecast2029_30="not-number",
-            )
-        ]
-    )
-
-    milestones = pcd_flow.transform_deliverable_scheme_milestone(source)
-    expenditure = pcd_flow.transform_deliverable_scheme_expenditure(source)
-
-    assert len(milestones) == len(expenditure) == 14
-    assert milestones.loc[milestones["periodCode"] == "baselineIm1", "milestoneDate"].iloc[0].isoformat() == "2024-05-06"
-    assert pd.isna(milestones.loc[milestones["periodCode"] == "forecastIm7", "milestoneDate"].iloc[0])
-    assert expenditure.loc[expenditure["periodCode"] == "2023-24", "milestoneExpenditure"].iloc[0] == 12.5
-    assert expenditure.loc[expenditure["periodCode"] == "2029-30", "milestoneExpenditure"].iloc[0] == 0
