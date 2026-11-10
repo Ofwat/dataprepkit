@@ -2103,6 +2103,10 @@ def _cast_data_columns(incoming: pd.DataFrame, metadata: DimensionMetadata) -> p
                     continue
                 if base_sql_type == "TIME":
                     df[name] = parsed.dt.time
+                elif base_sql_type == "DATE":
+                    # Keep DATE values as Python date objects so DBAPI drivers
+                    # can bind them consistently (not pandas Timestamp values).
+                    df[name] = parsed.dt.date
                 else:
                     df[name] = parsed
             continue

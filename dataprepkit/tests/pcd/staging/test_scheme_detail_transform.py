@@ -2,9 +2,13 @@ from datetime import date
 
 import pandas as pd
 import pytest
+from sqlalchemy import create_engine, text
 
+from dataprepkit import metadata_loader
+from dataprepkit.metadata_loader import run_dimension
 from dataprepkit.pcd_scheme_detail_transform import (
     OUTPUT_COLUMNS,
+    create_deliverable_scheme_detail_dimension_metadata,
     transform_deliverable_scheme_detail,
 )
 
@@ -159,3 +163,76 @@ def test_transform_requires_all_columns_read_by_the_procedure():
 
     with pytest.raises(ValueError, match="forecastOutturn"):
         transform_deliverable_scheme_detail(source)
+
+
+def test_scheme_detail_metadata_uses_declared_keys_attributes_and_policies():
+    metadata = create_deliverable_scheme_detail_dimension_metadata(
+        name="deliverable_scheme_detail",
+        target_table="deliverable_scheme_detail_prototype",
+        filepath="unused.csv",
+    )
+
+    assert metadata.natural_key_cols == [
+        "submissionNumber",
+        "businessDomain",
+        "partyCode",
+        "schemeId",
+    ]
+    assert list(metadata.data_columns) == [
+        column for column in OUTPUT_COLUMNS if column not in metadata.natural_key_cols
+    ]
+    assert metadata.data_columns["pcdCategory"].type == "VARCHAR(1024)"
+    assert metadata.data_columns["originalRegulatoryDate"].type == "DATE"
+    assert metadata.data_columns["criticalHighProfile"].type == "BIT"
+    assert metadata.processing_class is transform_deliverable_scheme_detail
+    assert metadata.processing_class_input == "raw"
+    assert metadata.missing_rows_action == "retain"
+    assert metadata.new_key_effective_date == "execution_time"
+
+
+def test_scheme_detail_runs_through_shared_scd2_loader(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    metadata = create_deliverable_scheme_detail_dimension_metadata(
+        name="deliverable_scheme_detail",
+        target_table="deliverable_scheme_detail_prototype",
+        filepath="unused.csv",
+    )
+    execution_times = iter(
+        pd.to_datetime(
+            [
+                "2026-01-01T00:00:00Z",
+                "2026-01-02T00:00:00Z",
+                "2026-01-03T00:00:00Z",
+            ]
+        ).to_pydatetime()
+    )
+    monkeypatch.setattr(
+        metadata_loader, "_capture_execution_time", lambda: next(execution_times)
+    )
+
+    def load(source):
+        run_dimension(
+            engine,
+            metadata.name,
+            metadata_registry={metadata.name: metadata},
+            override_df=pd.DataFrame([source]),
+        )
+
+    original = _source_row()
+    load(original)
+    load(original)
+    load(_source_row(schemeName="Updated scheme"))
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT schemeName, Current_Ind, Deleted_Ind "
+                "FROM deliverable_scheme_detail_prototype "
+                "ORDER BY Current_Ind"
+            )
+        ).mappings().all()
+
+    assert len(rows) == 2
+    assert sum(row["Current_Ind"] == 1 for row in rows) == 1
+    assert sum(row["Current_Ind"] == 0 for row in rows) == 1
+    assert {row["schemeName"] for row in rows} == {"Scheme A", "Updated scheme"}

@@ -8,6 +8,8 @@ from typing import Any
 
 import pandas as pd
 
+from dataprepkit.metadata_loader import ColumnSpec, DimensionMetadata
+
 
 SOURCE_COLUMNS = (
     "submissionNumber",
@@ -185,3 +187,69 @@ def transform_deliverable_scheme_detail(incoming: pd.DataFrame) -> pd.DataFrame:
         )
 
     return pd.DataFrame(output, columns=OUTPUT_COLUMNS)
+
+
+def create_deliverable_scheme_detail_dimension_metadata(
+    *,
+    name: str,
+    target_table: str,
+    filepath: str,
+) -> DimensionMetadata:
+    """Define natural keys, types, and transform settings for Scheme Detail SCD2.
+
+    The metadata describes rows produced by
+    ``cde.sp_stg_deliverable_scheme_detail``.
+    """
+    natural_key_types = {
+        "submissionNumber": "VARCHAR(64)",
+        "businessDomain": "VARCHAR(64)",
+        "partyCode": "VARCHAR(8)",
+        "schemeId": "VARCHAR(1024)",
+    }
+    data_types = {
+        "recordStatus": "VARCHAR(16)",
+        "pcdCategory": "VARCHAR(1024)",
+        "tabName": "VARCHAR(64)",
+        "schemeLineDescription": "VARCHAR(2048)",
+        "versionNumber": "VARCHAR(64)",
+        "pcdReference": "VARCHAR(256)",
+        "schemeType": "VARCHAR(64)",
+        "interimMilestoneMoveReason": "VARCHAR(2048)",
+        "substitutedSchemeName": "VARCHAR(2048)",
+        "eaId": "VARCHAR(256)",
+        "winepId": "VARCHAR(8000)",
+        "schemeName": "VARCHAR(2048)",
+        "forecastToComplete": "FLOAT",
+        "originalRegulatoryDate": "DATE",
+        "currentRegulatoryDate": "DATE",
+        "currentInterimMilestone": "VARCHAR(256)",
+        "spendToDate": "FLOAT",
+        "forecastOutturnCost": "FLOAT",
+        "percentageSpendToDate": "FLOAT",
+        "criticalHighProfile": "BIT",
+        "schemeSecondaryType": "VARCHAR(64)",
+        "assetManagementPeriod": "VARCHAR(64)",
+        "submissionNote": "VARCHAR(2048)",
+    }
+    return DimensionMetadata(
+        name=name,
+        target_table=target_table,
+        natural_key_cols=list(natural_key_types),
+        natural_key_specs={
+            column: ColumnSpec(type=sql_type)
+            for column, sql_type in natural_key_types.items()
+        },
+        data_columns={
+            column: ColumnSpec(type=data_types[column])
+            for column in OUTPUT_COLUMNS
+            if column not in natural_key_types
+        },
+        surrogate_key="surrogate_key",
+        join_numeric_key="join_numeric_key",
+        filepath=filepath,
+        reserved_source_members=[],
+        processing_class=transform_deliverable_scheme_detail,
+        processing_class_input="raw",
+        missing_rows_action="retain",
+        new_key_effective_date="execution_time",
+    )
