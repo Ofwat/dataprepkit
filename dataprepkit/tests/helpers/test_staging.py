@@ -67,7 +67,8 @@ def test_verify_stage_files_not_in_fact(
                 engine, stage_table, fact_table, filename_column=filename_column
             )
         assert str(exc.value) == (
-            "Files already present in main.facts: "
+            "Files from main.stage_files already present in main.facts "
+            f"(column {filename_column!r}): "
             + ", ".join(repr(name) for name in overlaps)
         )
     else:

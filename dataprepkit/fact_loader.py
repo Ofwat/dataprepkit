@@ -656,13 +656,19 @@ def verify_stage_files_not_in_fact(
     with engine.connect() as conn:
         filenames = conn.execute(query).scalars().all()
     if filenames:
+        staging_ref = _parse_table_ref(staging_table)
+        staging_name = (
+            f"{staging_ref.schema}.{staging_ref.table}"
+            if staging_ref.schema else staging_ref.table
+        )
         fact_ref = _parse_table_ref(fact_table)
         fact_name = (
             f"{fact_ref.schema}.{fact_ref.table}"
             if fact_ref.schema else fact_ref.table
         )
         raise StageFilesAlreadyLoadedError(
-            f"Files already present in {fact_name}: "
+            f"Files from {staging_name} already present in {fact_name} "
+            f"(column {filename_column!r}): "
             + ", ".join(repr(name) for name in filenames)
         )
 
