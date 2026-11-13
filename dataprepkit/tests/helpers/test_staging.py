@@ -7,13 +7,76 @@ from sqlalchemy import create_engine, inspect, text
 
 from dataprepkit.helpers.staging import (
     HashMismatchError,
+    StageFilesAlreadyLoadedError,
     StageFileSpec,
     clone_table,
     assert_columns_have_single_distinct_row,
     assert_columns_not_null,
     sync_mssql_tables,
     verify_stage_file_hashes,
+    verify_stage_files_not_in_fact,
 )
+from dataprepkit.fact_loader import TableRef
+
+
+@pytest.mark.parametrize("use_table_ref", [False, True])
+@pytest.mark.parametrize("filename_column", ["Filename", "File Name"])
+@pytest.mark.parametrize(
+    "staged, loaded, overlaps",
+    [
+        ([], ["a.csv"], []),
+        (["a.csv"], [], []),
+        (["a.csv", None], ["b.csv", None], []),
+        (
+            ["b.csv", "a.csv", "a.csv", "new.csv"],
+            ["a.csv", "b.csv", "a.csv", "old.csv"],
+            ["a.csv", "b.csv"],
+        ),
+    ],
+)
+def test_verify_stage_files_not_in_fact(
+    use_table_ref, filename_column, staged, loaded, overlaps
+):
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    with engine.begin() as conn:
+        for table_name, filenames in [("stage_files", staged), ("facts", loaded)]:
+            conn.execute(
+                text(f'CREATE TABLE {table_name} ("{filename_column}" TEXT)')
+            )
+            if filenames:
+                conn.execute(
+                    text(
+                        f'INSERT INTO {table_name} ("{filename_column}") '
+                        'VALUES (:name)'
+                    ),
+                    [{"name": name} for name in filenames],
+                )
+    stage_table = (
+        TableRef(table="stage_files", schema="main")
+        if use_table_ref
+        else "main.stage_files"
+    )
+    fact_table = (
+        TableRef(table="facts", schema="main")
+        if use_table_ref
+        else "main.facts"
+    )
+    if overlaps:
+        with pytest.raises(StageFilesAlreadyLoadedError) as exc:
+            verify_stage_files_not_in_fact(
+                engine, stage_table, fact_table, filename_column=filename_column
+            )
+        assert str(exc.value) == (
+            "Files already present in main.facts: "
+            + ", ".join(repr(name) for name in overlaps)
+        )
+    else:
+        assert (
+            verify_stage_files_not_in_fact(
+                engine, stage_table, fact_table, filename_column=filename_column
+            )
+            is None
+        )
 
 
 def _md5_file(path: Path) -> str:

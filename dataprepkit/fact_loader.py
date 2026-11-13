@@ -23,6 +23,10 @@ class MissingStageFileError(RuntimeError):
     pass
 
 
+class StageFilesAlreadyLoadedError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class TableRef:
     table: str
@@ -629,6 +633,38 @@ def _archive_input_table_snapshot(
     source_df = pd.read_sql_query(text(f"SELECT * FROM {source_table_sql}"), con=engine)
     source_df.to_parquet(archive_path, index=False)
     return str(archive_path), archive_path.name
+
+
+def verify_stage_files_not_in_fact(
+    engine: Engine,
+    staging_table: str | TableRef,
+    fact_table: str | TableRef,
+    *,
+    filename_column: str = "Filename",
+) -> None:
+    """Raise StageFilesAlreadyLoadedError for staged filenames already in facts."""
+    staging_sql = _render_table_name(engine, staging_table)
+    fact_sql = _render_table_name(engine, fact_table)
+    column_sql = _quote_identifier(engine, filename_column)
+    query = text(
+        f"SELECT DISTINCT stage.{column_sql} "
+        f"FROM {staging_sql} AS stage "
+        f"INNER JOIN {fact_sql} AS fact "
+        f"ON stage.{column_sql} = fact.{column_sql} "
+        f"ORDER BY stage.{column_sql}"
+    )
+    with engine.connect() as conn:
+        filenames = conn.execute(query).scalars().all()
+    if filenames:
+        fact_ref = _parse_table_ref(fact_table)
+        fact_name = (
+            f"{fact_ref.schema}.{fact_ref.table}"
+            if fact_ref.schema else fact_ref.table
+        )
+        raise StageFilesAlreadyLoadedError(
+            f"Files already present in {fact_name}: "
+            + ", ".join(repr(name) for name in filenames)
+        )
 
 
 def verify_stage_file_hashes(

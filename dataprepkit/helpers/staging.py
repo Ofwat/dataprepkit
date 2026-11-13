@@ -17,10 +17,12 @@ from sqlalchemy.dialects.mssql import DATETIME2, VARCHAR
 from dataprepkit.fact_loader import (
     HashMismatchError as _HashMismatchError,
     MissingStageFileError as _MissingStageFileError,
+    StageFilesAlreadyLoadedError as _StageFilesAlreadyLoadedError,
     StageFileSpec as _StageFileSpec,
     assert_columns_have_single_distinct_row as _assert_single_distinct_row,
     assert_columns_not_null as _assert_columns_not_null,
     verify_stage_file_hashes as _verify_stage_file_hashes,
+    verify_stage_files_not_in_fact as _verify_stage_files_not_in_fact,
 )
 from dataprepkit.helpers.schema import ensure_schema_exists
 from dataprepkit.storage import archive_dataframe_path
@@ -28,10 +30,12 @@ from dataprepkit.storage import archive_dataframe_path
 
 HashMismatchError = _HashMismatchError
 MissingStageFileError = _MissingStageFileError
+StageFilesAlreadyLoadedError = _StageFilesAlreadyLoadedError
 StageFileSpec = _StageFileSpec
 assert_columns_have_single_distinct_row = _assert_single_distinct_row
 assert_columns_not_null = _assert_columns_not_null
 verify_stage_file_hashes = _verify_stage_file_hashes
+verify_stage_files_not_in_fact = _verify_stage_files_not_in_fact
 
 def _quote_mssql_identifier(identifier: str) -> str:
     normalized = _normalize_bracket_identifier(identifier) or ""
