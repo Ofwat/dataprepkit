@@ -11,9 +11,11 @@ result = validate_excel("candidate.xlsx", config=config)
 print(result.format_report())
 ```
 
+For export fields and the investigation workflow, see the [validation report export](#validation-report-export).
+
 ## Starter profiles
 
-Two version-controlled starter profiles are included:
+Three version-controlled starter profiles are included:
 
 | Profile | Use it for |
 | --- | --- |
@@ -655,18 +657,14 @@ make the result incomplete when no engine is supplied.
 
 #### Workbook feature policies
 
-Feature policies report the concrete feature name when a workbook contains it.
-Supported features are `macros`, `external_links`, `charts`, `pivot_tables`,
-`named_ranges`, and `merged_cells`. The corresponding
-`<feature>_detection_unavailable` event is reported when inspection is not
-possible.
+Feature policy covers macros, external workbook links, charts, pivot tables,
+defined names, and merged cells.
 
-| Event | Configure it with | What it reports |
+| Outcome | Configure it with | Exported `check` example |
 | --- | --- | --- |
-| `<feature_name>` | `runtime.feature_policy.<feature_name>` | The named workbook feature was detected. |
-| `<feature_name>_detection_unavailable` | `runtime.feature_policy.unavailable_action` | The named feature could not be inspected. |
-
-Example:
+| Detected feature reported as an error or warning | `runtime.feature_policy.<feature_name>` | `MERGED_CELLS` |
+| Detected feature recorded as a diagnostic with `ignore` | `runtime.feature_policy.<feature_name>` | `MERGED_CELLS_DETECTED` |
+| Feature could not be inspected | `runtime.feature_policy.unavailable_action` | `MERGED_CELLS_DETECTION_UNAVAILABLE` |
 
 ```yaml
 runtime:
@@ -674,11 +672,7 @@ runtime:
     merged_cells: {action: warning, scope: {type: all_sheets}}
     external_links: warning
     macros: error
-
-Feature events use the concrete feature name: `macros`, `external_links`,
-`charts`, `pivot_tables`, `named_ranges`, or `merged_cells`. Formula evaluation
-is not performed: formula checks
-inspect formula text and cached values only.
+```
 
 ### Common table checks
 
@@ -1228,23 +1222,179 @@ objects, so they can be inspected without reopening either workbook. Result
 serialization is separate from configuration serialization: use
 `dump_validation_config` and `load_validation_config` for profiles.
 
-## Reading summary rows
+## Validation report export
 
-In the DataFrame export, filter to `event_type == "summary"` to review the
-status and counts for each check. Filter by `check` to see its detail rows.
+Use `validation_result_to_dataframe(result)` to export one table with summary
+rows and findings. Summary rows show the outcome for each reported check ID.
+Finding rows explain what happened and identify the worksheet and cell when
+available.
 
-| Status | Meaning |
+| Column | Values or examples | Meaning |
+| --- | --- | --- |
+| `run_id` | `run_001`, empty | Caller-supplied run identifier. |
+| `config_version` | `"1"` | Validation configuration version, stored as text. |
+| `profile_name` | `standalone`, `single_file`, `reference`, a custom name, empty | Profile used for validation. |
+| `candidate_filename` | `submission.xlsx` | Workbook being validated. |
+| `candidate_version` | `"3"`, empty | Caller-supplied version of the candidate workbook. |
+| `reference_filename` | `reference.xlsx`, empty | Reference workbook, when one is supplied. |
+| `reference_version` | `"2"`, empty | Caller-supplied version of the reference workbook. |
+| `is_valid` | `True`, `False` | `True` means the run recorded zero errors. Warnings and work that did not run can still be present. |
+| `event_type` | `error`, `warning`, `not_run`, `diagnostic`, `summary` | The full set of row types. |
+| `processed_count` | `0`, `1`, `150`, empty | Recorded work for the check. The unit depends on the check, and the count can repeat on detail rows. |
+| `issue_count` | `0`, `1`, `12`, empty | Errors plus warnings for the check. Populated on summary rows. |
+| `check` | `REQUIRED_SHEET`, `FORMULA_DIFFERENCE`, `MERGED_CELLS_DETECTED` | Uppercase rule or diagnostic identifier. See the [exported check catalogue](#exported-check-catalogue). |
+| `status` | Summary: `PASSED`, `PASSED_WITH_WARNINGS`, `FAILED`, `INCOMPLETE`, `NOT_RUN`, `RECORDED`. Built-in findings: `FAILED`, `NOT_RUN`, empty. | Row outcome. A warning can carry `FAILED` on its detail row. Diagnostic findings leave the field empty. Custom validators can supply other detail statuses. |
+| `sheet_name` | `Data`, empty | Worksheet associated with a finding. |
+| `cell_reference` | `B12`, `A1:B3`, empty | Excel cell or range within the sheet. |
+| `row_number` | `12`, empty | One-based Excel row number, when available. |
+| `column_number` | `2`, empty | One-based Excel column number, when available. |
+| `description` | `Formula removed`, `Lookup 'measure_dimension' timed out`, empty | Human-readable explanation of a finding or of skipped work on a summary row. |
+| `actual_value` | `"ACME-42"`, `125.5`, empty | Value observed by the validator. |
+| `expected_value` | `"Active"`, `150`, `"unique reference value"`, empty | Expected value or description of the requirement. |
+| `metadata` | `{"lookup_name":"measure_dimension"}`, empty | Extra finding context, exported as JSON text. |
+
+The export uses `check` in place of the earlier `rule_code` and `code` columns.
+For findings, `event_type` distinguishes errors from warnings, and `description`
+explains the result. The validator still uses severity policy to classify
+events and tracks run completeness on `ValidationResult.complete`.
+
+### Reading summary rows
+
+1. Select the run and confirm the candidate workbook, the reference workbook
+   if one was used, and the profile. If you have the original result object,
+   `result.format_report()` shows the overall run outcome.
+2. Filter to `event_type == "summary"`. Review the checks marked `FAILED`,
+   `INCOMPLETE`, or `NOT_RUN`. Review `PASSED_WITH_WARNINGS` for findings that
+   may need attention.
+3. Filter the remaining rows by the same `check` and, if the export contains
+   multiple runs, the same `run_id`. Read `event_type` and `description` to
+   understand the finding. Use `sheet_name`, `cell_reference`, `actual_value`,
+   and `expected_value` to locate and investigate it.
+4. Correct the candidate workbook, reference data, or access as needed. Rerun
+   validation and compare the same check for the new run.
+
+```python
+from dataprepkit.validation import validation_result_to_dataframe
+
+report = validation_result_to_dataframe(result)
+summaries = report.loc[report["event_type"].eq("summary")]
+formula_findings = report.loc[
+    report["check"].eq("FORMULA_DIFFERENCE")
+    & report["event_type"].ne("summary")
+]
+```
+
+| Summary status | Meaning |
 | --- | --- |
-| `PASSED` | No errors, warnings, or skipped work were recorded for the check. |
-| `PASSED_WITH_WARNINGS` | The check finished and recorded warnings. |
-| `FAILED` | The check recorded errors. If work also did not run, the summary description points to the skipped details. |
-| `INCOMPLETE` | The check recorded some processing or a warning, and some work did not run. |
-| `NOT_RUN` | The check did not run. The detail rows explain why. |
+| `PASSED` | The check recorded zero errors, warnings, and skipped events. |
+| `PASSED_WITH_WARNINGS` | The check recorded warnings, with zero errors or skipped events. |
+| `FAILED` | The check recorded at least one error. If work also failed to run, the summary description points to the skipped details. |
+| `INCOMPLETE` | Some work did not run, but the check recorded processing or a warning. It recorded zero errors. |
+| `NOT_RUN` | The check recorded skipped work and zero processing, errors, or warnings. The detail rows explain why. |
 | `RECORDED` | The validator recorded a diagnostic observation. |
 
-`issue_count` counts errors and warnings. Diagnostic observations and skipped
-work have their own detail rows. The unit for `processed_count` depends on the
-check.
+Aggregate counts from summary rows. `issue_count` excludes skipped work and
+diagnostic observations. Summary rows currently group by the underlying rule
+or diagnostic ID, so two configured checks using the same rule can share a
+summary.
+
+### Exported check catalogue
+
+The 48 built-in identifiers below are the uppercase values used in the
+DataFrame. The area labels are for this guide. Configuration and custom
+validators can add identifiers. For example, the database rule code
+`measure_value_type` appears as `MEASURE_VALUE_TYPE` in the export.
+
+| Area | `check` | Description |
+| --- | --- | --- |
+| Sheets and workbook structure | `EXTRA_SHEET` | Finds candidate sheets absent from the reference workbook. |
+| Sheets and workbook structure | `MISSING_REFERENCE_SHEET` | Finds reference sheets absent from the candidate workbook. |
+| Sheets and workbook structure | `REQUIRED_SHEET` | Checks that a required sheet selector finds a matching sheet. |
+| Sheets and workbook structure | `SHEET_SELECTOR` | Applies a sheet selector and reports ambiguous matches when configured to do so. |
+| Sheets and workbook structure | `SHEET_STRUCTURE` | Compares a candidate sheet’s used area or configured headers with the reference. |
+| Sheets and workbook structure | `WORKBOOK_LIMIT_ERROR` | Reports that the workbook exceeded the configured cell scan limit. |
+| Cells and formulas | `EXPECTED_CELL` | Resolves a configured cell location and compares its value with the expected value. |
+| Cells and formulas | `FORMULA_DIFFERENCE` | Finds formulas added, removed, or changed relative to the reference workbook. |
+| Cells and formulas | `FORMULA_ERROR` | Finds configured Excel error values and reports unavailable cached formula results. |
+| Cells and formulas | `REQUIRED_FILLED_CELLS` | Checks that cells marked as required by their fill colour contain a value. |
+| Cells and formulas | `UNEXPECTED_FORMULA` | Finds formulas in cells marked as inputs by their fill colour. |
+| Tables and loading | `COLUMN_HEADER` | Finds blank, duplicate, missing, extra, or out-of-order headers. |
+| Tables and loading | `DATA_BOUNDARY` | Reports that the validator could not determine where a table’s data ends. |
+| Tables and loading | `EMPTY_ROW_PATTERN` | Checks that rows configured to be blank contain no data. |
+| Tables and loading | `EMPTY_TABLE` | Reports a resolved table with no data rows. |
+| Tables and loading | `MISSING_COLUMN` | Reports a configured column that is absent from the loaded table. |
+| Tables and loading | `NON_EMPTY_DATA` | Checks that a table required to contain data has at least one usable row. |
+| Tables and loading | `PANDAS_LOAD` | Records the outcome of loading an Excel table into pandas. |
+| Tables and loading | `TABLE_RESOLUTION` | Locates a configured table and reports when a required table cannot be resolved. |
+| Column values | `ALLOWED_VALUES` | Checks whether a column value belongs to the configured allow-list. |
+| Column values | `DUPLICATE_VALUE` | Finds repeated values in a column configured to be unique. |
+| Column values | `FORBIDDEN_VALUES` | Finds values that match a configured forbidden value or pattern. |
+| Column values | `MAX_LENGTH` | Checks whether a value exceeds the configured maximum length. |
+| Column values | `MISSING_VALUE` | Finds blank or null values where a column requires a value. |
+| Column values | `VALUE_TYPE` | Checks whether a column value has the expected type, such as text or numeric. |
+| Table and database checks | `CONFLICTING_DUPLICATE` | Finds rows that share an identity but disagree in the values being compared. |
+| Table and database checks | `DATABASE_LOOKUP` | Reports a database lookup that could not run or returned unusable data. |
+| Table and database checks | `DATABASE_MISSING_LOOKUP` | Reports a source key with no matching row in the database lookup. |
+| Table and database checks | `DIMENSION_VALUE` | Checks a source value against a configured database dimension. |
+| Table and database checks | `MISSING_IDENTITY_VALUE` | Finds rows missing a key value needed to check for conflicting duplicates. |
+| Table and database checks | `VALUES_IN_REFERENCE` | Checks whether source values exist in a configured reference table. |
+| Workbook feature checks | `CHARTS` | Reports detected charts as an error or warning. |
+| Workbook feature checks | `EXTERNAL_LINKS` | Reports detected external workbook links as an error or warning. |
+| Workbook feature checks | `MACROS` | Reports a macro-enabled `.xlsm` workbook as an error or warning. |
+| Workbook feature checks | `MERGED_CELLS` | Reports merged cell ranges as an error or warning. |
+| Workbook feature checks | `NAMED_RANGES` | Reports detected Excel defined names as an error or warning. |
+| Workbook feature checks | `PIVOT_TABLES` | Reports detected pivot tables as an error or warning. |
+| Workbook feature diagnostics | `CHARTS_DETECTED` | Records detected charts as a diagnostic. |
+| Workbook feature diagnostics | `EXTERNAL_LINKS_DETECTED` | Records detected external workbook links as a diagnostic. |
+| Workbook feature diagnostics | `MACROS_DETECTED` | Records a macro-enabled `.xlsm` workbook as a diagnostic. |
+| Workbook feature diagnostics | `MERGED_CELLS_DETECTED` | Records merged cell ranges as a diagnostic. |
+| Workbook feature diagnostics | `NAMED_RANGES_DETECTED` | Records detected Excel defined names as a diagnostic. |
+| Workbook feature diagnostics | `PIVOT_TABLES_DETECTED` | Records detected pivot tables as a diagnostic. |
+| Workbook feature detection unavailable | `CHARTS_DETECTION_UNAVAILABLE` | The validator could not inspect the workbook for charts. |
+| Workbook feature detection unavailable | `EXTERNAL_LINKS_DETECTION_UNAVAILABLE` | The validator could not inspect the workbook for external links. |
+| Workbook feature detection unavailable | `MERGED_CELLS_DETECTION_UNAVAILABLE` | The validator could not inspect the workbook for merged cells. |
+| Workbook feature detection unavailable | `NAMED_RANGES_DETECTION_UNAVAILABLE` | The validator could not inspect the workbook for defined names. |
+| Workbook feature detection unavailable | `PIVOT_TABLES_DETECTION_UNAVAILABLE` | The validator could not inspect the workbook for pivot tables. |
+
+### Distinguishing findings within a check
+
+A shared `check` ID groups findings from the same rule. The detail description
+explains which case occurred.
+
+| `check` | Examples of what the detail description distinguishes |
+| --- | --- |
+| `FORMULA_DIFFERENCE` | `Formula added`, `Formula removed`, or `Formula changed`. These share one summary. |
+| `COLUMN_HEADER` | A missing required column, an out-of-order column, an extra header, or an invalid blank or duplicate header. |
+| `EXPECTED_CELL` | A location did not resolve, several locations matched where one was expected, or the cell value differed. |
+| `FORMULA_ERROR` | An Excel error value or an unavailable cached formula result. |
+| `VALUES_IN_REFERENCE` | A blank source value, a value absent from the reference, a duplicate reference value, or a missing source column. |
+| `DATABASE_LOOKUP` and configured database rules | A timeout, denied access, a missing table or column, or conflicting lookup rows. |
+
+Filter by `check` for the rule family. To isolate formula removals in the
+current report, filter the findings by `description == "Formula removed"`.
+
+### Reporting direction
+
+The goal is to let readers answer three questions in order.
+
+1. **Did validation finish?** Show the run outcome above the report alongside
+   the candidate and reference filenames, versions, and profile. Make both
+   errors and unfinished work visible when they occur in the same run.
+2. **Which check needs attention?** Keep summary rows in the same export and
+   show one summary per configured check. A stable `check_id` would link that
+   summary to its findings within a run. Show the configured name when there
+   is one, the uppercase rule identifier for filtering, and the target so a
+   reader can see which table, column, or reference the check covered.
+3. **Where is the problem?** Open the matching findings and lead with the
+   result, location, and description. Display location from `sheet_name` and
+   `cell_reference`, for example `Data!B12`. Show actual and expected values
+   where they help explain the finding.
+
+Keep the workbook and run context with each exported row so it remains useful
+after filtering or combining runs. Keep organisation context at the calling
+layer and put counts on summary rows. These are proposed reporting changes.
+The [current export schema](#validation-report-export) lists the fields
+available today.
 
 ## Schema and validation
 

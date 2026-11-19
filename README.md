@@ -117,9 +117,10 @@ current SQL parity limits.
 
 ## Excel validation
 
-Excel workbook validation, starter YAML profiles, and configuration examples
-are documented in [EXCEL_VALIDATION.md](EXCEL_VALIDATION.md). The public API is
-available from `dataprepkit.validation`.
+The [Excel validation guide](EXCEL_VALIDATION.md) covers starter profiles and
+configuration examples. The [validation report export](EXCEL_VALIDATION.md#validation-report-export)
+documents the output columns, check identifiers, and how to investigate findings.
+The public API is available from `dataprepkit.validation`.
 
 ## Examples
 
