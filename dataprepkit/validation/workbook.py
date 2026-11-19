@@ -211,9 +211,10 @@ def validate_excel(
             if feature_name == "merged_cells":
                 action = action.action
             event_code = feature_name
+            detection_code = f"{event_code.upper()}_DETECTED"
             if action == "ignore":
-                processed_severities[f"code:{event_code.upper()}"] = action
-                record_processed(code=event_code.upper())
+                processed_severities[f"code:{detection_code}"] = action
+                record_processed(code=detection_code)
             else:
                 processed_severities[event_code] = action
                 record_processed(event_code)
@@ -227,7 +228,7 @@ def validate_excel(
                 description += f": {detected_value}"
             event = ValidationEvent(
                 rule_code=event_code,
-                reason=f"{event_code.upper()}_DETECTED",
+                reason=detection_code,
                 sheet_name=sheet_name,
                 cell_reference=cell_reference,
                 actual_value=detected_value,
@@ -242,7 +243,7 @@ def validate_excel(
                 diagnostics.append(
                     DiagnosticEvent(
                         run_id=run_id,
-                        code=f"{event_code.upper()}_DETECTED",
+                        code=detection_code,
                         description=description,
                     )
                 )

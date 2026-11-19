@@ -1054,11 +1054,9 @@ VALIDATION_RESULT_DATAFRAME_COLUMNS = [
     "event_type",
     "processed_count",
     "issue_count",
-    "rule_code",
-    "code",
+    "check",
     "status",
     "reason",
-    "severity",
     "sheet_name",
     "cell_reference",
     "row_number",
@@ -1071,7 +1069,7 @@ VALIDATION_RESULT_DATAFRAME_COLUMNS = [
 
 
 def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
-    """Convert validation events and diagnostics into a tabular result."""
+    """Export validation events and diagnostics with a shared check identifier."""
     metadata = {
         "run_id": result.run_id,
         "config_version": result.config_version,
@@ -1126,10 +1124,9 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                         count_key(event.rule_code, None)
                     ),
                     "issue_count": None,
-                    "rule_code": event.rule_code,
+                    "check": event.rule_code,
                     "status": event.status,
                     "reason": event.reason,
-                    "severity": event.severity,
                     "sheet_name": event.sheet_name,
                     "description": event.description,
                     "actual_value": event.actual_value,
@@ -1152,18 +1149,14 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                         count_key(None, diagnostic.code)
                     ),
                     "issue_count": None,
-                    "code": diagnostic.code,
+                    "check": diagnostic.code,
                     "description": diagnostic.description,
                     "metadata": None,
                 }
             )
     for key, processed_count in result.processed_counts.items():
-        if key.startswith("code:"):
-            rule_code = None
-            code = key[5:]
-        else:
-            rule_code = key
-            code = None
+        is_diagnostic = key.startswith("code:")
+        check = key.removeprefix("code:")
         if error_counts.get(key, 0):
             summary_status = "FAILED"
         elif processed_count == 0 and not_run_counts.get(key, 0):
@@ -1175,21 +1168,19 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
             summary_reason = next(iter(summary_reasons))
         elif len(summary_reasons) > 1:
             summary_reason = "MULTIPLE_REASONS"
-        elif code is not None:
-            summary_reason = code
+        elif is_diagnostic:
+            summary_reason = check
         else:
-            summary_reason = ValidationEvent(rule_code=rule_code).reason
+            summary_reason = ValidationEvent(rule_code=check).reason
         rows.append(
             {
                 **metadata,
                 "event_type": "summary",
-                "rule_code": rule_code,
-                "code": code,
+                "check": check,
                 "status": summary_status,
                 "processed_count": processed_count,
                 "issue_count": issue_counts.get(key, 0),
                 "reason": summary_reason,
-                "severity": result.processed_severities.get(key),
             }
         )
     return pd.DataFrame(rows, columns=VALIDATION_RESULT_DATAFRAME_COLUMNS)

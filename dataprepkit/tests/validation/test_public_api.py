@@ -1504,7 +1504,9 @@ def test_validation_result_to_dataframe_includes_events_and_metadata():
 
     assert list(frame["event_type"]) == ["error"]
     assert frame.loc[0, "run_id"] == "run-1"
-    assert frame.loc[0, "rule_code"] == "required_cell"
+    assert frame.loc[0, "check"] == "required_cell"
+    assert frame.loc[0, "description"] == "Value is required"
+    assert {"rule_code", "code"}.isdisjoint(frame.columns)
     assert frame.loc[0, "sheet_name"] == "Data"
     assert frame.loc[0, "reference_filename"] is None
     assert frame.loc[0, "is_valid"] == False  # noqa: E712
@@ -1524,11 +1526,11 @@ def test_validation_result_summary_status_reflects_rule_outcome():
 
     frame = validation_result_to_dataframe(result)
     summary = frame[frame["event_type"] == "summary"]
-    statuses = summary.set_index("rule_code")["status"]
+    statuses = summary.set_index("check")["status"]
 
     assert statuses["passed_rule"] == "PASSED"
     assert statuses["failed_rule"] == "FAILED"
-    reasons = summary.set_index("rule_code")["reason"]
+    reasons = summary.set_index("check")["reason"]
     assert reasons["failed_rule"] == "FAILED_RULE_EVENT"
     assert reasons["passed_rule"] == "PASSED_RULE_EVENT"
 
@@ -4043,7 +4045,7 @@ def test_validate_excel_runs_cross_table_values_check(tmp_path):
     summaries = validation_result_to_dataframe(result)
     summary = summaries[
         (summaries["event_type"] == "summary")
-        & (summaries["rule_code"] == "values_in_reference")
+        & (summaries["check"] == "values_in_reference")
     ].iloc[0]
     assert summary["processed_count"] == 1
     assert summary["issue_count"] == 1
@@ -5365,6 +5367,21 @@ def test_feature_policy_ignore_records_a_diagnostic(tmp_path):
     assert [event.code for event in result.diagnostics] == [
         "MERGED_CELLS_DETECTED",
     ]
+
+    frame = validation_result_to_dataframe(result)
+    diagnostic = frame.loc[frame["event_type"] == "diagnostic"].iloc[0]
+    assert diagnostic["check"] == "MERGED_CELLS_DETECTED"
+    assert diagnostic["description"] == "Merged cell range detected: A1:B1"
+    assert diagnostic["processed_count"] == 1
+
+    summaries = frame.loc[
+        (frame["event_type"] == "summary")
+        & frame["check"].str.startswith("MERGED_CELLS")
+    ]
+    assert summaries["check"].tolist() == ["MERGED_CELLS_DETECTED"]
+    assert summaries["processed_count"].tolist() == [1]
+    assert summaries["issue_count"].tolist() == [1]
+    assert "severity" not in frame.columns
 
 
 @pytest.mark.parametrize("action, bucket", [("error", "errors"), ("warning", "warnings")])
