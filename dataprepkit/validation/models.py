@@ -1050,7 +1050,6 @@ VALIDATION_RESULT_DATAFRAME_COLUMNS = [
     "reference_filename",
     "reference_version",
     "is_valid",
-    "complete",
     "event_type",
     "processed_count",
     "issue_count",
@@ -1079,7 +1078,6 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
         "reference_filename": result.reference_filename,
         "reference_version": result.reference_version,
         "is_valid": result.is_valid,
-        "complete": result.complete,
     }
     rows = []
     def count_key(rule_code: str | None, code: str | None) -> str:

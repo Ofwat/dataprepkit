@@ -1506,7 +1506,7 @@ def test_validation_result_to_dataframe_includes_events_and_metadata():
     assert frame.loc[0, "run_id"] == "run-1"
     assert frame.loc[0, "check"] == "required_cell"
     assert frame.loc[0, "description"] == "Value is required"
-    assert {"rule_code", "code"}.isdisjoint(frame.columns)
+    assert {"rule_code", "code", "complete"}.isdisjoint(frame.columns)
     assert frame.loc[0, "sheet_name"] == "Data"
     assert frame.loc[0, "reference_filename"] is None
     assert frame.loc[0, "is_valid"] == False  # noqa: E712
