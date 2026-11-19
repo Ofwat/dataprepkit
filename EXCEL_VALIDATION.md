@@ -1228,6 +1228,24 @@ objects, so they can be inspected without reopening either workbook. Result
 serialization is separate from configuration serialization: use
 `dump_validation_config` and `load_validation_config` for profiles.
 
+## Reading summary rows
+
+In the DataFrame export, filter to `event_type == "summary"` to review the
+status and counts for each check. Filter by `check` to see its detail rows.
+
+| Status | Meaning |
+| --- | --- |
+| `PASSED` | No errors, warnings, or skipped work were recorded for the check. |
+| `PASSED_WITH_WARNINGS` | The check finished and recorded warnings. |
+| `FAILED` | The check recorded errors. If work also did not run, the summary description points to the skipped details. |
+| `INCOMPLETE` | The check recorded some processing or a warning, and some work did not run. |
+| `NOT_RUN` | The check did not run. The detail rows explain why. |
+| `RECORDED` | The validator recorded a diagnostic observation. |
+
+`issue_count` counts errors and warnings. Diagnostic observations and skipped
+work have their own detail rows. The unit for `processed_count` depends on the
+check.
+
 ## Schema and validation
 
 The versioned schema is available as `dataprepkit/validation/schema/v1.json`

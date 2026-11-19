@@ -320,7 +320,6 @@ def validate_excel(
                 diagnostics=diagnostics,
             )
         for expected_cell in resolved_config.expected_cells:
-            record_processed("expected_cell")
             if (
                 not expected_cell.enabled
                 or (
@@ -338,6 +337,7 @@ def validate_excel(
                     )
                 )
                 continue
+            record_processed("expected_cell")
             resolved_locations = []
             for location in expected_cell.locations:
                 matches = _match_sheets(
@@ -410,12 +410,12 @@ def validate_excel(
         for table in resolved_config.tables:
             if table.header_policy is None or table.sheet_selector is None:
                 continue
-            record_processed("table_resolution")
-            record_processed("column_header")
-            if table.data_presence == "require_one_usable_row":
-                record_processed("non_empty_data")
-            for empty_row_rule in table.empty_row_rules:
-                record_processed("empty_row_pattern", len(empty_row_rule.rows))
+            enabled_rules = resolved_config.enabled_rules
+            resolution_enabled = (
+                enabled_rules is None or "table_resolution" in enabled_rules
+            )
+            if resolution_enabled:
+                record_processed("table_resolution")
             sheet_matches = _match_sheets(
                 value_workbook.sheetnames,
                 table.sheet_selector,
@@ -427,10 +427,6 @@ def validate_excel(
             ]
             if not sheet_matches:
                 if table.required:
-                    resolution_enabled = (
-                        resolved_config.enabled_rules is None
-                        or "table_resolution" in resolved_config.enabled_rules
-                    )
                     event = ValidationEvent(
                         rule_code="table_resolution",
                         status="FAILED" if resolution_enabled else "NOT_RUN",
@@ -454,7 +450,6 @@ def validate_excel(
                 continue
             definitions = {definition.name: definition for definition in table.column_definitions}
             for sheet_name in sheet_matches:
-                enabled_rules = resolved_config.enabled_rules
                 header_rule_enabled = (
                     enabled_rules is None or "column_header" in enabled_rules
                 )
@@ -468,7 +463,9 @@ def validate_excel(
                     or enabled_rules is None
                     or "empty_row_pattern" in enabled_rules
                 )
-                if not header_rule_enabled:
+                if header_rule_enabled:
+                    record_processed("column_header")
+                else:
                     not_run.append(
                         ValidationEvent(
                             rule_code="column_header",
@@ -694,6 +691,7 @@ def validate_excel(
                             )
                         )
                     else:
+                        record_processed("non_empty_data")
                         formula_sheet = formula_workbook[sheet_name]
                         has_data_row = False
                         max_row = data_end_row
@@ -734,6 +732,7 @@ def validate_excel(
                 for empty_row_rule in (
                     table.empty_row_rules if empty_row_rule_enabled else []
                 ):
+                    record_processed("empty_row_pattern", len(empty_row_rule.rows))
                     excluded_columns = {
                         column_index_from_string(column)
                         for column in empty_row_rule.excluded_columns
@@ -1237,8 +1236,6 @@ def validate_excel(
                 )
                 rule_outcomes[check.rule_code] = "not_run"
                 continue
-            if check.rule_code not in {"formula_error", "forbidden_values"}:
-                record_processed(check.rule_code)
             custom_rule = get_registered_rule(check.rule_code)
             if custom_rule is not None:
                 context = RuleContext(
@@ -1252,6 +1249,8 @@ def validate_excel(
                     config=resolved_config,
                 )
                 events = validate_custom_result(custom_rule(context))
+                if not events or any(event.status != "NOT_RUN" for event in events):
+                    record_processed(check.rule_code)
                 for event in events:
                     if event.status == "NOT_RUN":
                         not_run.append(event)
@@ -1285,6 +1284,7 @@ def validate_excel(
                     )
                     rule_outcomes[check.rule_code] = "not_run"
                     continue
+                record_processed(check.rule_code)
                 reference_names = set(reference_workbook.sheetnames)
                 severity = (
                     check.severity
@@ -1323,6 +1323,7 @@ def validate_excel(
                     )
                     rule_outcomes[check.rule_code] = "not_run"
                     continue
+                record_processed(check.rule_code)
                 candidate_names = set(formula_workbook.sheetnames)
                 for sheet_name in reference_workbook.sheetnames:
                     if sheet_name not in candidate_names:
@@ -1355,6 +1356,7 @@ def validate_excel(
                     )
                     rule_outcomes[check.rule_code] = "not_run"
                     continue
+                record_processed(check.rule_code)
                 reference_sheets = {
                     sheet.title: sheet for sheet in reference_workbook.worksheets
                 }
@@ -1424,6 +1426,7 @@ def validate_excel(
                     )
                     rule_outcomes[check.rule_code] = "not_run"
                     continue
+                record_processed(check.rule_code, 0)
                 reference_sheets = {
                     sheet.title: sheet for sheet in reference_formula_workbook.worksheets
                 }
@@ -1445,6 +1448,7 @@ def validate_excel(
                             )
                         )
                         continue
+                    record_processed(check.rule_code)
                     for row_number, column_number in _comparison_coordinates(
                         candidate_sheet,
                         reference_sheet,
@@ -1497,6 +1501,7 @@ def validate_excel(
                 )
                 continue
             if check.rule_code == "unexpected_formula":
+                record_processed(check.rule_code)
                 options = check.options or {}
                 colors = [_hex_rgb(color) for color in options["fill_colors"]]
                 tolerance = options.get("tolerance_percent", 0) / 100 * 255
@@ -1540,6 +1545,7 @@ def validate_excel(
                 ) else "passed"
                 continue
             if check.rule_code == "required_filled_cells":
+                record_processed(check.rule_code)
                 options = check.options or {}
                 colors = [_hex_rgb(color) for color in options["fill_colors"]]
                 tolerance = options.get("tolerance_percent", 0) / 100 * 255
@@ -1642,6 +1648,7 @@ def validate_excel(
                 )
                 continue
             if check.rule_code != "formula_error":
+                record_processed(check.rule_code)
                 rule_outcomes[check.rule_code] = "passed"
                 continue
             processed_counts.setdefault("formula_error", 0)

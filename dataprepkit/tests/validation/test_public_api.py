@@ -1518,6 +1518,8 @@ def test_validation_result_round_trips_through_mapping_and_json():
 
     encoded = dump_validation_result(result, format="json")
     assert load_validation_result(encoded) == result
+    incomplete = result.model_copy(update={"complete": False})
+    assert incomplete.format_report().startswith("Validation incomplete")
 
 
 def test_validation_result_to_dataframe_includes_events_and_metadata():
@@ -1556,16 +1558,42 @@ def test_validation_event_omits_reason():
 
 def test_validation_result_summary_status_reflects_rule_outcome():
     result = ValidationResult(
-        processed_counts={"passed_rule": 10, "failed_rule": 10},
+        processed_counts={
+            "passed_rule": 10,
+            "failed_rule": 10,
+            "warning_rule": 10,
+            "partial_rule": 10,
+            "skipped_rule": 0,
+        },
         errors=[ValidationEvent(rule_code="failed_rule")],
+        warnings=[
+            ValidationEvent(rule_code="warning_rule", severity="warning"),
+            ValidationEvent(rule_code="partial_rule", severity="warning"),
+        ],
+        not_run=[
+            ValidationEvent(rule_code=rule, status="NOT_RUN")
+            for rule in ("failed_rule", "partial_rule", "skipped_rule")
+        ],
     )
 
     frame = validation_result_to_dataframe(result)
-    summary = frame[frame["event_type"] == "summary"]
-    statuses = summary.set_index("check")["status"]
+    summary = frame.loc[frame["event_type"] == "summary"].set_index("check")
 
-    assert statuses["PASSED_RULE"] == "PASSED"
-    assert statuses["FAILED_RULE"] == "FAILED"
+    assert summary["status"].to_dict() == {
+        "PASSED_RULE": "PASSED",
+        "FAILED_RULE": "FAILED",
+        "WARNING_RULE": "PASSED_WITH_WARNINGS",
+        "PARTIAL_RULE": "INCOMPLETE",
+        "SKIPPED_RULE": "NOT_RUN",
+    }
+    assert summary["issue_count"].to_dict() == {
+        "PASSED_RULE": 0,
+        "FAILED_RULE": 1,
+        "WARNING_RULE": 1,
+        "PARTIAL_RULE": 1,
+        "SKIPPED_RULE": 0,
+    }
+    assert "Some work did not run" in summary.loc["FAILED_RULE", "description"]
 
 
 def test_validate_excel_populates_audit_metadata(tmp_path):
@@ -3091,6 +3119,12 @@ def test_validate_excel_reports_missing_required_table(tmp_path):
     assert skipped["description"].tolist() == [
         "Table resolution for 'outputs' is disabled by configuration"
     ]
+    summary = frame.loc[
+        (frame["check"] == "TABLE_RESOLUTION")
+        & (frame["event_type"] == "summary")
+    ]
+    assert summary["status"].tolist() == ["NOT_RUN"]
+    assert summary["processed_count"].tolist() == [0]
 
 
 def test_validate_excel_does_not_validate_tables_on_ignored_sheets(tmp_path):
@@ -5431,7 +5465,8 @@ def test_feature_policy_ignore_records_a_diagnostic(tmp_path):
     ]
     assert summaries["check"].tolist() == ["MERGED_CELLS_DETECTED"]
     assert summaries["processed_count"].tolist() == [1]
-    assert summaries["issue_count"].tolist() == [1]
+    assert summaries["issue_count"].tolist() == [0]
+    assert summaries["status"].tolist() == ["RECORDED"]
     assert "severity" not in frame.columns
 
 

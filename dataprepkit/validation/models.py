@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from typing import Any
 
 import pandas as pd
@@ -993,8 +994,18 @@ class ValidationResult(_PublicModel):
         return cls.model_validate(value)
 
     def format_report(self) -> str:
+        if self.errors:
+            outcome = "failed" if self.complete else "failed and incomplete"
+        elif not self.complete:
+            outcome = "incomplete"
+        elif self.not_run:
+            outcome = "finished with checks not run"
+        elif self.warnings:
+            outcome = "passed with warnings"
+        else:
+            outcome = "passed"
         lines = [
-            f"Validation {'passed' if self.is_valid else 'failed'}: "
+            f"Validation {outcome}: "
             f"{len(self.errors)} errors, {len(self.warnings)} warnings, "
             f"{len(self.not_run)} not run"
         ]
@@ -1047,25 +1058,9 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
         "is_valid": result.is_valid,
     }
     rows = []
-    def count_key(rule_code: str | None, code: str | None) -> str:
-        return f"code:{code}" if code is not None else str(rule_code)
-
-    issue_counts: dict[str, int] = {}
-    error_counts: dict[str, int] = {}
-    not_run_counts: dict[str, int] = {}
-    for event in result.errors:
-        key = count_key(event.rule_code, None)
-        issue_counts[key] = issue_counts.get(key, 0) + 1
-        error_counts[key] = error_counts.get(key, 0) + 1
-    for event in result.warnings:
-        key = count_key(event.rule_code, None)
-        issue_counts[key] = issue_counts.get(key, 0) + 1
-    for event in result.not_run:
-        key = count_key(event.rule_code, None)
-        not_run_counts[key] = not_run_counts.get(key, 0) + 1
-    for diagnostic in result.diagnostics:
-        key = count_key(None, diagnostic.code)
-        issue_counts[key] = issue_counts.get(key, 0) + 1
+    error_counts = Counter(event.rule_code for event in result.errors)
+    warning_counts = Counter(event.rule_code for event in result.warnings)
+    not_run_checks = {event.rule_code for event in result.not_run}
 
     for event_type, events in (
         ("error", result.errors),
@@ -1077,9 +1072,7 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                 {
                     **metadata,
                     "event_type": event_type,
-                    "processed_count": result.processed_counts.get(
-                        count_key(event.rule_code, None)
-                    ),
+                    "processed_count": result.processed_counts.get(event.rule_code),
                     "issue_count": None,
                     "check": event.rule_code.upper(),
                     "status": event.status,
@@ -1099,23 +1092,28 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
     for diagnostic in result.diagnostics:
         rows.append(
             {
-                    **metadata,
-                    "event_type": "diagnostic",
-                    "processed_count": result.processed_counts.get(
-                        count_key(None, diagnostic.code)
-                    ),
-                    "issue_count": None,
-                    "check": diagnostic.code.upper(),
-                    "description": diagnostic.description,
-                    "metadata": None,
-                }
-            )
+                **metadata,
+                "event_type": "diagnostic",
+                "processed_count": result.processed_counts.get(f"code:{diagnostic.code}"),
+                "issue_count": None,
+                "check": diagnostic.code.upper(),
+                "description": diagnostic.description,
+                "metadata": None,
+            }
+        )
     for key, processed_count in result.processed_counts.items():
         check = key.removeprefix("code:").upper()
-        if error_counts.get(key, 0):
+        error_count = error_counts[key]
+        warning_count = warning_counts[key]
+        has_not_run = key in not_run_checks
+        if key.startswith("code:"):
+            summary_status = "RECORDED"
+        elif error_count:
             summary_status = "FAILED"
-        elif processed_count == 0 and not_run_counts.get(key, 0):
-            summary_status = "NOT_RUN"
+        elif has_not_run:
+            summary_status = "INCOMPLETE" if processed_count or warning_count else "NOT_RUN"
+        elif warning_count:
+            summary_status = "PASSED_WITH_WARNINGS"
         else:
             summary_status = "PASSED"
         rows.append(
@@ -1125,7 +1123,12 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                 "check": check,
                 "status": summary_status,
                 "processed_count": processed_count,
-                "issue_count": issue_counts.get(key, 0),
+                "issue_count": error_count + warning_count,
+                "description": (
+                    "Some work did not run. See the not-run details."
+                    if has_not_run and summary_status != "NOT_RUN"
+                    else None
+                ),
             }
         )
     return pd.DataFrame(rows, columns=VALIDATION_RESULT_DATAFRAME_COLUMNS)
