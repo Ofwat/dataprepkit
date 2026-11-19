@@ -933,7 +933,6 @@ class RuleContext(_PublicModel):
 class ValidationEvent(_PublicModel):
     rule_code: str
     status: str = "FAILED"
-    reason: str | None = None
     severity: str | None = None
     sheet_name: str | None = None
     description: str = ""
@@ -945,38 +944,7 @@ class ValidationEvent(_PublicModel):
     column_number: int | None = None
 
     @model_validator(mode="after")
-    def default_reason(self):
-        if self.reason is None:
-            default_reasons = {
-                "required_sheet": "REQUIRED_SHEET_MISSING",
-                "extra_sheet": "EXTRA_SHEET_DETECTED",
-                "expected_cell": "EXPECTED_CELL_MISMATCH",
-                "table_resolution": "TABLE_RESOLUTION_FAILED",
-                "pandas_load": "PANDAS_LOAD_FAILED",
-                "missing_column": "COLUMN_MISSING",
-                "empty_table": "TABLE_EMPTY",
-                "data_boundary": "DATA_BOUNDARY_FAILED",
-                "column_header": "COLUMN_HEADER_INVALID",
-                "non_empty_data": "NO_USABLE_DATA",
-                "empty_row_pattern": "EMPTY_ROW_VIOLATION",
-                "missing_value": "REQUIRED_VALUE_MISSING",
-                "duplicate_value": "DUPLICATE_VALUE",
-                "allowed_values": "VALUE_NOT_ALLOWED",
-                "forbidden_values": "VALUE_FORBIDDEN",
-                "missing_reference_sheet": "REFERENCE_SHEET_MISSING",
-                "sheet_structure": "SHEET_STRUCTURE_MISMATCH",
-                "formula_difference": "FORMULA_DIFFERENCE",
-                "database_lookup": "DATABASE_LOOKUP_FAILED",
-                "database_missing_lookup": "LOOKUP_ROW_MISSING",
-                "database_duplicate_lookup": "DUPLICATE_LOOKUP",
-                "sheet_selector": "SHEET_SELECTOR_MULTIPLE_MATCHES",
-                "WORKBOOK_LIMIT_ERROR": "WORKBOOK_CELL_LIMIT_EXCEEDED",
-            }
-            normalized_code = self.rule_code.upper().replace("-", "_")
-            self.reason = default_reasons.get(
-                self.rule_code,
-                f"{normalized_code}_EVENT",
-            )
+    def infer_column_number(self):
         if self.column_number is None and self.cell_reference is not None:
             match = re.fullmatch(
                 r"\$?([A-Za-z]{1,3})\$?[1-9][0-9]*",
@@ -1055,7 +1023,6 @@ VALIDATION_RESULT_DATAFRAME_COLUMNS = [
     "issue_count",
     "check",
     "status",
-    "reason",
     "sheet_name",
     "cell_reference",
     "row_number",
@@ -1068,7 +1035,7 @@ VALIDATION_RESULT_DATAFRAME_COLUMNS = [
 
 
 def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
-    """Export validation events and diagnostics with a shared check identifier."""
+    """Export events and diagnostics with uppercase check identifiers."""
     metadata = {
         "run_id": result.run_id,
         "config_version": result.config_version,
@@ -1086,27 +1053,19 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
     issue_counts: dict[str, int] = {}
     error_counts: dict[str, int] = {}
     not_run_counts: dict[str, int] = {}
-    reasons: dict[str, set[str]] = {}
     for event in result.errors:
         key = count_key(event.rule_code, None)
         issue_counts[key] = issue_counts.get(key, 0) + 1
         error_counts[key] = error_counts.get(key, 0) + 1
-        if event.reason is not None:
-            reasons.setdefault(key, set()).add(event.reason)
     for event in result.warnings:
         key = count_key(event.rule_code, None)
         issue_counts[key] = issue_counts.get(key, 0) + 1
-        if event.reason is not None:
-            reasons.setdefault(key, set()).add(event.reason)
     for event in result.not_run:
         key = count_key(event.rule_code, None)
         not_run_counts[key] = not_run_counts.get(key, 0) + 1
-        if event.reason is not None:
-            reasons.setdefault(key, set()).add(event.reason)
     for diagnostic in result.diagnostics:
         key = count_key(None, diagnostic.code)
         issue_counts[key] = issue_counts.get(key, 0) + 1
-        reasons.setdefault(key, set()).add(diagnostic.code)
 
     for event_type, events in (
         ("error", result.errors),
@@ -1122,9 +1081,8 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                         count_key(event.rule_code, None)
                     ),
                     "issue_count": None,
-                    "check": event.rule_code,
+                    "check": event.rule_code.upper(),
                     "status": event.status,
-                    "reason": event.reason,
                     "sheet_name": event.sheet_name,
                     "description": event.description,
                     "actual_value": event.actual_value,
@@ -1147,29 +1105,19 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                         count_key(None, diagnostic.code)
                     ),
                     "issue_count": None,
-                    "check": diagnostic.code,
+                    "check": diagnostic.code.upper(),
                     "description": diagnostic.description,
                     "metadata": None,
                 }
             )
     for key, processed_count in result.processed_counts.items():
-        is_diagnostic = key.startswith("code:")
-        check = key.removeprefix("code:")
+        check = key.removeprefix("code:").upper()
         if error_counts.get(key, 0):
             summary_status = "FAILED"
         elif processed_count == 0 and not_run_counts.get(key, 0):
             summary_status = "NOT_RUN"
         else:
             summary_status = "PASSED"
-        summary_reasons = reasons.get(key, set())
-        if len(summary_reasons) == 1:
-            summary_reason = next(iter(summary_reasons))
-        elif len(summary_reasons) > 1:
-            summary_reason = "MULTIPLE_REASONS"
-        elif is_diagnostic:
-            summary_reason = check
-        else:
-            summary_reason = ValidationEvent(rule_code=check).reason
         rows.append(
             {
                 **metadata,
@@ -1178,7 +1126,6 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                 "status": summary_status,
                 "processed_count": processed_count,
                 "issue_count": issue_counts.get(key, 0),
-                "reason": summary_reason,
             }
         )
     return pd.DataFrame(rows, columns=VALIDATION_RESULT_DATAFRAME_COLUMNS)

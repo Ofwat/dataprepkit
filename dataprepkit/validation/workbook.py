@@ -184,7 +184,6 @@ def validate_excel(
                 )
                 event = ValidationEvent(
                     rule_code=event_code,
-                    reason=event_code.upper(),
                     sheet_name=sheet_name,
                     cell_reference=cell_reference,
                     actual_value=detected_value,
@@ -228,7 +227,6 @@ def validate_excel(
                 description += f": {detected_value}"
             event = ValidationEvent(
                 rule_code=event_code,
-                reason=detection_code,
                 sheet_name=sheet_name,
                 cell_reference=cell_reference,
                 actual_value=detected_value,
@@ -334,7 +332,6 @@ def validate_excel(
                     ValidationEvent(
                         rule_code="expected_cell",
                         status="NOT_RUN",
-                        reason="RULE_DISABLED",
                         severity=expected_cell.severity
                         or resolved_config.rule_severity.get("expected_cell"),
                         description="Rule is disabled by configuration",
@@ -430,32 +427,22 @@ def validate_excel(
             ]
             if not sheet_matches:
                 if table.required:
+                    resolution_enabled = (
+                        resolved_config.enabled_rules is None
+                        or "table_resolution" in resolved_config.enabled_rules
+                    )
                     event = ValidationEvent(
                         rule_code="table_resolution",
-                        status=(
-                            "FAILED"
-                            if (
-                                resolved_config.enabled_rules is None
-                                or "table_resolution"
-                                in resolved_config.enabled_rules
-                            )
-                            else "NOT_RUN"
-                        ),
-                        reason=(
-                            None
-                            if (
-                                resolved_config.enabled_rules is None
-                                or "table_resolution"
-                                in resolved_config.enabled_rules
-                            )
-                            else "RULE_DISABLED"
-                        ),
+                        status="FAILED" if resolution_enabled else "NOT_RUN",
                         sheet_name=table.sheet_selector.value,
                         severity=resolved_config.rule_severity.get(
                             "table_resolution"
                         ),
                         description=(
                             f"Required table '{table.name}' did not resolve"
+                            if resolution_enabled
+                            else f"Table resolution for '{table.name}' is disabled "
+                            "by configuration"
                         ),
                     )
                     if event.status == "NOT_RUN":
@@ -486,7 +473,6 @@ def validate_excel(
                         ValidationEvent(
                             rule_code="column_header",
                             status="NOT_RUN",
-                            reason="RULE_DISABLED",
                             description=(
                                 f"Header checks for table '{table.name}' "
                                 "are disabled by configuration"
@@ -690,7 +676,6 @@ def validate_excel(
                             ValidationEvent(
                                 rule_code="non_empty_data",
                                 status="NOT_RUN",
-                                reason="RULE_DISABLED",
                                 description=(
                                     f"Required table '{table.name}' data "
                                     "presence check is disabled by configuration"
@@ -702,7 +687,6 @@ def validate_excel(
                             ValidationEvent(
                                 rule_code="non_empty_data",
                                 status="NOT_RUN",
-                                reason="DATA_BOUNDARY_RESOLUTION_FAILED",
                                 description=(
                                     f"Table '{table.name}' data boundary "
                                     "could not be resolved"
@@ -741,7 +725,6 @@ def validate_excel(
                         ValidationEvent(
                             rule_code="empty_row_pattern",
                             status="NOT_RUN",
-                            reason="RULE_DISABLED",
                             description=(
                                 f"Empty row checks for table '{table.name}' "
                                 "are disabled by configuration"
@@ -803,7 +786,6 @@ def validate_excel(
                                 ValidationEvent(
                                     rule_code=rule_code,
                                     status="NOT_RUN",
-                                    reason="DATA_BOUNDARY_RESOLUTION_FAILED",
                                     description=(
                                         f"Column rule for '{validation.column}' "
                                         "requires a resolved data boundary"
@@ -834,11 +816,6 @@ def validate_excel(
                                 ValidationEvent(
                                     rule_code=rule_code,
                                     status="NOT_RUN",
-                                    reason=(
-                                        "RULE_DISABLED"
-                                        if disabled
-                                        else "TABLE_HEADER_RESOLUTION_FAILED"
-                                    ),
                                     severity=validation.severity
                                     or resolved_config.rule_severity.get(rule_code),
                                     description=(
@@ -921,7 +898,6 @@ def validate_excel(
                                 ValidationEvent(
                                     rule_code=rule_code,
                                     status="NOT_RUN",
-                                    reason="RULE_DISABLED",
                                     severity=validation.severity
                                     or resolved_config.rule_severity.get(rule_code),
                                     description=(
@@ -1175,7 +1151,6 @@ def validate_excel(
                     ValidationEvent(
                         rule_code=check.rule_code,
                         status="NOT_RUN",
-                        reason="RULE_DISABLED",
                         severity=check.severity
                         or resolved_config.rule_severity.get(check.rule_code),
                         description="Database check is disabled by configuration",
@@ -1188,7 +1163,6 @@ def validate_excel(
                     ValidationEvent(
                         rule_code=check.rule_code,
                         status="NOT_RUN",
-                        reason="DATABASE_ENGINE_REQUIRED",
                         severity=check.severity
                         or resolved_config.rule_severity.get(check.rule_code),
                         description=(
@@ -1220,25 +1194,24 @@ def validate_excel(
                 )
             )
             if failed_dependencies and not per_sheet_structure_dependency:
-                dependency_reason = (
-                    "DEPENDENCY_FAILED"
+                dependency_outcome = (
+                    "failed"
                     if any(
                         rule_outcomes.get(dependency) == "failed"
                         for dependency in failed_dependencies
                     )
-                    else "DEPENDENCY_NOT_RUN"
+                    else "did not run"
                 )
                 record_processed(check.rule_code, 0)
                 not_run.append(
                     ValidationEvent(
                         rule_code=check.rule_code,
                         status="NOT_RUN",
-                        reason=dependency_reason,
                         severity=check.severity
                         or resolved_config.rule_severity.get(check.rule_code),
                         expected_value=failed_dependencies,
                         description=(
-                            f"Rule depends on checks that did not pass: "
+                            f"Rule depends on checks that {dependency_outcome}: "
                             f"{', '.join(failed_dependencies)}"
                         ),
                     )
@@ -1257,7 +1230,6 @@ def validate_excel(
                     ValidationEvent(
                         rule_code=check.rule_code,
                         status="NOT_RUN",
-                        reason="RULE_DISABLED",
                         severity=check.severity
                         or resolved_config.rule_severity.get(check.rule_code),
                         description="Rule is disabled by configuration",
@@ -1300,7 +1272,6 @@ def validate_excel(
                         ValidationEvent(
                             rule_code="extra_sheet",
                             status="NOT_RUN",
-                            reason="REFERENCE_WORKBOOK_REQUIRED",
                             severity=(
                                 check.severity
                                 or resolved_config.rule_severity.get(
@@ -1345,7 +1316,6 @@ def validate_excel(
                         ValidationEvent(
                             rule_code="missing_reference_sheet",
                             status="NOT_RUN",
-                            reason="REFERENCE_WORKBOOK_REQUIRED",
                             description=(
                                 "Reference workbook is required for this check"
                             ),
@@ -1378,7 +1348,6 @@ def validate_excel(
                         ValidationEvent(
                             rule_code="sheet_structure",
                             status="NOT_RUN",
-                            reason="REFERENCE_WORKBOOK_REQUIRED",
                             description=(
                                 "Reference workbook is required for this check"
                             ),
@@ -1448,7 +1417,6 @@ def validate_excel(
                         ValidationEvent(
                             rule_code="formula_difference",
                             status="NOT_RUN",
-                            reason="REFERENCE_WORKBOOK_REQUIRED",
                             description=(
                                 "Reference workbook is required for this check"
                             ),
@@ -1468,7 +1436,6 @@ def validate_excel(
                             ValidationEvent(
                                 rule_code="formula_difference",
                                 status="NOT_RUN",
-                                reason="DEPENDENCY_FAILED",
                                 sheet_name=candidate_sheet.title,
                                 expected_value=["sheet_structure"],
                                 description=(
@@ -1507,23 +1474,20 @@ def validate_excel(
                             if candidate_formula == reference_formula:
                                 continue
                             transition = (
-                                "FORMULA_CHANGED"
+                                "Formula changed"
                                 if candidate_is_formula and reference_is_formula
-                                else "FORMULA_ADDED"
+                                else "Formula added"
                                 if candidate_is_formula
-                                else "FORMULA_REMOVED"
+                                else "Formula removed"
                             )
                             errors.append(
                                 ValidationEvent(
                                     rule_code="formula_difference",
-                                    reason=transition,
                                     sheet_name=candidate_sheet.title,
                                     cell_reference=candidate_cell.coordinate,
                                     actual_value=candidate_formula,
                                     expected_value=reference_formula,
-                                    description=(
-                                        f"Formula transition detected: {transition}"
-                                    ),
+                                    description=transition,
                                 )
                             )
                 rule_outcomes[check.rule_code] = (
@@ -1559,7 +1523,6 @@ def validate_excel(
                         errors.append(
                             ValidationEvent(
                                 rule_code=check.rule_code,
-                                reason="UNEXPECTED_FORMULA",
                                 severity=severity,
                                 sheet_name=sheet.title,
                                 cell_reference=cell.coordinate,
@@ -1720,7 +1683,6 @@ def validate_excel(
                     event = ValidationEvent(
                         rule_code="formula_error",
                         status=status,
-                        reason="FORMULA_RESULTS_UNAVAILABLE",
                         severity=severity,
                         sheet_name=sheet_name,
                         cell_reference=cell_reference,
@@ -1747,7 +1709,6 @@ def validate_excel(
                     if cell.value in tokens:
                         event = ValidationEvent(
                             rule_code="formula_error",
-                            reason="FORMULA_ERROR_VALUE",
                             severity=severity,
                             sheet_name=sheet.title,
                             cell_reference=cell.coordinate,
@@ -1823,7 +1784,6 @@ def _run_dataframe_column_validations(
                 ValidationEvent(
                     rule_code=rule_code,
                     status="NOT_RUN",
-                    reason="RULE_DISABLED",
                     severity=validation.severity
                     or config.rule_severity.get(rule_code),
                     sheet_name=sheet_name,
@@ -1865,7 +1825,6 @@ def _run_dataframe_column_validations(
                     ValidationEvent(
                         rule_code=rule_code,
                         status="NOT_RUN",
-                        reason="MISSING_COLUMN",
                         sheet_name=sheet_name,
                         description=(
                             f"Column rule for '{validation.column}' could not "
@@ -1886,7 +1845,6 @@ def _run_dataframe_column_validations(
                     ValidationEvent(
                         rule_code="value_type",
                         status="NOT_RUN",
-                        reason="MISSING_COLUMN",
                         sheet_name=sheet_name,
                         description=(
                             f"Value type check for '{validation.column}' could not "
@@ -2186,7 +2144,6 @@ def _run_table_validations(
                 ValidationEvent(
                     rule_code=validation.rule_code,
                     status="NOT_RUN",
-                    reason="COLUMN_SELECTION_FAILED",
                     sheet_name=sheet_name,
                     description=(
                         f"Table validation '{validation.rule_code}' could not run "
@@ -2310,9 +2267,6 @@ def _run_dataframe_checks(
         check.source_table for check in config.database_checks
     )
 
-    def skip_dataframe_checks(table, reason, sheet_name=None):
-        return None
-
     for table in config.tables:
         load_policy = table.load_policy or DataFrameLoadPolicy()
         if table.sheet_selector is None or table.header_row is None:
@@ -2320,11 +2274,9 @@ def _run_dataframe_checks(
                 ValidationEvent(
                     rule_code="pandas_load",
                     status="NOT_RUN",
-                    reason="TABLE_CONFIGURATION_INCOMPLETE",
                     description=f"Table '{table.name}' is not configured for pandas loading",
                 )
             )
-            skip_dataframe_checks(table, "TABLE_CONFIGURATION_INCOMPLETE")
             continue
         sheet_matches = _match_sheets(
             value_workbook.sheetnames,
@@ -2340,11 +2292,9 @@ def _run_dataframe_checks(
                 ValidationEvent(
                     rule_code="pandas_load",
                     status="NOT_RUN",
-                    reason="TABLE_RESOLUTION_FAILED",
                     description=f"Table '{table.name}' did not resolve",
                 )
             )
-            skip_dataframe_checks(table, "TABLE_RESOLUTION_FAILED")
             continue
         for sheet_name in sheet_matches:
             sheet = value_workbook[sheet_name]
@@ -2407,12 +2357,10 @@ def _run_dataframe_checks(
                     ValidationEvent(
                         rule_code="pandas_load",
                         status="NOT_RUN",
-                        reason="DATA_BOUNDARY_RESOLUTION_FAILED",
                         sheet_name=sheet_name,
                         description=f"Table '{table.name}' data boundary could not be resolved",
                     )
                 )
-                skip_dataframe_checks(table, "DATA_BOUNDARY_RESOLUTION_FAILED", sheet_name)
                 continue
             try:
                 dataframe = pd.read_excel(
@@ -2487,7 +2435,6 @@ def _run_dataframe_checks(
                         ValidationEvent(
                             rule_code=check.rule_code,
                             status="NOT_RUN",
-                            reason="RULE_DISABLED",
                             sheet_name=sheet_name,
                             description=f"DataFrame check for '{check.column}' is disabled",
                         )
@@ -2520,7 +2467,6 @@ def _run_dataframe_checks(
                         ValidationEvent(
                             rule_code=check.rule_code,
                             status="NOT_RUN",
-                            reason="MISSING_COLUMN",
                             sheet_name=sheet_name,
                             description=(
                                 f"DataFrame check for '{check.column}' could not "
@@ -2580,7 +2526,6 @@ def _run_cross_table_checks(config, dataframe_cache):
                 ValidationEvent(
                     rule_code=check.rule_code,
                     status="NOT_RUN",
-                    reason="RULE_DISABLED",
                     description=f"Cross-table check '{check.name}' is disabled",
                 )
             )
@@ -2592,7 +2537,6 @@ def _run_cross_table_checks(config, dataframe_cache):
                 ValidationEvent(
                     rule_code=check.rule_code,
                     status="NOT_RUN",
-                    reason="PANDAS_LOAD_FAILED",
                     description=(
                         f"Cross-table check '{check.name}' requires loaded "
                         f"tables '{check.source_table}' and '{check.reference_table}'"
@@ -2719,7 +2663,7 @@ def _run_database_checks(config, dataframe_cache, engine):
                 connection,
             )
     except Exception as error:
-        reason, description = _database_error_details(error, "database checks")
+        description = _database_error_description(error, "Database checks")
         severity = config.rule_severity.get("database_lookup")
         return (
             [],
@@ -2728,7 +2672,6 @@ def _run_database_checks(config, dataframe_cache, engine):
                 ValidationEvent(
                     rule_code="database_lookup",
                     status="NOT_RUN",
-                    reason=reason,
                     severity=severity,
                     description=description,
                 )
@@ -2762,7 +2705,6 @@ def _run_database_checks_on_connection(config, dataframe_cache, connection):
                 ValidationEvent(
                     rule_code=check.rule_code,
                     status="NOT_RUN",
-                    reason="RULE_DISABLED",
                     severity=severity,
                     description="Database check is disabled by configuration",
                 )
@@ -2774,7 +2716,6 @@ def _run_database_checks_on_connection(config, dataframe_cache, connection):
                 ValidationEvent(
                     rule_code=check.rule_code,
                     status="NOT_RUN",
-                    reason="DEPENDENCY_NOT_RUN",
                     severity=severity,
                     description=(
                         f"Database check '{check.name}' depends on a check "
@@ -2790,7 +2731,6 @@ def _run_database_checks_on_connection(config, dataframe_cache, connection):
                 ValidationEvent(
                     rule_code=check.rule_code,
                     status="NOT_RUN",
-                    reason="PANDAS_LOAD_FAILED",
                     severity=severity,
                     description=(
                         f"Database check '{check.name}' requires loaded table "
@@ -2845,9 +2785,8 @@ def _run_database_checks_on_connection(config, dataframe_cache, connection):
                 ValidationEvent(
                     rule_code=check.rule_code,
                     status="NOT_RUN",
-                    reason=lookup_error[0],
                     severity=severity,
-                    description=lookup_error[1],
+                    description=lookup_error,
                 )
             )
             complete = False
@@ -2914,16 +2853,12 @@ def _database_lookup_rows(
         dataframe = entry["dataframe"]
         if any(column not in dataframe.columns for column in source_columns):
             return {}, (
-                "LOOKUP_SOURCE_COLUMN_MISSING",
-                f"Source table is missing a lookup key column for '{lookup.name}'",
+                f"Source table is missing a lookup key column for '{lookup.name}'"
             )
         for values in dataframe[source_columns].itertuples(index=False, name=None):
             source_keys.add(tuple(values))
     if len(source_keys) > lookup.max_distinct_keys:
-        return {}, (
-            "DATABASE_LOOKUP_LIMIT",
-            f"Lookup '{lookup.name}' exceeded its distinct key limit",
-        )
+        return {}, f"Lookup '{lookup.name}' exceeded its distinct key limit"
     cache_key = (
         lookup.name,
         tuple(sorted(map(repr, source_keys))),
@@ -2952,10 +2887,7 @@ def _database_lookup_rows(
         )
         missing = required_columns - columns
         if missing:
-            return {}, (
-                "LOOKUP_COLUMN_MISSING",
-                f"Lookup '{lookup.name}' is missing columns: {sorted(missing)}",
-            )
+            return {}, f"Lookup '{lookup.name}' is missing columns: {sorted(missing)}"
         select_columns = [*lookup.key_columns.values(), *lookup.value_columns]
         rendered_columns = ", ".join(
             _quote_sql_identifier(connection, column) for column in select_columns
@@ -3005,26 +2937,16 @@ def _database_lookup_rows(
             or "no such table" in lowered
             or "invalid object name" in lowered
         ):
-            reason = "LOOKUP_TABLE_MISSING"
-        elif "permission" in lowered or "not authorized" in lowered:
-            reason = "DATABASE_PERMISSION_DENIED"
-        elif "timeout" in lowered or "timed out" in lowered:
-            reason = "DATABASE_TIMEOUT"
-        else:
-            reason = "DATABASE_LOOKUP_FAILED"
-        return {}, (
-            reason,
-            f"Lookup '{lookup.name}' could not be loaded",
-        )
+            return {}, (
+                f"Lookup '{lookup.name}' could not find its database table or schema"
+            )
+        return {}, _database_error_description(error, f"Lookup '{lookup.name}'")
     result = {}
     for row in rows:
         key = tuple(row[column] for column in lookup_columns)
         value = tuple(row[column] for column in lookup.value_columns)
         if key in result and result[key] != value:
-            return {}, (
-                "DATABASE_DUPLICATE_LOOKUP",
-                f"Lookup '{lookup.name}' returned conflicting rows",
-            )
+            return {}, f"Lookup '{lookup.name}' returned conflicting rows"
         result[key] = value
     cache[cache_key] = result
     return result, None
@@ -3036,16 +2958,13 @@ def _quote_sql_identifier(engine, value):
     return '"' + value.replace('"', '""') + '"'
 
 
-def _database_error_details(error, name):
-    message = str(error)
-    lowered = message.casefold()
-    if "permission" in lowered or "not authorized" in lowered:
-        reason = "DATABASE_PERMISSION_DENIED"
-    elif "timeout" in lowered or "timed out" in lowered:
-        reason = "DATABASE_TIMEOUT"
-    else:
-        reason = "DATABASE_LOOKUP_FAILED"
-    return reason, f"{name.capitalize()} could not be executed"
+def _database_error_description(error, name):
+    message = str(error).casefold()
+    if "permission" in message or "not authorized" in message:
+        return f"{name} could not run because database access was denied"
+    if "timeout" in message or "timed out" in message:
+        return f"{name} timed out"
+    return f"{name} could not run because of a database error"
 
 
 def _is_null_value(value):
@@ -3140,7 +3059,6 @@ def _database_value_type_check(
                 errors.append(
                     ValidationEvent(
                         rule_code="database_lookup",
-                        reason="LOOKUP_VALUE_NULL",
                         severity=severity,
                         sheet_name=entry["sheet_name"],
                         row_number=entry["header_row"] + 1 + int(row_index),
@@ -3364,7 +3282,6 @@ def _database_conflicting_duplicates(
                 errors.append(
                     ValidationEvent(
                         rule_code="database_lookup",
-                        reason="LOOKUP_VALUE_NULL",
                         severity=severity,
                         sheet_name=entry["sheet_name"],
                         row_number=entry["header_row"] + 1 + int(row_index),

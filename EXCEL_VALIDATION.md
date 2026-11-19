@@ -406,18 +406,18 @@ The database-check contract is:
 
 | Situation | Result |
 | --- | --- |
-| No engine is supplied | The database check is `NOT_RUN` with reason `DATABASE_ENGINE_REQUIRED`. |
-| Excel table did not resolve or load | The database check is `NOT_RUN` with reason `PANDAS_LOAD_FAILED`. |
-| Lookup table or schema is absent | The database check is `NOT_RUN` with reason `LOOKUP_TABLE_MISSING`; `complete=False`. |
-| Database user lacks `SELECT` permission | The database check is `NOT_RUN` with reason `DATABASE_PERMISSION_DENIED`; `complete=False`. |
-| Lookup query times out | The database check is `NOT_RUN` with reason `DATABASE_TIMEOUT`; `complete=False`. |
-| Lookup query fails for another reason | The database check is `NOT_RUN` with reason `DATABASE_LOOKUP_FAILED`; `complete=False`. |
-| A configured lookup column is absent from the database table | The database check is `NOT_RUN` with reason `LOOKUP_COLUMN_MISSING`; `complete=False`. |
+| No engine is supplied | The database check is `NOT_RUN` and explains that a SQLAlchemy engine is required. |
+| Excel table did not resolve or load | The database check is `NOT_RUN` and identifies the source table it could not load. |
+| Lookup table or schema is absent | The database check is `NOT_RUN` and reports the missing table or schema. The run is incomplete. |
+| Database user lacks `SELECT` permission | The database check is `NOT_RUN` and reports that database access was denied. The run is incomplete. |
+| Lookup query times out | The database check is `NOT_RUN` and reports the timeout. The run is incomplete. |
+| Lookup query fails for another cause | The database check is `NOT_RUN` and reports a database error. The run is incomplete. |
+| A configured lookup column is absent from the database table | The database check is `NOT_RUN` and identifies the missing columns. The run is incomplete. |
 | A source key has no lookup row | A validation error identifies the Excel row and key. |
 | Lookup keys are duplicated | A validation error reports the ambiguous lookup; no row is selected. |
 | Source key is null-like | The database check skips that row; Excel null checks remain responsible for reporting it. |
 | Lookup returns a null canonical or expected value | A validation error reports the incomplete lookup data. |
-| Lookup values cannot be converted to the configured type | The database check is `NOT_RUN` with reason `LOOKUP_TYPE_CONVERSION_FAILED`; `complete=False`. |
+| Lookup values cannot be converted to the configured type | The database check is `NOT_RUN` and reports the conversion failure. The run is incomplete. |
 | Lookup succeeds but returns no rows | Source rows requiring a lookup produce `database_missing_lookup`; an empty source table remains valid for this check. |
 
 Additional rules keep the boundary predictable:
@@ -521,28 +521,23 @@ The following decisions apply:
 - Duplicate lookup rows with identical selected values are collapsed. Rows
   with conflicting selected values produce an error and are not used.
 - Missing lookup key or value columns are schema/configuration failures. They
-  produce `database_lookup` with reason `LOOKUP_COLUMN_MISSING`; they do not
-  produce misleading row-level duplicate or missing-key findings.
-- A missing lookup table or schema produces `database_lookup` with reason
-  `LOOKUP_TABLE_MISSING`. Permission failures use
-  `DATABASE_PERMISSION_DENIED`; timeouts use `DATABASE_TIMEOUT`.
+  identify the missing columns in the description.
+- Lookup failure descriptions distinguish a missing table or schema, denied
+  access, and a timeout.
 - A lookup row with a null canonical key or required expected value produces a
-  row-level `database_lookup` finding with reason `LOOKUP_VALUE_NULL` and is
-  excluded from dependent checks.
-- Lookup type-conversion failures use
-  `LOOKUP_TYPE_CONVERSION_FAILED`; the validator never silently coerces an
-  invalid database value.
+  row-level `database_lookup` finding whose description identifies the null
+  lookup value. Dependent checks exclude that row.
+- Lookup failure descriptions can identify a type conversion failure for
+  an invalid database value.
 - Text-key lookups use the configured SQL Server collation when one is
   supplied. If the database collation cannot provide the requested case or
-  accent behavior, the lookup is `NOT_RUN` with reason
-  `DATABASE_COLLATION_INCOMPATIBLE`; it is never silently treated as an exact
-  comparison.
+  accent behavior, the lookup is `NOT_RUN` and the description explains
+  the incompatible collation.
 - A single read-only transaction is used for all batches of one lookup when
   the SQLAlchemy dialect supports it. DataPrepKit never commits or rolls back
   a transaction it did not create.
 - Each lookup has a default `timeout_seconds: 30`; timeout and cancellation
-  are reported as `DATABASE_LOOKUP_FAILED` and do not leave a background query
-  running.
+  have their own failure descriptions.
 - Caches are local to one `validate_excel` call and are not shared between
   threads or processes. Concurrent validations therefore cannot observe or
   mutate each other's lookup state.
@@ -587,16 +582,15 @@ The first implementation uses these decisions to keep the feature predictable:
   `SELECT`-only SQL, not from a database-specific read-only transaction flag.
 - A driver timeout of 30 seconds applies to each lookup batch. SQL Server
   `pyodbc` is the supported production path; unsupported drivers produce
-  `DATABASE_LOOKUP_FAILED` rather than pretending the timeout was enforced.
+  a lookup failure description.
 - Text key lookups use the lookup's optional `collation_name`, which is the
   actual SQL Server collation name. The identifier is validated against a safe
   identifier pattern and applied to both sides of the key comparison. The
   general `comparison.collation_name` remains a policy label. A missing or
-  incompatible database collation for a text key produces
-  `DATABASE_COLLATION_INCOMPATIBLE`.
-- Connection and permission errors use `database_lookup` with reason
-  `DATABASE_LOOKUP_FAILED`. They set `complete=False` and do not expose raw
-  credentials or provider-specific connection details in the result.
+  incompatible database collation for a text key is explained in the result
+  description.
+- Connection and permission errors produce a `database_lookup` event and
+  set `complete=False`. The result uses a sanitised description.
 - Numeric validation accepts integers, finite decimals, finite floats, and
   trimmed numeric strings. Booleans, empty strings, dates, `NaN`, and infinity
   are not numeric. Text validation accepts strings only; numbers are not
@@ -615,15 +609,14 @@ The first implementation uses these decisions to keep the feature predictable:
   automatically; callers can rerun the complete validation explicitly.
 - SQL Server uses `SNAPSHOT` isolation by default so all lookup batches see one
   consistent dimension view. If snapshot isolation is unavailable, the check
-  is `NOT_RUN` with reason `DATABASE_ISOLATION_UNAVAILABLE`.
+  is `NOT_RUN` and the description explains that isolation is unavailable.
   `read_committed` is an explicit opt-in when snapshot isolation cannot be
   enabled.
-- Driver exceptions are mapped to stable reasons without persisting provider
-  messages or credentials: missing objects, permission denied, timeout,
-  conversion failure, isolation unavailable, and generic lookup failure.
+- Driver exceptions produce sanitised descriptions for missing objects,
+  denied access, timeouts, and other lookup failures.
 - Lookup results are bounded by both `max_distinct_keys` and a cache-row limit
-  of `250000`. Exceeding either limit produces `DATABASE_LOOKUP_LIMIT` and
-  `complete=False`.
+  of `250000`. When a limit is exceeded, the description explains the limit
+  and the run is incomplete.
 - Identifier names are limited to configured schema/table/column identifiers
   and validated before SQL generation. Lookup values are always bound
   parameters. Arbitrary SQL is not supported.
@@ -940,17 +933,9 @@ Formula checks inspect the workbook directly. They do not calculate formulas.
 | `formula_error` | No | Finds cached Excel error values matching `error_tokens`. |
 
 `formula_difference` reports a finding whenever the formula state or formula
-text differs between candidate and reference. The `reason` identifies the
-transition:
-
-- `FORMULA_ADDED`: the reference contains a value and the candidate contains a formula;
-- `FORMULA_REMOVED`: the reference contains a formula and the candidate contains a value;
-- `FORMULA_CHANGED`: both contain formulas, but their formula text differs.
-
-For example, a candidate changing `=SUM(A1)` to `=SUM(A2)` produces
-`FORMULA_CHANGED`. A formula replaced with a typed value produces
-`FORMULA_REMOVED`; a typed value replaced with a formula produces
-`FORMULA_ADDED`.
+text differs between candidate and reference. The description identifies the
+transition as **Formula added**, **Formula removed**, or **Formula changed**.
+For example, changing `=SUM(A1)` to `=SUM(A2)` produces **Formula changed**.
 
 Use `unexpected_formula` when a standalone workbook must reject formulas in
 input cells. The fill colour is configured as an RGB or ARGB hexadecimal
@@ -1034,8 +1019,8 @@ column_validations:
 ```
 
 If the Excel structure or table load fails, the configured data checks are not
-executed and receive `NOT_RUN` results with the structural or load failure as
-their reason.
+executed and receive `NOT_RUN` results that describe the structural or load
+failure.
 
 Regex pattern checks operate on non-null values converted to text. Strings are
 matched after comparison-policy normalization; numbers and dates use their
@@ -1120,8 +1105,8 @@ workbook_checks:
 and table validations can override it.
 
 `formula_difference` reports formula changes between candidate and reference
-workbooks with these reasons: `FORMULA_ADDED`, `FORMULA_REMOVED`, and
-`FORMULA_CHANGED`. To reject formulas in coloured input cells without needing
+workbooks and describes whether the formula was added, removed, or changed.
+To reject formulas in coloured input cells without needing
 a reference workbook, use `unexpected_formula`:
 
 ```yaml
@@ -1197,7 +1182,7 @@ The validator receives a `RuleContext` containing:
 A validator may return `None`, one `ValidationEvent`, or a list of events.
 Use `severity="warning"` for non-blocking findings; failed events are errors
 by default. Use `status="NOT_RUN"` when the custom rule cannot be evaluated and
-include a useful `reason`. Custom registration is intentionally not serialized
+explain why in `description`. Custom registration is intentionally not serialized
 into YAML/JSON profiles, so every process must register the rule before loading
 or running a configuration that uses it.
 
@@ -1206,7 +1191,8 @@ or running a configuration that uses it.
 `ValidationResult` is a stable, JSON-compatible record. It includes the result
 events plus audit metadata such as configuration version, profile name,
 candidate filename and version, reference version, comparison policy, and
-completion status:
+completion status. When loading results saved by earlier versions, remove
+`reason` from each saved validation event first.
 
 ```python
 from pathlib import Path

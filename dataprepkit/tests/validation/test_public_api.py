@@ -30,6 +30,7 @@ from dataprepkit.validation import (
     DatabaseCheck,
     DatabaseDimension,
     DatabaseLookup,
+    DiagnosticEvent,
     LookupColumnValidation,
     RuntimePolicy,
     WorkbookFeaturePolicy,
@@ -261,8 +262,11 @@ def test_database_check_requires_engine_and_marks_result_incomplete(tmp_path):
     result = validate_excel(candidate_path, config)
 
     assert result.complete is False
-    assert [(event.rule_code, event.reason) for event in result.not_run] == [
-        ("measure_value_type", "DATABASE_ENGINE_REQUIRED")
+    assert [(event.rule_code, event.description) for event in result.not_run] == [
+        (
+            "measure_value_type",
+            "Database check 'measure_value_type' requires a SQLAlchemy engine",
+        )
     ]
 
 
@@ -748,9 +752,9 @@ def test_database_check_respects_enabled_rules(tmp_path):
     assert result.complete is True
     assert (
         "measure_value_type",
-        "RULE_DISABLED",
+        "Database check is disabled by configuration",
     ) in [
-        (event.rule_code, event.reason) for event in result.not_run
+        (event.rule_code, event.description) for event in result.not_run
     ]
 
 
@@ -795,11 +799,10 @@ def test_database_check_dependency_is_not_run_after_failed_prerequisite(tmp_path
     assert [event.rule_code for event in result.errors] == [
         "measure_value_type"
     ]
-    assert (
-        result.not_run[0].rule_code,
-        result.not_run[0].reason,
-    ) == ("measure_value_type", "DEPENDENCY_NOT_RUN")
-    assert "dependent_check" in result.not_run[0].description
+    assert result.not_run[0].rule_code == "measure_value_type"
+    assert result.not_run[0].description == (
+        "Database check 'dependent_check' depends on a check that did not pass"
+    )
 
 
 def test_database_check_dependency_runs_after_passing_prerequisite(tmp_path):
@@ -1060,7 +1063,7 @@ def test_database_check_reports_source_key_missing_from_lookup(tmp_path):
     assert [event.rule_code for event in result.errors] == [
         "database_missing_lookup"
     ]
-    assert result.errors[0].reason == "LOOKUP_ROW_MISSING"
+    assert "was not found in lookup" in result.errors[0].description
     assert result.errors[0].cell_reference == "A2"
 
 
@@ -1128,9 +1131,8 @@ def test_database_check_does_not_accept_conflicting_lookup_rows(tmp_path):
     result = validate_excel(candidate_path, config, engine=engine)
 
     assert result.complete is False
-    assert [event.reason for event in result.not_run] == [
-        "DATABASE_DUPLICATE_LOOKUP"
-    ]
+    assert len(result.not_run) == 1
+    assert result.not_run[0].description.endswith("returned conflicting rows")
 
 
 def test_database_lookup_filters_scd2_rows_before_duplicate_detection(tmp_path):
@@ -1300,19 +1302,19 @@ def test_database_value_type_reports_null_dimension_keys(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("setup_sql", "expected_reason"),
+    ("setup_sql", "expected_description"),
     [
-        (None, "LOOKUP_TABLE_MISSING"),
+        (None, "Lookup 'measure_dimension' could not find its database table or schema"),
         (
             "CREATE TABLE dim_measure (Measure_Cd TEXT)",
-            "LOOKUP_COLUMN_MISSING",
+            "Lookup 'measure_dimension' is missing columns: ['Expected_Value_Type']",
         ),
     ],
 )
 def test_database_check_reports_lookup_structure_errors(
     tmp_path,
     setup_sql,
-    expected_reason,
+    expected_description,
 ):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()
@@ -1333,7 +1335,40 @@ def test_database_check_reports_lookup_structure_errors(
     )
 
     assert result.complete is False
-    assert [event.reason for event in result.not_run] == [expected_reason]
+    assert [event.description for event in result.not_run] == [expected_description]
+
+
+@pytest.mark.parametrize(
+    ("driver_message", "expected_description"),
+    [
+        (
+            "Permission denied: provider details",
+            "Database checks could not run because database access was denied",
+        ),
+        ("Connection timed out: provider details", "Database checks timed out"),
+    ],
+)
+def test_database_connection_reports_safe_failure_description(
+    tmp_path, monkeypatch, driver_message, expected_description
+):
+    candidate_path = tmp_path / "candidate.xlsx"
+    write_workbook(candidate_path, "Data")
+    engine = create_engine("sqlite:///:memory:")
+
+    def fail_to_connect():
+        raise RuntimeError(driver_message)
+
+    monkeypatch.setattr(engine, "connect", fail_to_connect)
+    result = validate_excel(
+        candidate_path, make_database_type_config(), engine=engine
+    )
+
+    assert result.complete is False
+    assert [
+        (event.status, event.description)
+        for event in result.not_run
+        if event.rule_code == "database_lookup"
+    ] == [("NOT_RUN", expected_description)]
 
 
 def test_public_rule_catalogue_lists_all_builtin_checks():
@@ -1490,6 +1525,7 @@ def test_validation_result_to_dataframe_includes_events_and_metadata():
         run_id="run-1",
         config_version="1",
         candidate_filename="candidate.xlsx",
+        diagnostics=[DiagnosticEvent(code="feature_detected", description="Detected")],
         errors=[
             ValidationEvent(
                 rule_code="required_cell",
@@ -1502,20 +1538,20 @@ def test_validation_result_to_dataframe_includes_events_and_metadata():
 
     frame = validation_result_to_dataframe(result)
 
-    assert list(frame["event_type"]) == ["error"]
+    assert list(frame["event_type"]) == ["error", "diagnostic"]
     assert frame.loc[0, "run_id"] == "run-1"
-    assert frame.loc[0, "check"] == "required_cell"
+    assert frame["check"].tolist() == ["REQUIRED_CELL", "FEATURE_DETECTED"]
     assert frame.loc[0, "description"] == "Value is required"
-    assert {"rule_code", "code", "complete"}.isdisjoint(frame.columns)
+    assert {"rule_code", "code", "complete", "reason"}.isdisjoint(frame.columns)
     assert frame.loc[0, "sheet_name"] == "Data"
     assert frame.loc[0, "reference_filename"] is None
     assert frame.loc[0, "is_valid"] == False  # noqa: E712
 
 
-def test_validation_event_assigns_a_default_reason():
+def test_validation_event_omits_reason():
     event = ValidationEvent(rule_code="required_sheet")
 
-    assert event.reason == "REQUIRED_SHEET_MISSING"
+    assert "reason" not in event.model_dump()
 
 
 def test_validation_result_summary_status_reflects_rule_outcome():
@@ -1528,11 +1564,8 @@ def test_validation_result_summary_status_reflects_rule_outcome():
     summary = frame[frame["event_type"] == "summary"]
     statuses = summary.set_index("check")["status"]
 
-    assert statuses["passed_rule"] == "PASSED"
-    assert statuses["failed_rule"] == "FAILED"
-    reasons = summary.set_index("check")["reason"]
-    assert reasons["failed_rule"] == "FAILED_RULE_EVENT"
-    assert reasons["passed_rule"] == "PASSED_RULE_EVENT"
+    assert statuses["PASSED_RULE"] == "PASSED"
+    assert statuses["FAILED_RULE"] == "FAILED"
 
 
 def test_validate_excel_populates_audit_metadata(tmp_path):
@@ -1982,7 +2015,7 @@ def test_validate_excel_reports_expected_cell_excluded_by_enabled_rules(tmp_path
     assert result.is_valid is True
     assert len(result.not_run) == 1
     assert result.not_run[0].rule_code == "expected_cell"
-    assert result.not_run[0].reason == "RULE_DISABLED"
+    assert "disabled by configuration" in result.not_run[0].description
 
 
 def test_validate_excel_reports_column_rules_excluded_by_enabled_rules(tmp_path):
@@ -2032,7 +2065,7 @@ def test_validate_excel_reports_column_rules_excluded_by_enabled_rules(tmp_path)
         "duplicate_value",
         "allowed_values",
     }
-    assert all(event.reason == "RULE_DISABLED" for event in result.not_run)
+    assert all("disabled by configuration" in event.description for event in result.not_run)
 
 
 def test_validate_excel_reports_table_rules_excluded_by_enabled_rules(tmp_path):
@@ -2078,7 +2111,7 @@ def test_validate_excel_reports_table_rules_excluded_by_enabled_rules(tmp_path):
     assert {
         event.rule_code for event in result.not_run
     } == {"column_header", "non_empty_data", "empty_row_pattern"}
-    assert all(event.reason == "RULE_DISABLED" for event in result.not_run)
+    assert all("disabled by configuration" in event.description for event in result.not_run)
 
 
 def test_validate_excel_standalone_reports_missing_required_sheet(tmp_path):
@@ -2278,7 +2311,7 @@ def test_validate_excel_reports_disabled_workbook_check(tmp_path):
     assert result.errors == []
     assert len(result.not_run) == 1
     assert result.not_run[0].rule_code == "formula_error"
-    assert result.not_run[0].reason == "RULE_DISABLED"
+    assert "disabled by configuration" in result.not_run[0].description
 
 
 def test_validate_excel_reports_rule_excluded_by_enabled_rules(tmp_path):
@@ -2300,7 +2333,7 @@ def test_validate_excel_reports_rule_excluded_by_enabled_rules(tmp_path):
     assert result.is_valid is True
     assert len(result.not_run) == 1
     assert result.not_run[0].rule_code == "formula_error"
-    assert result.not_run[0].reason == "RULE_DISABLED"
+    assert "disabled by configuration" in result.not_run[0].description
 
 
 def test_validate_excel_reports_configured_formula_errors(tmp_path):
@@ -2332,7 +2365,7 @@ def test_validate_excel_reports_configured_formula_errors(tmp_path):
     assert result.errors[0].column_number == 1
     assert result.errors[0].actual_value == "#DIV/0!"
     assert result.errors[0].expected_value is None
-    assert result.errors[0].reason == "FORMULA_ERROR_VALUE"
+    assert result.errors[0].description == "Excel error value found: #DIV/0!"
     assert result.errors[0].severity == "error"
 
 
@@ -2539,7 +2572,7 @@ def test_formula_error_is_not_run_when_formula_cache_is_missing(tmp_path):
     assert result.is_valid is True
     assert len(result.not_run) == 1
     assert result.not_run[0].rule_code == "formula_error"
-    assert result.not_run[0].reason == "FORMULA_RESULTS_UNAVAILABLE"
+    assert "workbook has no cached value" in result.not_run[0].description
     assert result.not_run[0].cell_reference == "A1"
     assert result.not_run[0].row_number == 1
 
@@ -2616,7 +2649,7 @@ def test_formula_error_fails_when_formula_cache_is_missing_and_policy_is_error(
     assert result.is_valid is False
     assert len(result.errors) == 1
     assert result.errors[0].rule_code == "formula_error"
-    assert result.errors[0].reason == "FORMULA_RESULTS_UNAVAILABLE"
+    assert "workbook has no cached value" in result.errors[0].description
     assert result.errors[0].cell_reference == "A1"
 
 
@@ -2687,21 +2720,21 @@ def test_validate_excel_reports_formula_differences(tmp_path):
     assert result.errors[0].cell_reference == "B1"
     assert result.errors[0].actual_value == "=SUM(A1)"
     assert result.errors[0].expected_value == "=SUM(A2)"
-    assert result.errors[0].reason == "FORMULA_CHANGED"
+    assert result.errors[0].description == "Formula changed"
 
 
 @pytest.mark.parametrize(
-    ("reference_value", "candidate_value", "reason"),
+    ("reference_value", "candidate_value", "description"),
     [
-        ("literal", "=SUM(A1)", "FORMULA_ADDED"),
-        ("=SUM(A1)", "literal", "FORMULA_REMOVED"),
+        ("literal", "=SUM(A1)", "Formula added"),
+        ("=SUM(A1)", "literal", "Formula removed"),
     ],
 )
 def test_formula_difference_classifies_formula_transitions(
     tmp_path,
     reference_value,
     candidate_value,
-    reason,
+    description,
 ):
     candidate_path = tmp_path / "candidate.xlsx"
     reference_path = tmp_path / "reference.xlsx"
@@ -2725,7 +2758,7 @@ def test_formula_difference_classifies_formula_transitions(
     )
     result = validate_excel(candidate_path, config, reference_path)
 
-    assert result.errors[0].reason == reason
+    assert result.errors[0].description == description
 
 
 def test_unexpected_formula_reports_formula_in_filled_input_cell(tmp_path):
@@ -2784,7 +2817,7 @@ def test_reference_formula_check_is_not_run_without_reference_workbook(tmp_path)
 
     assert result.is_valid is True
     assert len(result.not_run) == 1
-    assert result.not_run[0].reason == "REFERENCE_WORKBOOK_REQUIRED"
+    assert result.not_run[0].description == "Reference workbook is required for this check"
 
 
 def test_validate_excel_accepts_identical_array_formulas(tmp_path):
@@ -3044,6 +3077,20 @@ def test_validate_excel_reports_missing_required_table(tmp_path):
     assert result.errors[0].description == (
         "Required table 'outputs' did not resolve"
     )
+
+    disabled_config = config.model_copy(update={"enabled_rules": []})
+    disabled_result = validate_excel(
+        candidate_path=candidate_path,
+        config=disabled_config,
+    )
+    frame = validation_result_to_dataframe(disabled_result)
+    skipped = frame.loc[
+        (frame["check"] == "TABLE_RESOLUTION")
+        & (frame["event_type"] == "not_run")
+    ]
+    assert skipped["description"].tolist() == [
+        "Table resolution for 'outputs' is disabled by configuration"
+    ]
 
 
 def test_validate_excel_does_not_validate_tables_on_ignored_sheets(tmp_path):
@@ -3506,7 +3553,7 @@ def test_column_rules_are_not_run_when_headers_cannot_resolve(tmp_path):
     assert [event.rule_code for event in result.errors] == ["column_header"]
     assert len(result.not_run) == 1
     assert result.not_run[0].rule_code == "allowed_values"
-    assert result.not_run[0].reason == "MISSING_COLUMN"
+    assert "the column was not found" in result.not_run[0].description
 
 
 def test_validate_excel_reports_required_and_duplicate_column_values(tmp_path):
@@ -3644,7 +3691,9 @@ def test_dependent_formula_check_is_not_run_when_structure_fails(tmp_path):
     assert [event.rule_code for event in result.errors] == ["sheet_structure"]
     assert len(result.not_run) == 1
     assert result.not_run[0].rule_code == "formula_difference"
-    assert result.not_run[0].reason == "DEPENDENCY_FAILED"
+    assert result.not_run[0].description == (
+        "Formula comparison skipped because the sheet structure differs from the reference"
+    )
     assert result.not_run[0].expected_value == ["sheet_structure"]
 
 
@@ -3694,9 +3743,12 @@ def test_dependent_formula_check_only_skips_sheets_with_structure_failures(
         ("formula_difference", "Other"),
     ]
     assert [
-        (event.rule_code, event.sheet_name, event.reason)
+        (event.rule_code, event.sheet_name)
         for event in result.not_run
-    ] == [("formula_difference", "Data", "DEPENDENCY_FAILED")]
+    ] == [("formula_difference", "Data")]
+    assert result.not_run[0].description == (
+        "Formula comparison skipped because the sheet structure differs from the reference"
+    )
 
 
 def test_rule_dependencies_reject_cycles():
@@ -4045,7 +4097,7 @@ def test_validate_excel_runs_cross_table_values_check(tmp_path):
     summaries = validation_result_to_dataframe(result)
     summary = summaries[
         (summaries["event_type"] == "summary")
-        & (summaries["check"] == "values_in_reference")
+        & (summaries["check"] == "VALUES_IN_REFERENCE")
     ].iloc[0]
     assert summary["processed_count"] == 1
     assert summary["issue_count"] == 1
@@ -4213,7 +4265,7 @@ def test_disabled_cross_table_check_is_not_run(tmp_path):
 
     assert result.errors == []
     assert result.not_run[-1].rule_code == "values_in_reference"
-    assert result.not_run[-1].reason == "RULE_DISABLED"
+    assert result.not_run[-1].description.endswith("is disabled")
 
 
 def test_reference_structure_check_is_not_run_without_reference_workbook(tmp_path):
@@ -4233,7 +4285,7 @@ def test_reference_structure_check_is_not_run_without_reference_workbook(tmp_pat
 
     assert result.is_valid is True
     assert len(result.not_run) == 1
-    assert result.not_run[0].reason == "REFERENCE_WORKBOOK_REQUIRED"
+    assert result.not_run[0].description == "Reference workbook is required for this check"
 
 
 def test_reference_rule_is_not_run_without_reference_workbook(tmp_path):
@@ -4253,7 +4305,7 @@ def test_reference_rule_is_not_run_without_reference_workbook(tmp_path):
 
     assert result.is_valid is True
     assert len(result.not_run) == 1
-    assert result.not_run[0].reason == "REFERENCE_WORKBOOK_REQUIRED"
+    assert result.not_run[0].description == "Reference workbook is required for this check"
 
 
 def test_validate_excel_reports_non_blank_configured_empty_row(tmp_path):
@@ -5132,7 +5184,7 @@ def test_data_presence_is_not_run_when_boundary_column_cannot_resolve(tmp_path):
     assert [event.rule_code for event in result.errors] == ["column_header"]
     assert len(result.not_run) == 1
     assert result.not_run[0].rule_code == "non_empty_data"
-    assert result.not_run[0].reason == "DATA_BOUNDARY_RESOLUTION_FAILED"
+    assert "data boundary could not be resolved" in result.not_run[0].description
 
 
 def test_validate_excel_stops_when_cell_scan_limit_is_exceeded(tmp_path):
@@ -5248,7 +5300,6 @@ def test_feature_policy_reports_merged_cells(tmp_path):
     assert result.is_valid is False
     assert [event.rule_code for event in result.errors] == ["merged_cells"]
     assert result.errors[0].description == "Merged cell range detected: A1:B1"
-    assert result.errors[0].reason == "MERGED_CELLS_DETECTED"
     assert result.errors[0].sheet_name == "Data"
     assert result.errors[0].cell_reference == "A1:B1"
 
@@ -5333,7 +5384,7 @@ def test_feature_policy_warning_does_not_invalidate_result(tmp_path):
 
     assert result.is_valid is True
     assert [event.rule_code for event in result.warnings] == ["merged_cells"]
-    assert result.warnings[0].reason == "MERGED_CELLS_DETECTED"
+    assert result.warnings[0].description == "Merged cell range detected: A1:B1"
     assert result.warnings[0].sheet_name == "Data"
     assert result.warnings[0].cell_reference == "A1:B1"
     assert result.diagnostics == []
@@ -5468,10 +5519,6 @@ def test_feature_policy_reports_unavailable_detection(
         "charts_detection_unavailable",
     ]
     assert "feature reader unavailable" in getattr(result, bucket)[0].description
-    assert (
-        getattr(result, bucket)[0].reason
-        == "CHARTS_DETECTION_UNAVAILABLE"
-    )
 
 
 def test_feature_policy_ignores_unavailable_detection_with_diagnostic(
