@@ -2944,8 +2944,10 @@ def _database_lookup_rows(
             or "no such table" in lowered
             or "invalid object name" in lowered
         ):
+            target = ".".join(filter(None, (lookup.schema_name, lookup.table)))
             return {}, (
-                f"Lookup '{lookup.name}' could not find its database table or schema"
+                f"Lookup '{lookup.name}' could not find '{target}' in the connected "
+                "database. Check the lookup's schema and table in the validation profile."
             )
         return {}, _database_error_description(error, f"Lookup '{lookup.name}'")
     result = {}

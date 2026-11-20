@@ -525,7 +525,8 @@ The following decisions apply:
 - Missing lookup key or value columns are schema/configuration failures. They
   identify the missing columns in the description.
 - Lookup failure descriptions distinguish a missing table or schema, denied
-  access, and a timeout.
+  access, and a timeout. A missing target names the configured table and its
+  schema when supplied, so you can check the lookup entry in the validation profile.
 - A lookup row with a null canonical key or required expected value produces a
   row-level `database_lookup` finding whose description identifies the null
   lookup value. Dependent checks exclude that row.
