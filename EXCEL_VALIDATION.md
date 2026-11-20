@@ -658,12 +658,14 @@ make the result incomplete when no engine is supplied.
 #### Workbook feature policies
 
 Feature policy covers macros, external workbook links, charts, pivot tables,
-defined names, and merged cells.
+defined names, and merged cells. A detected feature uses the same exported
+`check` regardless of how it was reported. Use `event_type` to distinguish an
+error, warning, or diagnostic.
 
 | Outcome | Configure it with | Exported `check` example |
 | --- | --- | --- |
 | Detected feature reported as an error or warning | `runtime.feature_policy.<feature_name>` | `MERGED_CELLS` |
-| Detected feature recorded as a diagnostic with `ignore` | `runtime.feature_policy.<feature_name>` | `MERGED_CELLS_DETECTED` |
+| Detected feature recorded as a diagnostic with `ignore` | `runtime.feature_policy.<feature_name>` | `MERGED_CELLS` |
 | Feature could not be inspected | `runtime.feature_policy.unavailable_action` | `MERGED_CELLS_DETECTION_UNAVAILABLE` |
 
 ```yaml
@@ -1242,7 +1244,7 @@ available.
 | `event_type` | `error`, `warning`, `not_run`, `diagnostic`, `summary` | The full set of row types. |
 | `processed_count` | `0`, `1`, `150`, empty | Recorded work for the check. The unit depends on the check, and the count can repeat on detail rows. |
 | `issue_count` | `0`, `1`, `12`, empty | Errors plus warnings for the check. Populated on summary rows. |
-| `check` | `REQUIRED_SHEET`, `FORMULA_DIFFERENCE`, `MERGED_CELLS_DETECTED` | Uppercase rule or diagnostic identifier. See the [exported check catalogue](#exported-check-catalogue). |
+| `check` | `REQUIRED_SHEET`, `FORMULA_DIFFERENCE`, `MERGED_CELLS` | Uppercase rule or diagnostic identifier. See the [exported check catalogue](#exported-check-catalogue). |
 | `status` | Summary: `PASSED`, `PASSED_WITH_WARNINGS`, `FAILED`, `INCOMPLETE`, `NOT_RUN`, `RECORDED`. Built-in findings: `FAILED`, `NOT_RUN`, empty. | Row outcome. A warning can carry `FAILED` on its detail row. Diagnostic findings leave the field empty. Custom validators can supply other detail statuses. |
 | `sheet_name` | `Data`, empty | Worksheet associated with a finding. |
 | `cell_reference` | `B12`, `A1:B3`, empty | Excel cell or range within the sheet. |
@@ -1300,7 +1302,7 @@ summary.
 
 ### Exported check catalogue
 
-The 48 built-in identifiers below are the uppercase values used in the
+The 42 built-in identifiers below are the uppercase values used in the
 DataFrame. The area labels are for this guide. Configuration and custom
 validators can add identifiers. For example, the database rule code
 `measure_value_type` appears as `MEASURE_VALUE_TYPE` in the export.
@@ -1338,18 +1340,12 @@ validators can add identifiers. For example, the database rule code
 | Table and database checks | `DIMENSION_VALUE` | Checks a source value against a configured database dimension. |
 | Table and database checks | `MISSING_IDENTITY_VALUE` | Finds rows missing a key value needed to check for conflicting duplicates. |
 | Table and database checks | `VALUES_IN_REFERENCE` | Checks whether source values exist in a configured reference table. |
-| Workbook feature checks | `CHARTS` | Reports detected charts as an error or warning. |
-| Workbook feature checks | `EXTERNAL_LINKS` | Reports detected external workbook links as an error or warning. |
-| Workbook feature checks | `MACROS` | Reports a macro-enabled `.xlsm` workbook as an error or warning. |
-| Workbook feature checks | `MERGED_CELLS` | Reports merged cell ranges as an error or warning. |
-| Workbook feature checks | `NAMED_RANGES` | Reports detected Excel defined names as an error or warning. |
-| Workbook feature checks | `PIVOT_TABLES` | Reports detected pivot tables as an error or warning. |
-| Workbook feature diagnostics | `CHARTS_DETECTED` | Records detected charts as a diagnostic. |
-| Workbook feature diagnostics | `EXTERNAL_LINKS_DETECTED` | Records detected external workbook links as a diagnostic. |
-| Workbook feature diagnostics | `MACROS_DETECTED` | Records a macro-enabled `.xlsm` workbook as a diagnostic. |
-| Workbook feature diagnostics | `MERGED_CELLS_DETECTED` | Records merged cell ranges as a diagnostic. |
-| Workbook feature diagnostics | `NAMED_RANGES_DETECTED` | Records detected Excel defined names as a diagnostic. |
-| Workbook feature diagnostics | `PIVOT_TABLES_DETECTED` | Records detected pivot tables as a diagnostic. |
+| Workbook features | `CHARTS` | Reports detected charts. |
+| Workbook features | `EXTERNAL_LINKS` | Reports detected external workbook links. |
+| Workbook features | `MACROS` | Reports a macro-enabled `.xlsm` workbook. |
+| Workbook features | `MERGED_CELLS` | Reports merged cell ranges. |
+| Workbook features | `NAMED_RANGES` | Reports detected Excel defined names. |
+| Workbook features | `PIVOT_TABLES` | Reports detected pivot tables. |
 | Workbook feature detection unavailable | `CHARTS_DETECTION_UNAVAILABLE` | The validator could not inspect the workbook for charts. |
 | Workbook feature detection unavailable | `EXTERNAL_LINKS_DETECTION_UNAVAILABLE` | The validator could not inspect the workbook for external links. |
 | Workbook feature detection unavailable | `MERGED_CELLS_DETECTION_UNAVAILABLE` | The validator could not inspect the workbook for merged cells. |

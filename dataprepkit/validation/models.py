@@ -119,6 +119,11 @@ class MergedCellsPolicy(_PublicModel):
         return value
 
 
+_WORKBOOK_FEATURE_NAMES = (
+    "external_links", "charts", "pivot_tables", "named_ranges", "merged_cells", "macros",
+)
+
+
 class WorkbookFeaturePolicy(_PublicModel):
     unavailable_action: str = "warning"
     external_links: str = "ignore"
@@ -134,14 +139,7 @@ class WorkbookFeaturePolicy(_PublicModel):
             raise ValueError(
                 "unavailable_action must be ignore, warning, or error"
             )
-        for name in (
-            "external_links",
-            "charts",
-            "pivot_tables",
-            "named_ranges",
-            "merged_cells",
-            "macros",
-        ):
+        for name in _WORKBOOK_FEATURE_NAMES:
             value = getattr(self, name)
             if name == "merged_cells":
                 continue
@@ -1045,6 +1043,12 @@ VALIDATION_RESULT_DATAFRAME_COLUMNS = [
 ]
 
 
+def _diagnostic_check_name(code: str) -> str:
+    check = code.upper()
+    feature = check.removesuffix("_DETECTED")
+    return feature if feature.lower() in _WORKBOOK_FEATURE_NAMES else check
+
+
 def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
     """Export events and diagnostics with uppercase check identifiers."""
     metadata = {
@@ -1096,17 +1100,22 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                 "event_type": "diagnostic",
                 "processed_count": result.processed_counts.get(f"code:{diagnostic.code}"),
                 "issue_count": None,
-                "check": diagnostic.code.upper(),
+                "check": _diagnostic_check_name(diagnostic.code),
                 "description": diagnostic.description,
                 "metadata": None,
             }
         )
     for key, processed_count in result.processed_counts.items():
-        check = key.removeprefix("code:").upper()
+        is_diagnostic = key.startswith("code:")
+        check = (
+            _diagnostic_check_name(key.removeprefix("code:"))
+            if is_diagnostic
+            else key.upper()
+        )
         error_count = error_counts[key]
         warning_count = warning_counts[key]
         has_not_run = key in not_run_checks
-        if key.startswith("code:"):
+        if is_diagnostic:
             summary_status = "RECORDED"
         elif error_count:
             summary_status = "FAILED"

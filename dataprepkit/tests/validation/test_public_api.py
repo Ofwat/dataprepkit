@@ -1550,6 +1550,33 @@ def test_validation_result_to_dataframe_includes_events_and_metadata():
     assert frame.loc[0, "is_valid"] == False  # noqa: E712
 
 
+@pytest.mark.parametrize(
+    ("code", "expected_check"),
+    [
+        ("CHARTS_DETECTED", "CHARTS"),
+        ("EXTERNAL_LINKS_DETECTED", "EXTERNAL_LINKS"),
+        ("MACROS_DETECTED", "MACROS"),
+        ("MERGED_CELLS_DETECTED", "MERGED_CELLS"),
+        ("NAMED_RANGES_DETECTED", "NAMED_RANGES"),
+        ("PIVOT_TABLES_DETECTED", "PIVOT_TABLES"),
+        ("MERGED_CELLS_DETECTION_UNAVAILABLE", "MERGED_CELLS_DETECTION_UNAVAILABLE"),
+        ("CUSTOM_DETECTED", "CUSTOM_DETECTED"),
+    ],
+)
+def test_diagnostic_check_name_in_report(code, expected_check):
+    result = ValidationResult(
+        processed_counts={f"code:{code}": 2},
+        diagnostics=[DiagnosticEvent(code=code, description="Workbook feature")],
+    )
+
+    frame = validation_result_to_dataframe(result)
+
+    assert frame["event_type"].tolist() == ["diagnostic", "summary"]
+    assert frame["check"].tolist() == [expected_check, expected_check]
+    assert frame["processed_count"].tolist() == [2, 2]
+    assert frame.loc[frame["event_type"] == "summary", "status"].tolist() == ["RECORDED"]
+
+
 def test_validation_event_omits_reason():
     event = ValidationEvent(rule_code="required_sheet")
 
@@ -5455,7 +5482,7 @@ def test_feature_policy_ignore_records_a_diagnostic(tmp_path):
 
     frame = validation_result_to_dataframe(result)
     diagnostic = frame.loc[frame["event_type"] == "diagnostic"].iloc[0]
-    assert diagnostic["check"] == "MERGED_CELLS_DETECTED"
+    assert diagnostic["check"] == "MERGED_CELLS"
     assert diagnostic["description"] == "Merged cell range detected: A1:B1"
     assert diagnostic["processed_count"] == 1
 
@@ -5463,7 +5490,7 @@ def test_feature_policy_ignore_records_a_diagnostic(tmp_path):
         (frame["event_type"] == "summary")
         & frame["check"].str.startswith("MERGED_CELLS")
     ]
-    assert summaries["check"].tolist() == ["MERGED_CELLS_DETECTED"]
+    assert summaries["check"].tolist() == ["MERGED_CELLS"]
     assert summaries["processed_count"].tolist() == [1]
     assert summaries["issue_count"].tolist() == [0]
     assert summaries["status"].tolist() == ["RECORDED"]
