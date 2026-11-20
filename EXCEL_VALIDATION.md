@@ -528,8 +528,9 @@ The following decisions apply:
   access, and a timeout. A missing target names the configured table and its
   schema when supplied, so you can check the lookup entry in the validation profile.
   If the source table is missing lookup keys, the detail names the expected
-  Excel columns, source table, and worksheet. Restore the headers in Excel, or
-  use the approved headings in both the lookup's Excel-side `key_columns`
+  Excel columns, source table, and worksheet. The detail row also stores the
+  worksheet in `sheet_name`. Restore the headers in Excel, or use the approved
+  headings in both the lookup's Excel-side `key_columns`
   mapping and the database check configuration.
 - A lookup row with a null canonical key or required expected value produces a
   row-level `database_lookup` finding whose description identifies the null

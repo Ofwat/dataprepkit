@@ -2795,7 +2795,8 @@ def _run_database_checks_on_connection(config, dataframe_cache, connection):
                     rule_code=check.rule_code,
                     status="NOT_RUN",
                     severity=severity,
-                    description=lookup_error,
+                    sheet_name=lookup_error.sheet_name,
+                    description=lookup_error.description,
                 )
             )
             complete = False
@@ -2850,6 +2851,12 @@ def _run_database_checks_on_connection(config, dataframe_cache, connection):
     )
 
 
+@dataclass(frozen=True)
+class _DatabaseLookupFailure:
+    description: str
+    sheet_name: str | None = None
+
+
 def _database_lookup_rows(
     lookup,
     source_entries,
@@ -2872,19 +2879,23 @@ def _database_lookup_rows(
                 if len(missing_columns) == 1
                 else ("columns", "are", "headers")
             )
-            return {}, (
+            sheet_name = entry["sheet_name"]
+            return {}, _DatabaseLookupFailure(
                 f"Lookup '{lookup.name}' did not run because the Excel "
                 f"{column_label} {names} {verb} missing from source table "
-                f"'{source_table}' on sheet '{entry['sheet_name']}'. "
+                f"'{source_table}' on sheet '{sheet_name}'. "
                 f"Restore the missing {header_label} in Excel. If the workbook uses "
                 "an approved alternative heading, update the lookup's Excel-side "
                 "key_columns and the database check settings in the validation profile "
-                "to match."
+                "to match.",
+                sheet_name=sheet_name,
             )
         for values in dataframe[source_columns].itertuples(index=False, name=None):
             source_keys.add(tuple(values))
     if len(source_keys) > lookup.max_distinct_keys:
-        return {}, f"Lookup '{lookup.name}' exceeded its distinct key limit"
+        return {}, _DatabaseLookupFailure(
+            f"Lookup '{lookup.name}' exceeded its distinct key limit"
+        )
     cache_key = (
         lookup.name,
         tuple(sorted(map(repr, source_keys))),
@@ -2913,7 +2924,9 @@ def _database_lookup_rows(
         )
         missing = required_columns - columns
         if missing:
-            return {}, f"Lookup '{lookup.name}' is missing columns: {sorted(missing)}"
+            return {}, _DatabaseLookupFailure(
+                f"Lookup '{lookup.name}' is missing columns: {sorted(missing)}"
+            )
         select_columns = [*lookup.key_columns.values(), *lookup.value_columns]
         rendered_columns = ", ".join(
             _quote_sql_identifier(connection, column) for column in select_columns
@@ -2964,17 +2977,21 @@ def _database_lookup_rows(
             or "invalid object name" in lowered
         ):
             target = ".".join(filter(None, (lookup.schema_name, lookup.table)))
-            return {}, (
+            return {}, _DatabaseLookupFailure(
                 f"Lookup '{lookup.name}' could not find '{target}' in the connected "
                 "database. Check the lookup's schema and table in the validation profile."
             )
-        return {}, _database_error_description(error, f"Lookup '{lookup.name}'")
+        return {}, _DatabaseLookupFailure(
+            _database_error_description(error, f"Lookup '{lookup.name}'")
+        )
     result = {}
     for row in rows:
         key = tuple(row[column] for column in lookup_columns)
         value = tuple(row[column] for column in lookup.value_columns)
         if key in result and result[key] != value:
-            return {}, f"Lookup '{lookup.name}' returned conflicting rows"
+            return {}, _DatabaseLookupFailure(
+                f"Lookup '{lookup.name}' returned conflicting rows"
+            )
         result[key] = value
     cache[cache_key] = result
     return result, None

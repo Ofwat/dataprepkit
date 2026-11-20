@@ -1324,6 +1324,8 @@ def test_dimension_value_reports_missing_source_key_column(tmp_path, source_colu
     frame = validation_result_to_dataframe(result)
     details = frame.loc[frame["event_type"].eq("not_run")]
     assert details["check"].tolist() == ["DIMENSION_VALUE"]
+    assert details["sheet_name"].tolist() == ["Data"]
+    assert details["cell_reference"].isna().all()
     assert details["description"].tolist() == [
         "Lookup 'additional_enhancement_dimension' did not run because the Excel "
         "column 'Enhancement_Cd' is missing from source table 'process_data' on "
@@ -1413,6 +1415,7 @@ def test_database_check_reports_lookup_structure_errors(
     frame = validation_result_to_dataframe(result)
     not_run = frame.loc[frame["event_type"].eq("not_run")]
     assert not_run["result"].tolist() == ["NOT_RUN"]
+    assert not_run["sheet_name"].isna().all()
     assert not_run["description"].tolist() == [expected_description]
 
 
