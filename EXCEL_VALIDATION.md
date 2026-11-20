@@ -1290,10 +1290,15 @@ formula_findings = report.loc[
 | --- | --- |
 | `PASSED` | The check recorded zero errors, warnings, and skipped events. |
 | `PASSED_WITH_WARNINGS` | The check recorded warnings, with zero errors or skipped events. |
-| `FAILED` | The check recorded at least one error. If work also failed to run, the summary description points to the skipped details. |
+| `FAILED` | The check recorded at least one error. If some work did not run, the summary description explains why. |
 | `INCOMPLETE` | Some work did not run, but the check recorded processing or a warning. It recorded zero errors. |
-| `NOT_RUN` | The check recorded skipped work and zero processing, errors, or warnings. The detail rows explain why. |
+| `NOT_RUN` | The check recorded skipped work and zero processing, errors, or warnings. The summary description explains why. |
 | `RECORDED` | The validator recorded a diagnostic observation. |
+
+Summary rows reuse `description` to explain skipped work. For example, a check
+may say “Reference workbook is required for this check.” A partially completed
+check lists the distinct explanations from its skipped detail rows. A clean pass
+leaves the description blank.
 
 Aggregate counts from summary rows. `issue_count` excludes skipped work and
 diagnostic observations. Summary rows currently group by the underlying rule

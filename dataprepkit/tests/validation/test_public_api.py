@@ -1591,6 +1591,7 @@ def test_validation_result_summary_status_reflects_rule_outcome():
             "warning_rule": 10,
             "partial_rule": 10,
             "skipped_rule": 0,
+            "unknown_rule": 0,
         },
         errors=[ValidationEvent(rule_code="failed_rule")],
         warnings=[
@@ -1598,8 +1599,15 @@ def test_validation_result_summary_status_reflects_rule_outcome():
             ValidationEvent(rule_code="partial_rule", severity="warning"),
         ],
         not_run=[
-            ValidationEvent(rule_code=rule, status="NOT_RUN")
-            for rule in ("failed_rule", "partial_rule", "skipped_rule")
+            ValidationEvent(rule_code=rule, status="NOT_RUN", description=description)
+            for rule, description in (
+                ("failed_rule", "A required input was missing."),
+                ("partial_rule", "Source table was unavailable."),
+                ("skipped_rule", "Reference workbook is required for this check"),
+                ("partial_rule", "Source table was unavailable."),
+                ("partial_rule", "The database lookup timed out."),
+                ("unknown_rule", ""),
+            )
         ],
     )
 
@@ -1612,6 +1620,7 @@ def test_validation_result_summary_status_reflects_rule_outcome():
         "WARNING_RULE": "PASSED_WITH_WARNINGS",
         "PARTIAL_RULE": "INCOMPLETE",
         "SKIPPED_RULE": "NOT_RUN",
+        "UNKNOWN_RULE": "NOT_RUN",
     }
     assert summary["issue_count"].to_dict() == {
         "PASSED_RULE": 0,
@@ -1619,8 +1628,20 @@ def test_validation_result_summary_status_reflects_rule_outcome():
         "WARNING_RULE": 1,
         "PARTIAL_RULE": 1,
         "SKIPPED_RULE": 0,
+        "UNKNOWN_RULE": 0,
     }
-    assert "Some work did not run" in summary.loc["FAILED_RULE", "description"]
+    assert summary.loc["FAILED_RULE", "description"] == (
+        "Some work did not run. A required input was missing."
+    )
+    assert summary.loc["PARTIAL_RULE", "description"] == (
+        "Some work did not run. Source table was unavailable. | "
+        "The database lookup timed out."
+    )
+    assert summary.loc["SKIPPED_RULE", "description"] == (
+        "Reference workbook is required for this check"
+    )
+    assert summary.loc["UNKNOWN_RULE", "description"] == "See the not-run details."
+    assert summary.loc[["PASSED_RULE", "WARNING_RULE"], "description"].isna().all()
 
 
 def test_validate_excel_populates_audit_metadata(tmp_path):
@@ -4347,6 +4368,13 @@ def test_reference_structure_check_is_not_run_without_reference_workbook(tmp_pat
     assert result.is_valid is True
     assert len(result.not_run) == 1
     assert result.not_run[0].description == "Reference workbook is required for this check"
+
+    frame = validation_result_to_dataframe(result)
+    summary = frame.loc[
+        frame["event_type"].eq("summary") & frame["check"].eq("SHEET_STRUCTURE")
+    ].iloc[0]
+    assert summary["status"] == "NOT_RUN"
+    assert summary["description"] == result.not_run[0].description
 
 
 def test_reference_rule_is_not_run_without_reference_workbook(tmp_path):

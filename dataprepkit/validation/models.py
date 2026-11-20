@@ -1064,7 +1064,12 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
     rows = []
     error_counts = Counter(event.rule_code for event in result.errors)
     warning_counts = Counter(event.rule_code for event in result.warnings)
-    not_run_checks = {event.rule_code for event in result.not_run}
+    not_run_descriptions: dict[str, dict[str, None]] = {}
+    for event in result.not_run:
+        descriptions = not_run_descriptions.setdefault(event.rule_code, {})
+        description = event.description.strip()
+        if description:
+            descriptions[description] = None
 
     for event_type, events in (
         ("error", result.errors),
@@ -1114,17 +1119,26 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
         )
         error_count = error_counts[key]
         warning_count = warning_counts[key]
-        has_not_run = key in not_run_checks
+        skipped_descriptions = not_run_descriptions.get(key)
         if is_diagnostic:
             summary_status = "RECORDED"
         elif error_count:
             summary_status = "FAILED"
-        elif has_not_run:
-            summary_status = "INCOMPLETE" if processed_count or warning_count else "NOT_RUN"
+        elif skipped_descriptions is not None:
+            summary_status = (
+                "INCOMPLETE" if processed_count or warning_count else "NOT_RUN"
+            )
         elif warning_count:
             summary_status = "PASSED_WITH_WARNINGS"
         else:
             summary_status = "PASSED"
+
+        summary_description = None
+        if skipped_descriptions is not None:
+            summary_description = " | ".join(skipped_descriptions) or "See the not-run details."
+            if summary_status != "NOT_RUN":
+                summary_description = f"Some work did not run. {summary_description}"
+
         rows.append(
             {
                 **metadata,
@@ -1133,11 +1147,7 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                 "status": summary_status,
                 "processed_count": processed_count,
                 "issue_count": error_count + warning_count,
-                "description": (
-                    "Some work did not run. See the not-run details."
-                    if has_not_run and summary_status != "NOT_RUN"
-                    else None
-                ),
+                "description": summary_description,
             }
         )
     return pd.DataFrame(rows, columns=VALIDATION_RESULT_DATAFRAME_COLUMNS)
