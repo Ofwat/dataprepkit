@@ -527,6 +527,10 @@ The following decisions apply:
 - Lookup failure descriptions distinguish a missing table or schema, denied
   access, and a timeout. A missing target names the configured table and its
   schema when supplied, so you can check the lookup entry in the validation profile.
+  If the source table is missing lookup keys, the detail names the expected
+  Excel columns, source table, and worksheet. Restore the headers in Excel, or
+  use the approved headings in both the lookup's Excel-side `key_columns`
+  mapping and the database check configuration.
 - A lookup row with a null canonical key or required expected value produces a
   row-level `database_lookup` finding whose description identifies the null
   lookup value. Dependent checks exclude that row.

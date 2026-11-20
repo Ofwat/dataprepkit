@@ -2771,6 +2771,7 @@ def _run_database_checks_on_connection(config, dataframe_cache, connection):
                     source_entries,
                     connection,
                     lookup_cache,
+                    source_table=check.source_table,
                 )
                 if error is not None:
                     lookup_error = error
@@ -2786,6 +2787,7 @@ def _run_database_checks_on_connection(config, dataframe_cache, connection):
                 source_entries,
                 connection,
                 lookup_cache,
+                source_table=check.source_table,
             )
         if lookup_error is not None:
             not_run.append(
@@ -2853,14 +2855,31 @@ def _database_lookup_rows(
     source_entries,
     connection,
     cache,
+    *,
+    source_table,
 ):
     source_keys = set()
     source_columns = list(lookup.key_columns)
     for entry in source_entries.values():
         dataframe = entry["dataframe"]
-        if any(column not in dataframe.columns for column in source_columns):
+        missing_columns = [
+            column for column in source_columns if column not in dataframe.columns
+        ]
+        if missing_columns:
+            names = ", ".join(f"'{column}'" for column in missing_columns)
+            column_label, verb, header_label = (
+                ("column", "is", "header")
+                if len(missing_columns) == 1
+                else ("columns", "are", "headers")
+            )
             return {}, (
-                f"Source table is missing a lookup key column for '{lookup.name}'"
+                f"Lookup '{lookup.name}' did not run because the Excel "
+                f"{column_label} {names} {verb} missing from source table "
+                f"'{source_table}' on sheet '{entry['sheet_name']}'. "
+                f"Restore the missing {header_label} in Excel. If the workbook uses "
+                "an approved alternative heading, update the lookup's Excel-side "
+                "key_columns and the database check settings in the validation profile "
+                "to match."
             )
         for values in dataframe[source_columns].itertuples(index=False, name=None):
             source_keys.add(tuple(values))

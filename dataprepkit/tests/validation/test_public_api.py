@@ -1273,6 +1273,66 @@ def test_database_value_type_allows_null_values_when_configured(tmp_path):
     assert not result.not_run
 
 
+@pytest.mark.parametrize("source_column", ["Enhancement_Cd", "Enhancement_Code"])
+def test_dimension_value_reports_missing_source_key_column(tmp_path, source_column):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["Measure_Cd", "Measure_Value", "Enhancement_Code"])
+    workbook.active.append(["INN001", 125, "E1"])
+    workbook.save(candidate_path)
+
+    config = make_database_type_config().model_copy(
+        update={
+            "database_lookups": [
+                DatabaseLookup(
+                    name="additional_enhancement_dimension",
+                    table="dim_enhancement",
+                    key_columns={source_column: "enhancement_code"},
+                    value_columns=["enhancement_id"],
+                ),
+            ],
+            "database_checks": [
+                DatabaseCheck(
+                    name="enhancement_exists",
+                    rule_code="dimension_value",
+                    source_table="process_data",
+                    lookup="additional_enhancement_dimension",
+                    column=source_column,
+                ),
+            ],
+        }
+    )
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(text(
+            "CREATE TABLE dim_enhancement "
+            "(enhancement_code TEXT, enhancement_id INTEGER)"
+        ))
+        connection.execute(text("INSERT INTO dim_enhancement VALUES ('E1', 1)"))
+
+    result = validate_excel(candidate_path, config, engine=engine)
+
+    if source_column == "Enhancement_Code":
+        assert result.complete is True
+        assert result.is_valid is True
+        assert result.not_run == []
+        assert result.processed_counts["dimension_value"] == 1
+        return
+
+    assert result.complete is False
+    frame = validation_result_to_dataframe(result)
+    details = frame.loc[frame["event_type"].eq("not_run")]
+    assert details["check"].tolist() == ["DIMENSION_VALUE"]
+    assert details["description"].tolist() == [
+        "Lookup 'additional_enhancement_dimension' did not run because the Excel "
+        "column 'Enhancement_Cd' is missing from source table 'process_data' on "
+        "sheet 'Data'. Restore the missing header in Excel. If the workbook uses "
+        "an approved alternative heading, update the lookup's Excel-side key_columns "
+        "and the database check settings in the validation profile to match."
+    ]
+
+
 def test_database_value_type_reports_null_dimension_keys(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()
