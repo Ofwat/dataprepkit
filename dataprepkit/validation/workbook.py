@@ -3717,7 +3717,7 @@ def _detected_features(workbook, candidate_path, merged_cells_scope=None):
                     targets = []
                     try:
                         targets = list(defined_name.destinations)
-                    except (TokenizerError, TypeError, ValueError):
+                    except (AttributeError, TokenizerError, TypeError, ValueError):
                         pass
                     target_sheets = {name for name, _reference in targets}
                     sheet_name = scope_sheet

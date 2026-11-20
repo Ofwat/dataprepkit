@@ -5755,6 +5755,36 @@ def test_named_range_with_invalid_reference_does_not_abort_validation(tmp_path):
     assert event.cell_reference is None
 
 
+def test_sheet_scoped_named_range_reports_its_location(tmp_path):
+    candidate_path = tmp_path / "candidate.xlsx"
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Data"
+    sheet["A1"] = 1
+    sheet.defined_names.add(DefinedName("local_value", attr_text="$A$1"))
+    workbook.save(candidate_path)
+    config = make_config().model_copy(
+        update={
+            "runtime": RuntimePolicy(
+                max_cells_scanned=1000,
+                read_only=False,
+                macro_policy="reject",
+                missing_formula_cache_action="not_run",
+                feature_policy=WorkbookFeaturePolicy(named_ranges="warning"),
+            )
+        }
+    )
+
+    result = validate_excel(candidate_path=candidate_path, config=config)
+
+    assert len(result.warnings) == 1
+    event = result.warnings[0]
+    assert event.rule_code == "named_ranges"
+    assert event.sheet_name == "Data"
+    assert event.cell_reference == "$A$1"
+    assert event.actual_value == "local_value refers to $A$1"
+
+
 @pytest.mark.parametrize("action, bucket", [("error", "errors"), ("warning", "warnings")])
 def test_feature_policy_reports_unavailable_detection(
     tmp_path,
