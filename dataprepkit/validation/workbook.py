@@ -14,6 +14,7 @@ from zipfile import ZipFile
 
 import openpyxl
 import pandas as pd
+from openpyxl.formula.tokenizer import TokenizerError
 from openpyxl.styles.colors import COLOR_INDEX
 from openpyxl.utils.cell import (
     column_index_from_string,
@@ -3716,7 +3717,7 @@ def _detected_features(workbook, candidate_path, merged_cells_scope=None):
                     targets = []
                     try:
                         targets = list(defined_name.destinations)
-                    except (TypeError, ValueError):
+                    except (TokenizerError, TypeError, ValueError):
                         pass
                     target_sheets = {name for name, _reference in targets}
                     sheet_name = scope_sheet
