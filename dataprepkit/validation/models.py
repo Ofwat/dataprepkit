@@ -1079,6 +1079,8 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
         ("not_run", result.not_run),
     ):
         for event in events:
+            if event_type == "not_run" and event.rule_code == "formula_error":
+                continue
             rows.append(
                 {
                     **metadata,

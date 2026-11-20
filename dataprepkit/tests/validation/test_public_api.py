@@ -2792,6 +2792,12 @@ def test_formula_error_is_not_run_when_formula_cache_is_missing(tmp_path):
     assert result.not_run[0].cell_reference == "A1"
     assert result.not_run[0].row_number == 1
 
+    frame = validation_result_to_dataframe(result)
+    formula_error_rows = frame.loc[frame["check"] == "FORMULA_ERROR"]
+    assert formula_error_rows["event_type"].tolist() == ["summary"]
+    assert formula_error_rows.iloc[0]["result"] == "NOT_RUN"
+    assert "workbook has no cached value" in formula_error_rows.iloc[0]["description"]
+
 
 def test_formula_error_accepts_cached_empty_string_result(tmp_path):
     source_path = tmp_path / "source.xlsx"
