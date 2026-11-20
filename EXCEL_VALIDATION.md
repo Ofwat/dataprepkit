@@ -532,6 +532,10 @@ The following decisions apply:
   worksheet in `sheet_name`. Restore the headers in Excel, or use the approved
   headings in both the lookup's Excel-side `key_columns`
   mapping and the database check configuration.
+- Dimension-value findings identify the Excel worksheet and column and the
+  mapped key column in the dimension table. Blank values prompt the reader
+  to fill the field or review whether the check applies. Unmatched values
+  prompt the reader to check the Excel value and the dimension table.
 - A lookup row with a null canonical key or required expected value produces a
   row-level `database_lookup` finding whose description identifies the null
   lookup value. Dependent checks exclude that row.

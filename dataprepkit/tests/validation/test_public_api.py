@@ -552,16 +552,23 @@ def test_dimension_value_check_reports_missing_database_dimension_value(tmp_path
     assert result.errors[0].metadata["lookup_name"] == (
         "business_type_dimension"
     )
-    assert "Business_Type_Cd='ADDN2'" in result.errors[0].description
+    assert result.errors[0].description == (
+        "Value 'ADDN2' in Excel column 'Business_Type_Cd' on sheet 'Data' was not "
+        "found in column 'Business_Type_Cd' of dimension table 'dim_business_type' "
+        "(lookup 'business_type_dimension'). Check the value for a typo in Excel. "
+        "If the value is correct, verify that it exists in the dimension table."
+    )
 
 
-def test_dimension_value_check_reports_blank_dimension_value(tmp_path):
+def test_dimension_value_check_explains_blank_and_unmatched_legacy_codes(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     workbook = openpyxl.Workbook()
     workbook.active.title = "Data"
-    workbook.active.append(["Business_Type_Cd"])
+    workbook.active.append(["Legacy_Measure_Cd"])
     workbook.active.append([None])
     workbook.active.append(["NA"])
+    workbook.active.append(["A14025ADJ"])
+    workbook.active.append(["   "])
     workbook.active.append(["AddCtrl"])
     workbook.save(candidate_path)
 
@@ -569,13 +576,13 @@ def test_dimension_value_check_reports_blank_dimension_value(tmp_path):
     with engine.begin() as connection:
         connection.execute(
             text(
-                "CREATE TABLE dim_business_type "
-                "(Business_Type_Cd TEXT, Business_Type_Id INTEGER)"
+                "CREATE TABLE dim_legacy_measure "
+                "(Legacy_Boncode TEXT, Legacy_Measure_Id INTEGER)"
             )
         )
         connection.execute(
             text(
-                "INSERT INTO dim_business_type VALUES "
+                "INSERT INTO dim_legacy_measure VALUES "
                 "('AddCtrl', 1)"
             )
         )
@@ -597,27 +604,28 @@ def test_dimension_value_check_reports_blank_dimension_value(tmp_path):
                     header_row=1,
                     data_boundary=DataBoundary(
                         mode="last_non_empty_row",
-                        columns=["Business_Type_Cd"],
+                        columns=["Legacy_Measure_Cd"],
                     ),
                 )
             ],
             "database_lookups": [
                 DatabaseLookup(
-                    name="business_type_dimension",
-                    table="dim_business_type",
+                    name="legacy_boncode_dimension",
+                    schema="main",
+                    table="dim_legacy_measure",
                     key_columns={
-                        "Business_Type_Cd": "Business_Type_Cd",
+                        "Legacy_Measure_Cd": "Legacy_Boncode",
                     },
-                    value_columns=["Business_Type_Id"],
+                    value_columns=["Legacy_Measure_Id"],
                 )
             ],
             "database_checks": [
                 DatabaseCheck(
-                    name="business_type_exists",
+                    name="legacy_measure_exists",
                     rule_code="dimension_value",
                     source_table="process_data",
-                    lookup="business_type_dimension",
-                    column="Business_Type_Cd",
+                    lookup="legacy_boncode_dimension",
+                    column="Legacy_Measure_Cd",
                 )
             ],
         }
@@ -631,7 +639,26 @@ def test_dimension_value_check_reports_blank_dimension_value(tmp_path):
     ] == [
         ("dimension_value", "A2"),
         ("dimension_value", "A3"),
+        ("dimension_value", "A4"),
+        ("dimension_value", "A5"),
     ]
+    assert result.errors[0].description == (
+        "Excel column 'Legacy_Measure_Cd' on sheet 'Data' is blank. Enter a value "
+        "from column 'Legacy_Boncode' of dimension table 'main.dim_legacy_measure' "
+        "(lookup 'legacy_boncode_dimension'). If this field is optional for this "
+        "row, review whether the validation check should apply."
+    )
+    assert "Value 'NA' in Excel column" in result.errors[1].description
+    assert result.errors[2].description == (
+        "Value 'A14025ADJ' in Excel column 'Legacy_Measure_Cd' on sheet 'Data' "
+        "was not found in column 'Legacy_Boncode' of dimension table "
+        "'main.dim_legacy_measure' "
+        "(lookup 'legacy_boncode_dimension'). Check the value for a typo in Excel. "
+        "If the value is correct, verify that it exists in the dimension table."
+    )
+
+    assert result.errors[3].description == result.errors[0].description
+    assert {event.sheet_name for event in result.errors} == {"Data"}
 
 
 def test_empty_formula_does_not_extend_last_non_empty_table_boundary(tmp_path):

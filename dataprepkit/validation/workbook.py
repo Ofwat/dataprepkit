@@ -3201,12 +3201,13 @@ def _database_dimension_value_check(
     errors = []
     failed = False
     column = check.column
+    sheet_name = entry["sheet_name"]
     if column not in dataframe.columns:
         return [
             ValidationEvent(
                 rule_code="missing_column",
                 severity=severity,
-                sheet_name=entry["sheet_name"],
+                sheet_name=sheet_name,
                 expected_value=column,
                 description=(
                     f"Database dimension column '{column}' was not found "
@@ -3216,6 +3217,15 @@ def _database_dimension_value_check(
         ], True
 
     column_number = entry["column_number"].get(column)
+    dimension_table = ".".join(
+        filter(None, (lookup_definition.schema_name, lookup_definition.table))
+    )
+    dimension_key = lookup_definition.key_columns[column]
+    reference = (
+        f"column '{dimension_key}' of dimension table '{dimension_table}' "
+        f"(lookup '{lookup_definition.name}')"
+    )
+    excel_column = f"Excel column '{column}' on sheet '{sheet_name}'"
     for row_index, row in dataframe.iterrows():
         value = row[column]
         processed_counts[check.rule_code] = (
@@ -3224,12 +3234,24 @@ def _database_dimension_value_check(
         if (value,) in lookup_rows:
             continue
         failed = True
+        if _is_null_value(value) or (isinstance(value, str) and not value.strip()):
+            description = (
+                f"{excel_column} is blank. Enter a value from {reference}. "
+                "If this field is optional for this row, review whether the "
+                "validation check should apply."
+            )
+        else:
+            description = (
+                f"Value {value!r} in {excel_column} was not found in {reference}. "
+                "Check the value for a typo in Excel. If the value is correct, "
+                "verify that it exists in the dimension table."
+            )
         excel_row = entry["header_row"] + 1 + int(row_index)
         errors.append(
             ValidationEvent(
                 rule_code=check.rule_code,
                 severity=severity,
-                sheet_name=entry["sheet_name"],
+                sheet_name=sheet_name,
                 cell_reference=(
                     f"{get_column_letter(column_number)}{excel_row}"
                     if column_number is not None else None
@@ -3244,10 +3266,7 @@ def _database_dimension_value_check(
                     "lookup_table": lookup_definition.table,
                     "column": column,
                 },
-                description=(
-                    f"Value {column}={value!r} was not found in lookup "
-                    f"'{check.lookup}'"
-                ),
+                description=description,
             )
         )
     return errors, failed
