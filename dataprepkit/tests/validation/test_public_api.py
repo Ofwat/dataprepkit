@@ -2847,6 +2847,7 @@ def test_formula_error_fails_when_formula_cache_is_missing_and_policy_is_error(
     workbook = openpyxl.Workbook()
     workbook.active.title = "Data"
     workbook.active["A1"] = "=1+1"
+    workbook.active["A2"] = "=2+2"
     workbook.save(candidate_path)
 
     config = make_config(
@@ -2869,10 +2870,23 @@ def test_formula_error_fails_when_formula_cache_is_missing_and_policy_is_error(
     result = validate_excel(candidate_path=candidate_path, config=config)
 
     assert result.is_valid is False
-    assert len(result.errors) == 1
-    assert result.errors[0].rule_code == "formula_error"
-    assert "workbook has no cached value" in result.errors[0].description
-    assert result.errors[0].cell_reference == "A1"
+    assert len(result.errors) == 2
+    assert {event.rule_code for event in result.errors} == {"formula_error"}
+    assert {event.cell_reference for event in result.errors} == {"A1", "A2"}
+    assert all(
+        "workbook has no cached value" in event.description
+        for event in result.errors
+    )
+
+    frame = validation_result_to_dataframe(result)
+    formula_error_rows = frame.loc[frame["check"] == "FORMULA_ERROR"]
+    assert formula_error_rows["event_type"].tolist() == ["summary"]
+    assert formula_error_rows.iloc[0]["result"] == "FAILED"
+    assert formula_error_rows.iloc[0]["issue_count"] == 2
+    assert (
+        "workbook has no cached values"
+        in formula_error_rows.iloc[0]["description"]
+    )
 
 
 def test_validate_excel_reports_missing_reference_sheet(tmp_path):

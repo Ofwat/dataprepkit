@@ -1051,6 +1051,15 @@ def _diagnostic_check_name(code: str) -> str:
     return feature if feature.lower() in _WORKBOOK_FEATURE_NAMES else check
 
 
+def _is_formula_cache_unavailable_event(event: ValidationEvent) -> bool:
+    return (
+        event.rule_code == "formula_error"
+        and event.description.startswith(
+            "Formula result is unavailable because the workbook has no cached value"
+        )
+    )
+
+
 def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
     """Export events and diagnostics with uppercase check identifiers."""
     metadata = {
@@ -1066,6 +1075,11 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
     rows = []
     error_counts = Counter(event.rule_code for event in result.errors)
     warning_counts = Counter(event.rule_code for event in result.warnings)
+    formula_cache_error_counts = Counter(
+        event.rule_code
+        for event in result.errors
+        if _is_formula_cache_unavailable_event(event)
+    )
     not_run_descriptions: dict[str, dict[str, None]] = {}
     for event in result.not_run:
         descriptions = not_run_descriptions.setdefault(event.rule_code, {})
@@ -1079,7 +1093,12 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
         ("not_run", result.not_run),
     ):
         for event in events:
-            if event_type == "not_run" and event.rule_code == "formula_error":
+            if (
+                event_type == "not_run" and event.rule_code == "formula_error"
+            ) or (
+                event_type == "error"
+                and _is_formula_cache_unavailable_event(event)
+            ):
                 continue
             rows.append(
                 {
@@ -1147,6 +1166,11 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                 summary_description = " | ".join(skipped_descriptions)
             if summary_result != "NOT_RUN":
                 summary_description = f"Some work did not run. {summary_description}"
+        if formula_cache_error_counts.get(key):
+            summary_description = (
+                "Some formula results could not be checked because the workbook "
+                "has no cached values."
+            )
 
         rows.append(
             {
