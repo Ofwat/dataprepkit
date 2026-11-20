@@ -961,6 +961,8 @@ class DiagnosticEvent(_PublicModel):
     run_id: str | None = None
     code: str
     description: str
+    sheet_name: str | None = None
+    cell_reference: str | None = None
 
 
 class ValidationResult(_PublicModel):
@@ -1107,6 +1109,8 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                 "issue_count": None,
                 "check": _diagnostic_check_name(diagnostic.code),
                 "result": "RECORDED",
+                "sheet_name": diagnostic.sheet_name,
+                "cell_reference": diagnostic.cell_reference,
                 "description": diagnostic.description,
                 "metadata": None,
             }

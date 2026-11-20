@@ -670,7 +670,8 @@ make the result incomplete when no engine is supplied.
 Feature policy covers macros, external workbook links, charts, pivot tables,
 defined names, and merged cells. A detected feature uses the same exported
 `check` regardless of how it was reported. Use `event_type` to distinguish an
-error, warning, or diagnostic.
+error, warning, or diagnostic. Each `MERGED_CELLS` detail row identifies its
+worksheet in `sheet_name` and its merged range in `cell_reference`.
 
 | Outcome | Configure it with | Exported `check` example |
 | --- | --- | --- |

@@ -5651,6 +5651,8 @@ def test_feature_policy_ignore_records_a_diagnostic(tmp_path):
     frame = validation_result_to_dataframe(result)
     diagnostic = frame.loc[frame["event_type"] == "diagnostic"].iloc[0]
     assert diagnostic["check"] == "MERGED_CELLS"
+    assert diagnostic["sheet_name"] == "Data"
+    assert diagnostic["cell_reference"] == "A1:B1"
     assert diagnostic["description"] == "Merged cell range detected: A1:B1"
     assert diagnostic["processed_count"] == 1
 
@@ -5662,7 +5664,12 @@ def test_feature_policy_ignore_records_a_diagnostic(tmp_path):
     assert summaries["processed_count"].tolist() == [1]
     assert summaries["issue_count"].tolist() == [0]
     assert summaries["result"].tolist() == ["RECORDED"]
+    assert summaries[["sheet_name", "cell_reference"]].isna().all().all()
     assert "severity" not in frame.columns
+
+    restored = load_validation_result(dump_validation_result(result, format="json"))
+    assert restored.diagnostics[0].sheet_name == "Data"
+    assert restored.diagnostics[0].cell_reference == "A1:B1"
 
 
 @pytest.mark.parametrize("action, bucket", [("error", "errors"), ("warning", "warnings")])

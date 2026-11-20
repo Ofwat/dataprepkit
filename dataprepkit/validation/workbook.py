@@ -243,6 +243,8 @@ def validate_excel(
                         run_id=run_id,
                         code=detection_code,
                         description=description,
+                        sheet_name=sheet_name,
+                        cell_reference=cell_reference,
                     )
                 )
         sheet_names = set(formula_workbook.sheetnames)
