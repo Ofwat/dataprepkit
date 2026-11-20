@@ -5714,8 +5714,16 @@ def test_feature_policy_reports_broader_detected_features(
     ]
     assert {event.description.split(": ")[-1] for event in getattr(result, bucket)} == {
         "charts",
-        "named_ranges",
+        "data_value refers to Data!$A$1",
     }
+    named_range = next(
+        event
+        for event in getattr(result, bucket)
+        if event.rule_code == "named_ranges"
+    )
+    assert named_range.sheet_name == "Data"
+    assert named_range.cell_reference == "$A$1"
+    assert named_range.actual_value == "data_value refers to Data!$A$1"
 
 
 @pytest.mark.parametrize("action, bucket", [("error", "errors"), ("warning", "warnings")])

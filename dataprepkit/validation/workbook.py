@@ -3704,6 +3704,56 @@ def _detected_features(workbook, candidate_path, merged_cells_scope=None):
                 for target in targets:
                     yield feature_name, None, None, target, None
                 continue
+        if feature_name == "named_ranges":
+            named_ranges = []
+            definitions = [(None, getattr(workbook, "defined_names", {}))]
+            definitions.extend(
+                (sheet.title, getattr(sheet, "defined_names", {}))
+                for sheet in workbook.worksheets
+            )
+            for scope_sheet, defined_names in definitions:
+                for defined_name in defined_names.values():
+                    targets = []
+                    try:
+                        targets = list(defined_name.destinations)
+                    except (TypeError, ValueError):
+                        pass
+                    target_sheets = {name for name, _reference in targets}
+                    sheet_name = scope_sheet
+                    if sheet_name is None and len(target_sheets) == 1:
+                        sheet_name = next(iter(target_sheets))
+                    cell_reference = (
+                        targets[0][1] if len(targets) == 1 else None
+                    )
+                    if (
+                        cell_reference is None
+                        and scope_sheet is not None
+                        and defined_name.attr_text
+                    ):
+                        try:
+                            range_boundaries(defined_name.attr_text)
+                        except ValueError:
+                            pass
+                        else:
+                            cell_reference = defined_name.attr_text
+                    definition = defined_name.attr_text
+                    detected_value = (
+                        f"{defined_name.name} refers to {definition}"
+                        if definition
+                        else defined_name.name
+                    )
+                    named_ranges.append(
+                        (
+                            feature_name,
+                            sheet_name,
+                            cell_reference,
+                            detected_value,
+                            None,
+                        )
+                    )
+            if named_ranges:
+                yield from named_ranges
+                continue
         if _package_feature_present(candidate_path, feature_name):
             yield feature_name, None, None, None, None
             continue
