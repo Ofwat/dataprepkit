@@ -1135,7 +1135,9 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
 
         summary_description = None
         if skipped_descriptions is not None:
-            summary_description = " | ".join(skipped_descriptions) or "See the not-run details."
+            summary_description = "See the not-run details."
+            if check != "DIMENSION_VALUE" and skipped_descriptions:
+                summary_description = " | ".join(skipped_descriptions)
             if summary_result != "NOT_RUN":
                 summary_description = f"Some work did not run. {summary_description}"
 

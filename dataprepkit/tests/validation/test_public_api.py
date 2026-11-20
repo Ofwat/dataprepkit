@@ -1647,6 +1647,36 @@ def test_validation_summary_result_reflects_rule_outcome():
     assert summary.loc[["PASSED_RULE", "WARNING_RULE"], "description"].isna().all()
 
 
+@pytest.mark.parametrize(
+    ("processed_count", "has_error", "expected_result", "expected_description"),
+    [
+        (0, False, "NOT_RUN", "See the not-run details."),
+        (10, True, "FAILED", "Some work did not run. See the not-run details."),
+    ],
+)
+def test_dimension_value_summary_points_to_detail(
+    processed_count, has_error, expected_result, expected_description
+):
+    rule = "dimension_value"
+    descriptions = ["Source table was unavailable.", "The database lookup timed out."]
+    result = ValidationResult(
+        processed_counts={rule: processed_count},
+        errors=[ValidationEvent(rule_code=rule)] if has_error else [],
+        not_run=[
+            ValidationEvent(rule_code=rule, status="NOT_RUN", description=description)
+            for description in descriptions
+        ],
+    )
+
+    frame = validation_result_to_dataframe(result)
+    summary = frame.loc[frame["event_type"].eq("summary")].iloc[0]
+
+    assert summary["check"] == "DIMENSION_VALUE"
+    assert summary["result"] == expected_result
+    assert summary["description"] == expected_description
+    assert frame.loc[frame["event_type"].eq("not_run"), "description"].tolist() == descriptions
+
+
 def test_validate_excel_populates_audit_metadata(tmp_path):
     candidate_path = tmp_path / "candidate.xlsx"
     reference_path = tmp_path / "reference.xlsx"

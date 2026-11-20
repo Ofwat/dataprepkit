@@ -1299,7 +1299,8 @@ formula_findings = report.loc[
 
 Summary rows reuse `description` to explain skipped work. For example, a check
 may say “Reference workbook is required for this check.” A partially completed
-check lists the distinct explanations from its skipped detail rows. A clean pass
+check lists the distinct explanations from its skipped detail rows. For
+`DIMENSION_VALUE`, the summary points to the not-run detail rows. A clean pass
 leaves the description blank.
 
 Aggregate counts from summary rows. `issue_count` excludes skipped work and
