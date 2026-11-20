@@ -1544,6 +1544,9 @@ def test_validation_result_to_dataframe_includes_events_and_metadata():
     assert frame.loc[0, "run_id"] == "run-1"
     assert frame["check"].tolist() == ["REQUIRED_CELL", "FEATURE_DETECTED"]
     assert frame.loc[0, "description"] == "Value is required"
+    assert "status" not in frame.columns
+    assert frame.loc[0, "result"] == "FAILED"
+    assert frame.loc[frame["event_type"].eq("diagnostic"), "result"].isna().all()
     assert {"rule_code", "code", "complete", "reason"}.isdisjoint(frame.columns)
     assert frame.loc[0, "sheet_name"] == "Data"
     assert frame.loc[0, "reference_filename"] is None
@@ -1574,7 +1577,7 @@ def test_diagnostic_check_name_in_report(code, expected_check):
     assert frame["event_type"].tolist() == ["diagnostic", "summary"]
     assert frame["check"].tolist() == [expected_check, expected_check]
     assert frame["processed_count"].tolist() == [2, 2]
-    assert frame.loc[frame["event_type"] == "summary", "status"].tolist() == ["RECORDED"]
+    assert frame.loc[frame["event_type"] == "summary", "result"].tolist() == ["RECORDED"]
 
 
 def test_validation_event_omits_reason():
@@ -1583,7 +1586,7 @@ def test_validation_event_omits_reason():
     assert "reason" not in event.model_dump()
 
 
-def test_validation_result_summary_status_reflects_rule_outcome():
+def test_validation_summary_result_reflects_rule_outcome():
     result = ValidationResult(
         processed_counts={
             "passed_rule": 10,
@@ -1614,7 +1617,7 @@ def test_validation_result_summary_status_reflects_rule_outcome():
     frame = validation_result_to_dataframe(result)
     summary = frame.loc[frame["event_type"] == "summary"].set_index("check")
 
-    assert summary["status"].to_dict() == {
+    assert summary["result"].to_dict() == {
         "PASSED_RULE": "PASSED",
         "FAILED_RULE": "FAILED",
         "WARNING_RULE": "PASSED_WITH_WARNINGS",
@@ -3171,7 +3174,7 @@ def test_validate_excel_reports_missing_required_table(tmp_path):
         (frame["check"] == "TABLE_RESOLUTION")
         & (frame["event_type"] == "summary")
     ]
-    assert summary["status"].tolist() == ["NOT_RUN"]
+    assert summary["result"].tolist() == ["NOT_RUN"]
     assert summary["processed_count"].tolist() == [0]
 
 
@@ -4373,7 +4376,7 @@ def test_reference_structure_check_is_not_run_without_reference_workbook(tmp_pat
     summary = frame.loc[
         frame["event_type"].eq("summary") & frame["check"].eq("SHEET_STRUCTURE")
     ].iloc[0]
-    assert summary["status"] == "NOT_RUN"
+    assert summary["result"] == "NOT_RUN"
     assert summary["description"] == result.not_run[0].description
 
 
@@ -5521,7 +5524,7 @@ def test_feature_policy_ignore_records_a_diagnostic(tmp_path):
     assert summaries["check"].tolist() == ["MERGED_CELLS"]
     assert summaries["processed_count"].tolist() == [1]
     assert summaries["issue_count"].tolist() == [0]
-    assert summaries["status"].tolist() == ["RECORDED"]
+    assert summaries["result"].tolist() == ["RECORDED"]
     assert "severity" not in frame.columns
 
 

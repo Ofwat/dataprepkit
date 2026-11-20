@@ -1031,7 +1031,7 @@ VALIDATION_RESULT_DATAFRAME_COLUMNS = [
     "processed_count",
     "issue_count",
     "check",
-    "status",
+    "result",
     "sheet_name",
     "cell_reference",
     "row_number",
@@ -1084,7 +1084,7 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                     "processed_count": result.processed_counts.get(event.rule_code),
                     "issue_count": None,
                     "check": event.rule_code.upper(),
-                    "status": event.status,
+                    "result": event.status,
                     "sheet_name": event.sheet_name,
                     "description": event.description,
                     "actual_value": event.actual_value,
@@ -1121,22 +1121,22 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
         warning_count = warning_counts[key]
         skipped_descriptions = not_run_descriptions.get(key)
         if is_diagnostic:
-            summary_status = "RECORDED"
+            summary_result = "RECORDED"
         elif error_count:
-            summary_status = "FAILED"
+            summary_result = "FAILED"
         elif skipped_descriptions is not None:
-            summary_status = (
+            summary_result = (
                 "INCOMPLETE" if processed_count or warning_count else "NOT_RUN"
             )
         elif warning_count:
-            summary_status = "PASSED_WITH_WARNINGS"
+            summary_result = "PASSED_WITH_WARNINGS"
         else:
-            summary_status = "PASSED"
+            summary_result = "PASSED"
 
         summary_description = None
         if skipped_descriptions is not None:
             summary_description = " | ".join(skipped_descriptions) or "See the not-run details."
-            if summary_status != "NOT_RUN":
+            if summary_result != "NOT_RUN":
                 summary_description = f"Some work did not run. {summary_description}"
 
         rows.append(
@@ -1144,7 +1144,7 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                 **metadata,
                 "event_type": "summary",
                 "check": check,
-                "status": summary_status,
+                "result": summary_result,
                 "processed_count": processed_count,
                 "issue_count": error_count + warning_count,
                 "description": summary_description,
