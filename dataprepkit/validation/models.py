@@ -1106,6 +1106,7 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                 "processed_count": result.processed_counts.get(f"code:{diagnostic.code}"),
                 "issue_count": None,
                 "check": _diagnostic_check_name(diagnostic.code),
+                "result": "RECORDED",
                 "description": diagnostic.description,
                 "metadata": None,
             }

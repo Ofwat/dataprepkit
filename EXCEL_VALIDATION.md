@@ -1255,7 +1255,7 @@ available.
 | `processed_count` | `0`, `1`, `150`, empty | Recorded work for the check. The unit depends on the check, and the count can repeat on detail rows. |
 | `issue_count` | `0`, `1`, `12`, empty | Errors plus warnings for the check. Populated on summary rows. |
 | `check` | `REQUIRED_SHEET`, `FORMULA_DIFFERENCE`, `MERGED_CELLS` | Uppercase rule or diagnostic identifier. See the [exported check catalogue](#exported-check-catalogue). |
-| `result` | Summary: `PASSED`, `PASSED_WITH_WARNINGS`, `FAILED`, `INCOMPLETE`, `NOT_RUN`, `RECORDED`. Built-in findings: `FAILED`, `NOT_RUN`, empty. | Row outcome. A warning can carry `FAILED` on its detail row. Diagnostic findings leave the field empty. Custom validators can supply other detail statuses. |
+| `result` | Summary: `PASSED`, `PASSED_WITH_WARNINGS`, `FAILED`, `INCOMPLETE`, `NOT_RUN`, `RECORDED`. Built-in findings: `FAILED`, `NOT_RUN`, `RECORDED`. | Every row has a result. A warning can carry `FAILED` on its detail row, and a diagnostic carries `RECORDED`. Custom validators can supply other detail statuses. |
 | `sheet_name` | `Data`, empty | Worksheet associated with a finding. |
 | `cell_reference` | `B12`, `A1:B3`, empty | Excel cell or range within the sheet. |
 | `row_number` | `12`, empty | One-based Excel row number, when available. |

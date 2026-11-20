@@ -1653,8 +1653,7 @@ def test_validation_result_to_dataframe_includes_events_and_metadata():
     assert frame["check"].tolist() == ["REQUIRED_CELL", "FEATURE_DETECTED"]
     assert frame.loc[0, "description"] == "Value is required"
     assert "status" not in frame.columns
-    assert frame.loc[0, "result"] == "FAILED"
-    assert frame.loc[frame["event_type"].eq("diagnostic"), "result"].isna().all()
+    assert frame["result"].tolist() == ["FAILED", "RECORDED"]
     assert {"rule_code", "code", "complete", "reason"}.isdisjoint(frame.columns)
     assert frame.loc[0, "sheet_name"] == "Data"
     assert frame.loc[0, "reference_filename"] is None
@@ -1685,7 +1684,7 @@ def test_diagnostic_check_name_in_report(code, expected_check):
     assert frame["event_type"].tolist() == ["diagnostic", "summary"]
     assert frame["check"].tolist() == [expected_check, expected_check]
     assert frame["processed_count"].tolist() == [2, 2]
-    assert frame.loc[frame["event_type"] == "summary", "result"].tolist() == ["RECORDED"]
+    assert frame["result"].tolist() == ["RECORDED", "RECORDED"]
 
 
 def test_validation_event_omits_reason():
