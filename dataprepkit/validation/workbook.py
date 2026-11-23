@@ -80,6 +80,7 @@ def validate_excel(
         "reference_filename": reference_path.name if reference_path else None,
         "reference_version": reference_version,
         "comparison": resolved_config.comparison,
+        "include_diagnostics": resolved_config.reporting.include_diagnostics,
     }
     formula_workbook = None
     value_workbook = None

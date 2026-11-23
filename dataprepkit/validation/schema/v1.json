@@ -564,6 +564,18 @@
       "title": "RuntimePolicy",
       "type": "object"
     },
+    "ReportingPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "include_diagnostics": {
+          "default": false,
+          "title": "Include Diagnostics",
+          "type": "boolean"
+        }
+      },
+      "title": "ReportingPolicy",
+      "type": "object"
+    },
     "SheetPolicy": {
       "additionalProperties": false,
       "properties": {
@@ -921,6 +933,9 @@
       ],
       "default": null,
       "title": "Profile Name"
+    },
+    "reporting": {
+      "$ref": "#/$defs/ReportingPolicy"
     },
     "rule_severity": {
       "additionalProperties": {

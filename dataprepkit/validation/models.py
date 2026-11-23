@@ -763,6 +763,10 @@ class WorkbookCheck(_PublicModel):
         return self
 
 
+class ReportingPolicy(_PublicModel):
+    include_diagnostics: bool = False
+
+
 class WorkbookValidationConfig(_PublicModel):
     config_version: str
     profile_name: str | None = None
@@ -776,6 +780,7 @@ class WorkbookValidationConfig(_PublicModel):
     workbook_checks: list[WorkbookCheck] = Field(default_factory=list)
     enabled_rules: list[str] | None = None
     rule_severity: dict[str, str] = Field(default_factory=dict)
+    reporting: ReportingPolicy = Field(default_factory=ReportingPolicy)
     runtime: RuntimePolicy
     compatibility: dict[str, Any] | None = None
 
@@ -974,6 +979,7 @@ class ValidationResult(_PublicModel):
     reference_filename: str | None = None
     reference_version: str | None = None
     comparison: ComparisonConfig | None = None
+    include_diagnostics: bool = False
     complete: bool = True
     processed_counts: dict[str, int] = Field(default_factory=dict)
     processed_severities: dict[str, str | None] = Field(default_factory=dict)
@@ -1060,8 +1066,14 @@ def _is_formula_cache_unavailable_event(event: ValidationEvent) -> bool:
     )
 
 
-def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
-    """Export events and diagnostics with uppercase check identifiers."""
+def validation_result_to_dataframe(
+    result: ValidationResult,
+    *,
+    include_diagnostics: bool | None = None,
+) -> pd.DataFrame:
+    """Export findings and summaries, optionally including diagnostics."""
+    if include_diagnostics is None:
+        include_diagnostics = result.include_diagnostics
     metadata = {
         "run_id": result.run_id,
         "config_version": result.config_version,
@@ -1121,23 +1133,28 @@ def validation_result_to_dataframe(result: ValidationResult) -> pd.DataFrame:
                     "column_number": event.column_number,
                 }
             )
-    for diagnostic in result.diagnostics:
-        rows.append(
-            {
-                **metadata,
-                "event_type": "diagnostic",
-                "processed_count": result.processed_counts.get(f"code:{diagnostic.code}"),
-                "issue_count": None,
-                "check": _diagnostic_check_name(diagnostic.code),
-                "result": "RECORDED",
-                "sheet_name": diagnostic.sheet_name,
-                "cell_reference": diagnostic.cell_reference,
-                "description": diagnostic.description,
-                "metadata": None,
-            }
-        )
+    if include_diagnostics:
+        for diagnostic in result.diagnostics:
+            rows.append(
+                {
+                    **metadata,
+                    "event_type": "diagnostic",
+                    "processed_count": result.processed_counts.get(
+                        f"code:{diagnostic.code}"
+                    ),
+                    "issue_count": None,
+                    "check": _diagnostic_check_name(diagnostic.code),
+                    "result": "RECORDED",
+                    "sheet_name": diagnostic.sheet_name,
+                    "cell_reference": diagnostic.cell_reference,
+                    "description": diagnostic.description,
+                    "metadata": None,
+                }
+            )
     for key, processed_count in result.processed_counts.items():
         is_diagnostic = key.startswith("code:")
+        if is_diagnostic and not include_diagnostics:
+            continue
         check = (
             _diagnostic_check_name(key.removeprefix("code:"))
             if is_diagnostic

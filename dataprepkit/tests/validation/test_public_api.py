@@ -32,6 +32,7 @@ from dataprepkit.validation import (
     DatabaseLookup,
     DiagnosticEvent,
     LookupColumnValidation,
+    ReportingPolicy,
     RuntimePolicy,
     WorkbookFeaturePolicy,
     SheetPolicy,
@@ -1560,13 +1561,18 @@ def test_validate_config_returns_a_validated_public_model():
 
 
 def test_validation_config_round_trips_through_mapping_and_json():
-    config = make_config()
+    config = make_config().model_copy(
+        update={"reporting": ReportingPolicy(include_diagnostics=True)}
+    )
 
     mapping = dump_validation_config(config, format="mapping")
     assert load_validation_config(mapping) == config
 
     encoded = dump_validation_config(config, format="json")
     assert load_validation_config(encoded) == config
+
+    yaml_encoded = dump_validation_config(config, format="yaml")
+    assert load_validation_config(yaml_encoded) == config
 
 
 def test_get_config_schema_returns_versioned_public_schema():
@@ -1581,8 +1587,10 @@ def test_get_config_schema_returns_versioned_public_schema():
     ]["enum"] == ["allow", "error"]
     assert "DatabaseLookup" in schema["$defs"]
     assert "DatabaseCheck" in schema["$defs"]
+    assert "ReportingPolicy" in schema["$defs"]
     assert "database_lookups" in schema["properties"]
     assert "database_checks" in schema["properties"]
+    assert "reporting" in schema["properties"]
 
 
 def test_get_config_schema_rejects_unsupported_version():
@@ -1646,7 +1654,10 @@ def test_validation_result_to_dataframe_includes_events_and_metadata():
         ],
     )
 
-    frame = validation_result_to_dataframe(result)
+    default_frame = validation_result_to_dataframe(result)
+    assert default_frame["event_type"].tolist() == ["error"]
+
+    frame = validation_result_to_dataframe(result, include_diagnostics=True)
 
     assert list(frame["event_type"]) == ["error", "diagnostic"]
     assert frame.loc[0, "run_id"] == "run-1"
@@ -1679,7 +1690,10 @@ def test_diagnostic_check_name_in_report(code, expected_check):
         diagnostics=[DiagnosticEvent(code=code, description="Workbook feature")],
     )
 
-    frame = validation_result_to_dataframe(result)
+    default_frame = validation_result_to_dataframe(result)
+    assert default_frame.empty
+
+    frame = validation_result_to_dataframe(result, include_diagnostics=True)
 
     assert frame["event_type"].tolist() == ["diagnostic", "summary"]
     assert frame["check"].tolist() == [expected_check, expected_check]
@@ -5656,13 +5670,15 @@ def test_feature_policy_ignore_records_a_diagnostic(tmp_path):
                 feature_policy=WorkbookFeaturePolicy(
                     merged_cells={"action": "ignore"},
                 ),
-            )
+            ),
+            "reporting": ReportingPolicy(include_diagnostics=True),
         }
     )
 
     result = validate_excel(candidate_path=candidate_path, config=config)
 
     assert result.is_valid is True
+    assert result.include_diagnostics is True
     assert result.warnings == []
     assert [event.code for event in result.diagnostics] == [
         "MERGED_CELLS_DETECTED",

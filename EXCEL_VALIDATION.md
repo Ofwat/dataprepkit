@@ -676,7 +676,7 @@ worksheet in `sheet_name` and its merged range in `cell_reference`.
 | Outcome | Configure it with | Exported `check` example |
 | --- | --- | --- |
 | Detected feature reported as an error or warning | `runtime.feature_policy.<feature_name>` | `MERGED_CELLS` |
-| Detected feature recorded as a diagnostic with `ignore` | `runtime.feature_policy.<feature_name>` | `MERGED_CELLS` |
+| Detected feature recorded as a diagnostic with `ignore` | `runtime.feature_policy.<feature_name>`; export controlled by `reporting.include_diagnostics` | `MERGED_CELLS` |
 | Feature could not be inspected | `runtime.feature_policy.unavailable_action` | `MERGED_CELLS_DETECTION_UNAVAILABLE` |
 
 ```yaml
@@ -1238,9 +1238,10 @@ serialization is separate from configuration serialization: use
 ## Validation report export
 
 Use `validation_result_to_dataframe(result)` to export one table with summary
-rows and findings. Summary rows show the outcome for each reported check ID.
-Finding rows explain what happened and identify the worksheet and cell when
-available.
+rows and findings. Diagnostic rows and their summary rows are omitted by
+default. Set `reporting.include_diagnostics: true` in the YAML profile to
+include them. Diagnostics remain available on `result.diagnostics` either way.
+The `include_diagnostics` argument can override the profile for one export.
 
 | Column | Values or examples | Meaning |
 | --- | --- | --- |
@@ -1252,11 +1253,11 @@ available.
 | `reference_filename` | `reference.xlsx`, empty | Reference workbook, when one is supplied. |
 | `reference_version` | `"2"`, empty | Caller-supplied version of the reference workbook. |
 | `is_valid` | `True`, `False` | `True` means the run recorded zero errors. Warnings and work that did not run can still be present. |
-| `event_type` | `error`, `warning`, `not_run`, `diagnostic`, `summary` | The full set of row types. |
+| `event_type` | `error`, `warning`, `not_run`, `summary`; optionally `diagnostic` | The row type. Diagnostic rows are included only with `include_diagnostics=True`. |
 | `processed_count` | `0`, `1`, `150`, empty | Recorded work for the check. The unit depends on the check, and the count can repeat on detail rows. |
 | `issue_count` | `0`, `1`, `12`, empty | Errors plus warnings for the check. Populated on summary rows. |
 | `check` | `REQUIRED_SHEET`, `FORMULA_DIFFERENCE`, `MERGED_CELLS` | Uppercase rule or diagnostic identifier. See the [exported check catalogue](#exported-check-catalogue). |
-| `result` | Summary: `PASSED`, `PASSED_WITH_WARNINGS`, `FAILED`, `INCOMPLETE`, `NOT_RUN`, `RECORDED`. Built-in findings: `FAILED`, `NOT_RUN`, `RECORDED`. | Every row has a result. A warning can carry `FAILED` on its detail row, and a diagnostic carries `RECORDED`. Custom validators can supply other detail statuses. |
+| `result` | Summary: `PASSED`, `PASSED_WITH_WARNINGS`, `FAILED`, `INCOMPLETE`, `NOT_RUN`; diagnostics optionally use `RECORDED`. Built-in findings: `FAILED`, `NOT_RUN`. | Every row has a result. A warning can carry `FAILED` on its detail row. Custom validators can supply other detail statuses. |
 | `sheet_name` | `Data`, empty | Worksheet associated with a finding. |
 | `cell_reference` | `B12`, `A1:B3`, empty | Excel cell or range within the sheet. |
 | `row_number` | `12`, empty | One-based Excel row number, when available. |
@@ -1299,6 +1300,16 @@ formula_findings = report.loc[
 ]
 ```
 
+To include diagnostics in each export for a profile, add:
+
+```yaml
+reporting:
+  include_diagnostics: true
+```
+
+You can also include them for one export with
+`validation_result_to_dataframe(result, include_diagnostics=True)`.
+
 | Summary result | Meaning |
 | --- | --- |
 | `PASSED` | The check recorded zero errors, warnings, and skipped events. |
@@ -1306,7 +1317,7 @@ formula_findings = report.loc[
 | `FAILED` | The check recorded at least one error. If some work did not run, the summary description explains why. |
 | `INCOMPLETE` | Some work did not run, but the check recorded processing or a warning. It recorded zero errors. |
 | `NOT_RUN` | The check recorded skipped work and zero processing, errors, or warnings. The summary description explains why. |
-| `RECORDED` | The validator recorded a diagnostic observation. |
+| `RECORDED` | The validator recorded a diagnostic observation. This result appears only when diagnostics are included in the export. |
 
 Summary rows reuse `description` to explain skipped work. For example, a check
 may say “Reference workbook is required for this check.” A partially completed
