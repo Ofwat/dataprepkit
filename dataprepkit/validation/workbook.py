@@ -1479,6 +1479,11 @@ def validate_excel(
                                 reference_cell.value,
                                 whitespace_policy,
                             )
+                            expected_formula = getattr(
+                                reference_cell.value,
+                                "text",
+                                reference_formula,
+                            )
                             if candidate_formula == reference_formula:
                                 continue
                             transition = (
@@ -1494,7 +1499,7 @@ def validate_excel(
                                     sheet_name=candidate_sheet.title,
                                     cell_reference=candidate_cell.coordinate,
                                     actual_value=candidate_formula,
-                                    expected_value=reference_formula,
+                                    expected_value=expected_formula,
                                     description=transition,
                                 )
                             )
